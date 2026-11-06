@@ -1,5 +1,14 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { lstat, readFile, realpath } from 'node:fs/promises'
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+} from 'node:path'
 import type {
   ChangedFile,
   RepositorySnapshot,
@@ -72,7 +81,13 @@ export async function inspectRepository(
       '--untracked-files=normal',
     ]),
     git(directory, ['worktree', 'list', '--porcelain', '-z']).catch(() =>
-      git(directory, ['-c', 'core.quotePath=false', 'worktree', 'list', '--porcelain']),
+      git(directory, [
+        '-c',
+        'core.quotePath=false',
+        'worktree',
+        'list',
+        '--porcelain',
+      ]),
     ),
   ])
   const changes = parseStatus(status)
@@ -88,6 +103,34 @@ export async function readDiff(
   directory: string,
   file: string,
 ): Promise<string> {
+  const untracked = await git(directory, [
+    'ls-files',
+    '--others',
+    '--exclude-standard',
+    '-z',
+    '--',
+    file,
+  ])
+  if (untracked.split('\0').includes(file.replaceAll('\\', '/'))) {
+    const absolute = resolve(directory, file)
+    const info = await lstat(absolute)
+    if (info.isSymbolicLink() || !info.isFile()) return '일반 파일이 아닙니다.'
+    const scope = relative(await realpath(directory), await realpath(absolute))
+    if (scope.startsWith('..') || isAbsolute(scope))
+      throw new Error('프로젝트 내부 파일만 확인할 수 있습니다.')
+    if (info.size > 1024 * 1024)
+      return '파일이 1MB를 초과하여 미리보기를 생략했습니다.'
+    const content = await readFile(absolute, 'utf8')
+    if (content.includes('\0'))
+      return '바이너리 파일은 diff를 표시할 수 없습니다.'
+    return (
+      `diff --git a/${file} b/${file}\nnew file\n--- /dev/null\n+++ b/${file}\n` +
+      content
+        .split('\n')
+        .map((line) => `+${line}`)
+        .join('\n')
+    )
+  }
   const options = ['--no-ext-diff', '--no-textconv', '--no-color']
   try {
     await git(directory, ['rev-parse', '--verify', 'HEAD'])
@@ -99,4 +142,21 @@ export async function readDiff(
     return staged + unstaged
   }
   return git(directory, ['diff', ...options, 'HEAD', '--', file])
+}
+
+export async function createWorktree(
+  directory: string,
+  branch: string,
+): Promise<Worktree> {
+  if (typeof branch !== 'string' || !branch.trim() || branch.length > 100)
+    throw new Error('브랜치 이름을 입력해 주세요.')
+  await git(directory, ['check-ref-format', '--branch', branch])
+  const name = branch.replace(/[^a-zA-Z0-9._-]/g, '-')
+  const path = join(
+    dirname(directory),
+    `${basename(directory)}-worktrees`,
+    `${name}-${crypto.randomUUID().slice(0, 8)}`,
+  )
+  await git(directory, ['worktree', 'add', '-b', branch, path])
+  return { path, branch }
 }

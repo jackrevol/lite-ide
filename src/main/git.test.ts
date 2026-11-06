@@ -1,6 +1,41 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { parseStatus, parseWorktrees } from './git.ts'
+import { validateCloneInput } from './clone.ts'
+
+test('Git 복제는 HTTPS와 SSH 주소 및 안전한 폴더 이름을 허용한다', () => {
+  for (const url of [
+    'https://github.com/owner/repo.git',
+    'git@github.com:owner/repo.git',
+    'ssh://git@example.com/owner/repo.git',
+  ]) {
+    assert.doesNotThrow(() => validateCloneInput(url, '한글 project'))
+  }
+})
+
+test('Git 복제의 옵션 주입, 외부 명령 프로토콜, 경로 이탈, 인증 정보 저장을 차단한다', () => {
+  for (const url of [
+    '--upload-pack=evil',
+    'ext::command',
+    'file:///tmp/repo',
+    'https://token@example.com/repo',
+    'ssh://git:secret@example.com/repo',
+    'https://example.com/repo\n',
+  ]) {
+    assert.throws(() => validateCloneInput(url, 'repo'))
+  }
+  for (const name of [
+    '..',
+    '../outside',
+    'nested/repo',
+    'nested\\repo',
+    'CON',
+    'repo.',
+    'repo ',
+  ]) {
+    assert.throws(() => validateCloneInput('https://example.com/repo', name))
+  }
+})
 
 test('변경 파일의 한글과 공백 및 이름 변경 경로를 보존한다', () => {
   assert.deepEqual(
@@ -34,7 +69,9 @@ test('변경 사항이 없으면 빈 목록을 반환한다', () => {
 
 test('구버전 Git의 줄바꿈 형식에서도 한글 경로를 읽는다', () => {
   assert.deepEqual(
-    parseWorktrees('worktree C:/Projects/한글 project\nHEAD abc\nbranch refs/heads/main\n\n'),
+    parseWorktrees(
+      'worktree C:/Projects/한글 project\nHEAD abc\nbranch refs/heads/main\n\n',
+    ),
     [{ path: 'C:/Projects/한글 project', branch: 'main' }],
   )
 })

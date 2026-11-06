@@ -1,10 +1,32 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  nativeTheme,
+  shell,
+} from 'electron'
 import { basename, isAbsolute, join, relative, resolve } from 'node:path'
-import { inspectRepository, readDiff } from './git'
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
+import { createWorktree, inspectRepository, readDiff } from './git'
+import { AgentService } from './agent-service'
+import { cloneRepository, validateCloneInput } from './clone'
+import type { RequestAnswer, SendMessage } from '../shared/types'
 
 const projects = new Set<string>()
 const workspaces = new Set<string>()
+const cloneDirectories = new Set<string>()
+let cloning = false
 let window: BrowserWindow | null = null
+let agents: AgentService | undefined
+let windowTheme: 'light' | 'dark' = 'dark'
+const titleBarHeight = 43
+
+function titleBarColors(theme: 'light' | 'dark') {
+  return theme === 'dark'
+    ? { color: '#141416', symbolColor: '#e4e4e7' }
+    : { color: '#f4f4f5', symbolColor: '#27272a' }
+}
 
 function requireWorkspace(value: unknown): string {
   if (typeof value !== 'string' || !workspaces.has(resolve(value))) {
@@ -15,22 +37,170 @@ function requireWorkspace(value: unknown): string {
 
 app.setName('Lite IDE')
 app.setPath('userData', join(app.getPath('appData'), 'lite-ide'))
+if (process.env.LITE_IDE_HEADLESS === '1' && process.env.LITE_IDE_TEST_DATA)
+  app.setPath('userData', process.env.LITE_IDE_TEST_DATA)
 
 app.whenReady().then(() => {
+  nativeTheme.themeSource = windowTheme
+  ipcMain.handle('window:theme', (event, theme: unknown) => {
+    if (
+      !window ||
+      event.sender !== window.webContents ||
+      event.senderFrame !== event.sender.mainFrame
+    )
+      throw new Error('현재 앱 창에서만 테마를 변경할 수 있습니다.')
+    if (theme !== 'light' && theme !== 'dark')
+      throw new Error('잘못된 창 테마입니다.')
+    windowTheme = theme
+    nativeTheme.themeSource = theme
+    window.setBackgroundColor(theme === 'dark' ? '#18181b' : '#ffffff')
+    if (process.platform !== 'darwin')
+      window.setTitleBarOverlay({
+        ...titleBarColors(theme),
+        height: titleBarHeight,
+      })
+  })
+  agents = new AgentService(
+    join(app.getPath('userData'), 'sessions.json'),
+    (session) => {
+      if (window && !window.isDestroyed())
+        window.webContents.send('codex:session', session)
+    },
+    (reason) => {
+      if (window && !window.isDestroyed())
+        window.webContents.send('codex:disconnect', reason)
+    },
+    () => {
+      if (window && !window.isDestroyed())
+        window.webContents.send('codex:usage-changed')
+    },
+  )
+  ipcMain.handle('codex:status', () => agents!.status())
+  ipcMain.handle('codex:usage', () => agents!.usage())
+  ipcMain.handle('codex:sessions', () => agents!.all())
+  ipcMain.handle('codex:send', (_event, input: SendMessage) => {
+    const workspace = requireWorkspace(input?.workspace)
+    return agents!.send({ ...input, workspace })
+  })
+  ipcMain.handle('codex:interrupt', (_event, id: string) =>
+    agents!.interrupt(id),
+  )
+  ipcMain.handle(
+    'codex:answer',
+    (_event, id: string, request: string, answer: RequestAnswer) =>
+      agents!.answer(id, request, answer),
+  )
+  ipcMain.handle('codex:rename', (_event, id: string, title: string) =>
+    agents!.rename(id, title),
+  )
+  ipcMain.handle('codex:delete', (_event, id: string) => agents!.delete(id))
+  ipcMain.handle('link:open', async (_event, value: unknown) => {
+    if (typeof value !== 'string') throw new Error('유효하지 않은 주소입니다.')
+    const url = new URL(value)
+    if (!['https:', 'http:'].includes(url.protocol))
+      throw new Error('웹 주소만 열 수 있습니다.')
+    await shell.openExternal(url.toString())
+  })
+  ipcMain.handle('codex:login', async () => {
+    const { authUrl } = await agents!.login()
+    const url = new URL(authUrl)
+    if (
+      url.protocol !== 'https:' ||
+      !['auth.openai.com', 'auth0.openai.com', 'chatgpt.com'].includes(
+        url.hostname,
+      )
+    )
+      throw new Error('유효하지 않은 로그인 주소입니다.')
+    await shell.openExternal(url.toString())
+  })
+  ipcMain.handle(
+    'worktree:create',
+    async (_event, path: string, branch: string) => {
+      const directory = requireWorkspace(path)
+      const tree = await createWorktree(directory, branch)
+      workspaces.add(resolve(tree.path))
+      return tree
+    },
+  )
+  const projectFile = join(app.getPath('userData'), 'projects.json')
+  let projectSave = Promise.resolve()
+  async function registerProject(directory: string) {
+    projects.add(directory)
+    workspaces.add(directory)
+    const snapshot = JSON.stringify([...projects])
+    projectSave = projectSave
+      .catch(() => {})
+      .then(async () => {
+        await mkdir(app.getPath('userData'), { recursive: true })
+        await writeFile(`${projectFile}.tmp`, snapshot, 'utf8')
+        await rename(`${projectFile}.tmp`, projectFile)
+      })
+    await projectSave
+    return { path: directory, name: basename(directory) }
+  }
+  const restoredProjects = (async () => {
+    try {
+      const saved: unknown = JSON.parse(await readFile(projectFile, 'utf8'))
+      if (!Array.isArray(saved)) return
+      for (const path of saved) {
+        if (typeof path !== 'string' || !isAbsolute(path)) continue
+        if (!(await stat(path).catch(() => null))?.isDirectory()) continue
+        projects.add(resolve(path))
+        workspaces.add(resolve(path))
+      }
+    } catch {
+      /* 처음 실행하거나 저장 파일이 손상된 경우 빈 목록으로 시작합니다. */
+    }
+  })()
+  ipcMain.handle('project:list', async () => {
+    await restoredProjects
+    return [...projects].map((path) => ({ path, name: basename(path) }))
+  })
   ipcMain.handle('project:open', async () => {
+    await restoredProjects
     if (!window) return null
     const result = await dialog.showOpenDialog(window, {
       properties: ['openDirectory'],
     })
     if (result.canceled || !result.filePaths[0]) return null
     const directory = resolve(result.filePaths[0])
-    projects.add(directory)
-    workspaces.add(directory)
-    return { path: directory, name: basename(directory) }
+    return registerProject(directory)
   })
+  ipcMain.handle('project:clone-directory', async () => {
+    if (!window) return null
+    const result = await dialog.showOpenDialog(window, {
+      title: '저장소를 복제할 상위 폴더 선택',
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    if (result.canceled || !result.filePaths[0]) return null
+    const directory = resolve(result.filePaths[0])
+    cloneDirectories.add(directory)
+    return directory
+  })
+  ipcMain.handle(
+    'project:clone',
+    async (_event, url: string, parent: string, name: string) => {
+      validateCloneInput(url, name)
+      if (typeof parent !== 'string' || !cloneDirectories.has(parent))
+        throw new Error('저장 위치를 먼저 선택해 주세요.')
+      if (cloning) throw new Error('이미 저장소를 복제하고 있습니다.')
+      cloning = true
+      try {
+        await restoredProjects
+        const directory = await cloneRepository(url, parent, name)
+        return await registerProject(directory)
+      } finally {
+        cloning = false
+      }
+    },
+  )
   ipcMain.handle('repository:inspect', async (_event, projectPath: unknown) => {
     const directory = requireWorkspace(projectPath)
     const snapshot = await inspectRepository(directory)
+    snapshot.worktrees = snapshot.worktrees.map((tree) => ({
+      ...tree,
+      path: resolve(tree.path),
+    }))
     // 사용자가 연 프로젝트에서 확인된 Worktree만 추가 접근을 허용합니다.
     if (projects.has(directory)) {
       for (const worktree of snapshot.worktrees)
@@ -72,7 +242,16 @@ function createWindow(): void {
     minWidth: 960,
     minHeight: 600,
     title: 'Lite IDE',
-    backgroundColor: '#fafafa',
+    titleBarStyle: 'hidden',
+    // 네이티브 창 버튼과 앱 상단을 같은 줄에 배치합니다.
+    titleBarOverlay: {
+      height: titleBarHeight,
+      ...(process.platform !== 'darwin' ? titleBarColors(windowTheme) : {}),
+    },
+    ...(process.platform === 'darwin'
+      ? { trafficLightPosition: { x: 14, y: 14 } }
+      : {}),
+    backgroundColor: windowTheme === 'dark' ? '#18181b' : '#ffffff',
     autoHideMenuBar: true,
     show: process.env.LITE_IDE_HEADLESS !== '1',
     webPreferences: {
@@ -82,6 +261,7 @@ function createWindow(): void {
       nodeIntegration: false,
     },
   })
+  if (process.platform !== 'darwin') window.removeMenu()
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event) => event.preventDefault())
   window.on('closed', () => {
@@ -94,4 +274,12 @@ function createWindow(): void {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+let quitting = false
+app.on('before-quit', (event) => {
+  if (quitting || !agents) return
+  event.preventDefault()
+  quitting = true
+  void agents.close().finally(() => app.quit())
 })

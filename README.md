@@ -1,40 +1,73 @@
 # Lite IDE
 
-macOS·Windows용 경량 데스크톱 IDE의 새 베이스입니다. Electron, React, TypeScript로 작성했으며 Orca 소스와 런타임에 의존하지 않습니다.
+macOS·Windows용 Codex 데스크톱 워크스페이스입니다. Paseo의 프로젝트·작업 탐색 구조를 중심으로 Superset과 Orca의 작업 관리 흐름을 참고해 재구성했습니다. 참조한 코드와 구현 경계는 [설계 근거](docs/reference-design.md)에 정리했습니다.
 
-## 화면
+## 주요 기능
 
-- 왼쪽: 프로젝트 열기·전환, Git Worktree 목록·전환
-- 가운데: Codex 전용 작업 탭, 탭별 작업 초안
-- 오른쪽: Git 변경 파일 목록, 새로고침, 파일별 diff 검토
-
-실제 Codex CLI 실행은 아직 연결하지 않았습니다. 전송 버튼은 비활성화되며, 작업 초안은 현재 앱 실행 동안만 보관합니다. Worktree 생성·삭제, 코드 편집기, 자동 저장도 후속 구현 대상입니다.
+- 프로젝트 → Worktree → 작업 계층의 사이드바, 새 Worktree 생성 및 전환
+- Git 저장소 URL로 복제 후 프로젝트 열기, 기존 로컬 폴더 열기
+- Codex 한도별 남은 비율·다음 초기화 시각, 남은 초기화권·가장 먼저 만료되는 초기화권의 사용 기간
+- 실제 Codex 실행, 응답 스트리밍, Markdown·코드·표 표시, 도구 실행 내용 확인
+- 모델·추론 수준 선택, 실행 중단, 같은 대화 이어가기
+- 명령·파일 변경·추가 권한 승인, Codex 질문에 대한 응답
+- 프로젝트·대화 기록·입력 내용의 재시작 복원, 작업 이름 변경·삭제
+- 변경 파일 검색과 인라인 diff, Git에 추가하지 않은 새 파일 미리보기
+- 빠른 이동(`Ctrl/Cmd K`), 새 작업(`Ctrl/Cmd N`), 변경 패널 전환(`Ctrl/Cmd Shift B`)
+- 다크·라이트 테마, 960px 창에서도 유지되는 3열 배치
+- 프로젝트·브랜치·빠른 이동을 한 줄에 배치한 통합 타이틀바와 네이티브 창 버튼
 
 ## 실행
 
-Node.js 24 이상과 Git이 필요합니다.
+Node.js 24 이상, Git, `app-server`를 지원하는 Codex CLI가 필요합니다. 개발·실제 연결 검증은 Codex CLI 0.166.0으로 수행했습니다.
 
 ```sh
-npm install
+npm ci
 npm run dev
 ```
+
+프로젝트 추가 화면에서 Git 저장소 URL과 저장 위치를 지정해 복제하거나 기존 로컬 폴더를 엽니다. HTTPS·SSH 주소를 지원하며 비공개 저장소는 기존 Git 인증을 사용합니다. 같은 이름의 폴더는 덮어쓰지 않습니다. 메시지를 입력한 뒤 Enter로 전송합니다. Shift Enter는 줄바꿈입니다. 설치된 Codex의 기존 로그인을 사용하며, 로그인하지 않았다면 앱의 로그인 버튼으로 연결할 수 있습니다. 모델 목록은 Codex에서 직접 조회합니다.
+
+좌하단의 사용량은 Codex `account/rateLimits/read`에서 조회합니다. 1분 간격, 앱 복귀, 사용량 갱신 알림 및 새로고침 버튼으로 갱신하며 초기화 시각은 시스템 현지 시간으로 표시합니다. 초기화권 개수와 상세 기간은 각각 제공 여부를 구분합니다. 상세 목록에서 사용 가능하고 만료되지 않은 초기화권을 만료 시각 순으로 표시하며, 서버가 일부 상세만 제공하면 조회된 목록을 기준으로 합니다. 초기화권을 자동으로 소비하지 않습니다.
+
+Windows에서는 npm의 `.cmd` 래퍼 대신 설치된 Codex 실행 파일을 찾아 직접 실행합니다. macOS에서는 PATH와 일반적인 사용자·Homebrew 설치 경로를 확인합니다. 렌더러는 Node.js에 접근하지 않으며 타입이 정의된 preload API를 통해 main 프로세스와 통신합니다.
+
+상단의 빈 영역을 드래그해 창을 이동할 수 있습니다. Windows에서는 오른쪽 기본 창 버튼을 사용하며, macOS에서는 왼쪽 창 버튼을 위한 공간을 확보합니다. 검색·패널 전환 버튼은 드래그 영역에서 제외하고, 창 버튼 색상은 앱 테마와 동기화합니다.
+
+## 저장과 실행 권한
+
+프로젝트와 대화 기록은 Electron의 `appData/lite-ide` 안에 저장합니다. Worktree별 입력 내용·선택한 작업·테마는 로컬 저장소에 보관합니다. 앱을 종료하면 실행 연결이 종료되며, 다시 열어 같은 작업에서 메시지를 보내 대화를 이어갈 수 있습니다.
+
+Codex는 `workspace-write`와 `on-request` 승인 정책으로 실행합니다. 추가 승인이 필요한 작업은 대화 안에 나타납니다. 작업 삭제는 이 앱의 기록을 삭제하며 프로젝트 파일과 Codex 원본 세션은 삭제하지 않습니다.
 
 ## 검증
 
 ```sh
+npm run typecheck
 npm test
 npm run build
 npm run test:ui
 ```
 
-UI 검증은 숨겨진 Electron 창에서 실행하며 `artifacts/`에 스크린샷을 저장합니다.
+UI 테스트는 격리된 임시 프로젝트와 숨겨진 Electron 창에서 실행합니다. 포커스를 가져오지 않으며, 스크린샷은 `artifacts/`에 저장합니다. Codex stdio 프로토콜 픽스처를 사용하므로 모델 사용량을 소비하지 않습니다.
 
-## 패키징
+실제 Codex 연결 및 계정·모델 조회:
 
-Windows에서는 `npm run package:win`, macOS에서는 `npm run package:mac`을 실행합니다. 배포용 서명·공증은 별도 설정해야 합니다. macOS 실기기 검증은 아직 수행하지 않았습니다.
+```sh
+npm run test:codex
+```
 
-Git이 없거나 저장소가 아닌 폴더에서는 프로젝트와 작업 초안만 사용할 수 있습니다. 변경 파일은 최대 200개까지 표시하고 전체 파일 수는 별도로 표시합니다. 새 파일의 diff는 `git add` 이후 확인할 수 있습니다.
+실제 모델 응답 확인 및 재시작 후 대화 재개·파일 생성 검증(모델 사용량 발생):
 
-## UI 컴포넌트
+```sh
+npm run test:codex -- --live --write
+```
 
-[coss UI](https://coss.com/ui)의 공식 레지스트리에서 Button, Tabs, Badge, Textarea, Separator와 필요한 의존 컴포넌트를 가져왔습니다. Base UI와 Tailwind CSS v4를 사용하며, 소스는 `src/renderer/src/components/ui/`, 색상 토큰은 `theme.css`에서 관리합니다. 레지스트리 import 경로만 프로젝트에 맞게 조정했습니다. 원본의 MIT 라이선스는 `LICENSE.coss-ui`에 포함되어 있습니다.
+## 패키징과 범위
+
+`npm run package:win` 또는 `npm run package:mac`으로 패키징합니다. 배포용 서명·공증은 별도 설정이 필요하며 macOS 실기기 검증은 수행하지 않았습니다.
+
+현재 파일 패널은 변경 사항 검토용입니다. 범용 파일 편집기, 내장 터미널, 원격 호스트 연결은 포함하지 않습니다. Git 변경 파일은 최대 200개를 표시하고, 새 파일 미리보기는 1MB까지 지원합니다. Codex app-server는 실험적 인터페이스이므로 CLI 버전 변경 시 `test:codex`로 호환성을 확인하세요.
+
+## UI 기반
+
+[coss UI](https://coss.com/ui)의 Base UI·Tailwind CSS v4 컴포넌트를 사용합니다. 기존 컴포넌트의 MIT 라이선스는 `LICENSE.coss-ui`에 포함되어 있습니다.
