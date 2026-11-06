@@ -403,12 +403,50 @@ export function App() {
       openingTask.current = false
     }
   }, [])
-  const addSession = useCallback(async () => {
+  const addSession = useCallback(async (requestedProject?: Project) => {
     const target =
-      projects.find((item) => item.path === state.project) ?? projects[0]
-    if (target) await openNewTask(target)
-    else setOpening(true)
-  }, [projects, state.project, openNewTask])
+      requestedProject ??
+      projects.find((item) => item.path === state.project) ??
+      projects[0]
+    if (!target) {
+      setOpening(true)
+      return
+    }
+    if (openingTask.current) return
+    openingTask.current = true
+    try {
+      const settings = await window.desktop.getSettings()
+      const defaults = settings.projects[projectSettingsKey(target.path)]
+      const workspace =
+        target.path === state.project && state.workspace
+          ? state.workspace
+          : target.path
+      const session = {
+        ...createSession((state.sessions[workspace]?.length ?? 0) + 1),
+        model: defaults?.model || model,
+        effort: defaults?.model ? defaults.effort : effort,
+      }
+      setState((previous) => ({
+        ...previous,
+        project: target.path,
+        workspace,
+        sessions: {
+          ...previous.sessions,
+          [workspace]: [...(previous.sessions[workspace] ?? []), session],
+        },
+        selected: { ...previous.selected, [workspace]: session.id },
+      }))
+    } catch (cause) {
+      setError(errorText(cause))
+    } finally {
+      openingTask.current = false
+    }
+  }, [projects, state.project, state.workspace, state.sessions, model, effort])
+
+  useEffect(() => {
+    if (ready && !document.querySelector('dialog[open]'))
+      composer.current?.focus({ preventScroll: true })
+  }, [ready, current?.id])
   useEffect(() => {
     function shortcut(event: KeyboardEvent) {
       if (!(event.ctrlKey || event.metaKey) || event.isComposing) return
@@ -825,9 +863,18 @@ export function App() {
                       aria-label={`${item.name} 새 작업`}
                       title="새 작업 (Ctrl N)"
                       disabled={!repositories[item.path]}
-                      onClick={() => void openNewTask(item)}
+                      onClick={() => void addSession(item)}
                     >
                       <Plus size={15} />
+                    </button>
+                    <button
+                      className="project-new-task"
+                      aria-label={`${item.name} 작업 설정하여 만들기`}
+                      title="작업 설정하여 만들기"
+                      disabled={!repositories[item.path]}
+                      onClick={() => void openNewTask(item)}
+                    >
+                      <Settings size={13} />
                     </button>
                   </div>
                   {!folded &&
@@ -1012,7 +1059,7 @@ export function App() {
               </Button>
             </div>
           </div>
-          {agent?.messages.length ? (
+          {project ? (
             <Conversation session={agent} />
           ) : (
             <div className="welcome">
@@ -1024,39 +1071,15 @@ export function App() {
                 />
               </div>
               <h2>무엇을 만들어 볼까요?</h2>
-              <p>
-                {project
-                  ? `${project.name}에서 Codex와 함께 작업하세요.`
-                  : '프로젝트를 열고, 생각을 코드로 옮겨보세요.'}
-              </p>
-              <div className="starter-actions">
-                {[
-                  '프로젝트 구조를 파악해 줘',
-                  '변경 사항을 검토해 줘',
-                  '실패하는 테스트를 찾아 고쳐 줘',
-                ].map((prompt) => (
-                  <button
-                    key={prompt}
-                    onClick={() => {
-                      updateDraft(prompt)
-                      composer.current?.focus()
-                    }}
-                  >
-                    <span>{prompt}</span>
-                    <ArrowUp size={13} />
-                  </button>
-                ))}
-              </div>
-              {!project && (
-                <Button
-                  variant="outline"
-                  onClick={() => void openProject()}
-                  disabled={opening}
-                >
-                  <FolderOpen size={14} />
-                  프로젝트 열기
-                </Button>
-              )}
+              <p>프로젝트를 열고, 생각을 코드로 옮겨보세요.</p>
+              <Button
+                variant="outline"
+                onClick={() => void openProject()}
+                disabled={opening}
+              >
+                <FolderOpen size={14} />
+                프로젝트 열기
+              </Button>
             </div>
           )}
           {error && (
@@ -1074,7 +1097,7 @@ export function App() {
                 aria-label="Codex에게 메시지"
                 placeholder={
                   project
-                    ? 'Codex에게 작업을 요청하세요…'
+                    ? 'Codex에게 메시지 보내기…'
                     : '어떤 작업을 하고 싶으신가요?'
                 }
                 value={current?.draft ?? ''}
@@ -1090,7 +1113,7 @@ export function App() {
                     void send()
                   }
                 }}
-                rows={3}
+                rows={1}
               />
               <div className="composer-toolbar">
                 <Code2 size={15} />
