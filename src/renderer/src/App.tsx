@@ -26,6 +26,7 @@ import {
 } from 'lucide-react'
 import { Button } from './components/ui/button'
 import { Conversation } from './components/Conversation'
+import { SubagentPanel } from './components/SubagentPanel'
 import { CodexUsagePanel } from './components/CodexUsagePanel'
 import { ProjectDialog } from './components/ProjectDialog'
 import { AppUpdateButton } from './components/AppUpdateButton'
@@ -38,6 +39,7 @@ import {
   type Session,
   type TaskMode,
 } from './lib/workspace-state'
+import { getSubagents, isAgentActive } from './lib/subagents'
 import type {
   AgentSession,
   CodexStatus,
@@ -70,6 +72,15 @@ const samePath = (a: string, b: string) =>
     '\\',
     '/',
   )
+const workspaceContains = (root: string, path: string) => {
+  const normalize = (value: string) =>
+    (window.desktop.platform === 'win32' ? value.toLowerCase() : value)
+      .replaceAll('\\', '/')
+      .replace(/\/+$/, '')
+  const parent = normalize(root),
+    target = normalize(path)
+  return target === parent || target.startsWith(parent + '/')
+}
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error)
 
@@ -138,6 +149,9 @@ export function App() {
     tabs.find((session) => session.id === state.selected[key]) ?? tabs[0]
   const agent = current ? agents[current.id] : undefined
   const active = agent?.status === 'running' || agent?.status === 'waiting'
+  const hasActiveSubagents = current
+    ? getSubagents(current.id, agents).some(isAgentActive)
+    : false
   const project = projects.find((item) => item.path === state.project)
   const tree = repository.worktrees.find((item) =>
     samePath(item.path, state.workspace),
@@ -277,6 +291,7 @@ export function App() {
         setState((previous) => {
           const sessions = { ...previous.sessions }
           for (const item of saved) {
+            if (item.parentSessionId) continue
             if (
               !(sessions[item.workspace] ?? []).some(
                 (entry) => entry.id === item.id,
@@ -403,45 +418,69 @@ export function App() {
       openingTask.current = false
     }
   }, [])
-  const addSession = useCallback(async (requestedProject?: Project) => {
-    const target =
-      requestedProject ??
-      projects.find((item) => item.path === state.project) ??
-      projects[0]
-    if (!target) {
-      setOpening(true)
-      return
-    }
-    if (openingTask.current) return
-    openingTask.current = true
-    try {
-      const settings = await window.desktop.getSettings()
-      const defaults = settings.projects[projectSettingsKey(target.path)]
-      const workspace =
-        target.path === state.project && state.workspace
-          ? state.workspace
-          : target.path
-      const session = {
-        ...createSession((state.sessions[workspace]?.length ?? 0) + 1),
-        model: defaults?.model || model,
-        effort: defaults?.model ? defaults.effort : effort,
+  const addSession = useCallback(
+    async (requestedProject?: Project) => {
+      const target =
+        requestedProject ??
+        projects.find((item) => item.path === state.project) ??
+        projects[0]
+      if (!target) {
+        setOpening(true)
+        return
       }
-      setState((previous) => ({
-        ...previous,
-        project: target.path,
-        workspace,
-        sessions: {
-          ...previous.sessions,
-          [workspace]: [...(previous.sessions[workspace] ?? []), session],
-        },
-        selected: { ...previous.selected, [workspace]: session.id },
-      }))
-    } catch (cause) {
-      setError(errorText(cause))
-    } finally {
-      openingTask.current = false
-    }
-  }, [projects, state.project, state.workspace, state.sessions, model, effort])
+      if (openingTask.current) return
+      openingTask.current = true
+      try {
+        const settings = await window.desktop.getSettings()
+        const defaults = settings.projects[projectSettingsKey(target.path)]
+        const nextModel = defaults
+          ? defaults.model ||
+            (
+              connection.models.find((item) => item.isDefault) ??
+              connection.models[0]
+            )?.id ||
+            ''
+          : model
+        const catalogModel = connection.models.find(
+          (item) => item.id === nextModel,
+        )
+        const workspace =
+          target.path === state.project && state.workspace
+            ? state.workspace
+            : target.path
+        const session = {
+          ...createSession((state.sessions[workspace]?.length ?? 0) + 1),
+          model: nextModel,
+          effort: defaults
+            ? defaults.effort || catalogModel?.defaultEffort || ''
+            : effort,
+        }
+        setState((previous) => ({
+          ...previous,
+          project: target.path,
+          workspace,
+          sessions: {
+            ...previous.sessions,
+            [workspace]: [...(previous.sessions[workspace] ?? []), session],
+          },
+          selected: { ...previous.selected, [workspace]: session.id },
+        }))
+      } catch (cause) {
+        setError(errorText(cause))
+      } finally {
+        openingTask.current = false
+      }
+    },
+    [
+      projects,
+      state.project,
+      state.workspace,
+      state.sessions,
+      model,
+      effort,
+      connection.models,
+    ],
+  )
 
   useEffect(() => {
     if (ready && !document.querySelector('dialog[open]'))
@@ -577,6 +616,8 @@ export function App() {
       await window.desktop.deleteSession(sessionId)
       setAgents((previous) => {
         const next = { ...previous }
+        for (const item of getSubagents(sessionId, previous))
+          delete next[item.id]
         delete next[sessionId]
         return next
       })
@@ -687,13 +728,20 @@ export function App() {
               : {}),
           }
         })
-        setAgents((previous) =>
-          Object.fromEntries(
-            Object.entries(previous).filter(
-              ([, item]) => !samePath(item.workspace, target.path),
-            ),
-          ),
-        )
+        setAgents((previous) => {
+          const roots = Object.values(previous).filter((item) =>
+            workspaceContains(target.path, item.workspace),
+          )
+          const ids = new Set(
+            roots.flatMap((item) => [
+              item.id,
+              ...getSubagents(item.id, previous).map((child) => child.id),
+            ]),
+          )
+          return Object.fromEntries(
+            Object.entries(previous).filter(([id]) => !ids.has(id)),
+          )
+        })
         setRepositories((previous) =>
           Object.fromEntries(
             Object.entries(previous).map(([path, snapshot]) => [
@@ -918,8 +966,14 @@ export function App() {
                               ) ||
                               Object.values(agents).some(
                                 (live) =>
-                                  samePath(live.workspace, entry.path) &&
-                                  ['running', 'waiting'].includes(live.status),
+                                  workspaceContains(
+                                    entry.path,
+                                    live.workspace,
+                                  ) &&
+                                  (isAgentActive(live) ||
+                                    getSubagents(live.id, agents).some(
+                                      isAgentActive,
+                                    )),
                               )
                             }
                             onClick={() => manageTree(item, entry, 'delete')}
@@ -929,6 +983,15 @@ export function App() {
                         </div>
                         {(state.sessions[entry.path] ?? []).map((session) => {
                           const live = agents[session.id]
+                          const children = getSubagents(session.id, agents)
+                          const childAttention = children.filter(
+                            (child) =>
+                              child.status === 'waiting' ||
+                              child.status === 'failed' ||
+                              child.observationError,
+                          ).length
+                          const childActive =
+                            children.filter(isAgentActive).length
                           return (
                             <div className="managed-row" key={session.id}>
                               <button
@@ -951,6 +1014,17 @@ export function App() {
                                   className={`session-dot ${live?.status ?? 'idle'}`}
                                 />
                                 <span>{live?.title ?? session.title}</span>
+                                {children.length > 0 && (
+                                  <small
+                                    className={`subagent-sidebar-count ${childAttention ? 'needs-attention' : ''}`}
+                                    title={`서브에이전트 ${children.length}개 · 진행 중 ${childActive} · 확인 필요 ${childAttention}`}
+                                    aria-label={`서브에이전트 ${children.length}개, 진행 중 ${childActive}, 확인 필요 ${childAttention}`}
+                                  >
+                                    {childAttention
+                                      ? `확인 ${childAttention}`
+                                      : `↳ ${childActive}/${children.length}`}
+                                  </small>
+                                )}
                                 {live?.status === 'waiting' && (
                                   <span className="attention-tag">응답</span>
                                 )}
@@ -969,7 +1043,8 @@ export function App() {
                                 aria-label={`${live?.title ?? session.title} 작업 삭제`}
                                 disabled={
                                   live?.status === 'running' ||
-                                  live?.status === 'waiting'
+                                  live?.status === 'waiting' ||
+                                  children.some(isAgentActive)
                                 }
                                 onClick={() =>
                                   manageSession(entry.path, session, 'delete')
@@ -1052,13 +1127,16 @@ export function App() {
                 variant="ghost"
                 size="icon-sm"
                 aria-label="작업 삭제"
-                disabled={active || !current}
+                disabled={active || hasActiveSubagents || !current}
                 onClick={() => current && manageSession(key, current, 'delete')}
               >
                 <Trash2 />
               </Button>
             </div>
           </div>
+          {agent && (
+            <SubagentPanel key={agent.id} parent={agent} agents={agents} />
+          )}
           {project ? (
             <Conversation session={agent} />
           ) : (

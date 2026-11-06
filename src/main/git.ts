@@ -8,6 +8,7 @@ import {
   join,
   relative,
   resolve,
+  sep,
 } from 'node:path'
 import type {
   ChangedFile,
@@ -211,6 +212,14 @@ export async function resolveBaseRef(
 export const pathKey = (path: string) => {
   const value = resolve(path)
   return process.platform === 'win32' ? value.toLowerCase() : value
+}
+
+export function workspaceContains(directory: string, path: string) {
+  const root = pathKey(directory),
+    target = pathKey(path)
+  return (
+    root === target || target.startsWith(root.endsWith(sep) ? root : root + sep)
+  )
 }
 
 export async function removeWorktree(

@@ -150,7 +150,24 @@ test('폴더 삭제 뒤 저장에 실패한 기록은 해당 삭제 경로에 �
   const key = process.platform === 'win32' ? workspace.toLowerCase() : workspace
   await writeFile(
     file,
-    JSON.stringify({ sessions: [session], removalIntents: [key] }),
+    JSON.stringify({
+      sessions: [
+        session,
+        {
+          ...session,
+          id: 'nested-child',
+          parentSessionId: session.id,
+          workspace: join(workspace, 'subdir'),
+        },
+        {
+          ...session,
+          id: 'external-child',
+          parentSessionId: 'nested-child',
+          workspace: directory,
+        },
+      ],
+      removalIntents: [key],
+    }),
     'utf8',
   )
   const service = new AgentService(file, () => {})

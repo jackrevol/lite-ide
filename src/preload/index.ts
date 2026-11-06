@@ -49,6 +49,9 @@ const api: DesktopApi = {
   listSessions: () => ipcRenderer.invoke('codex:sessions'),
   sendMessage: (input) => ipcRenderer.invoke('codex:send', input),
   interruptSession: (id) => ipcRenderer.invoke('codex:interrupt', id),
+  inspectSubagent: (id) => ipcRenderer.invoke('codex:subagent-inspect', id),
+  sendSubagentMessage: (id, text) =>
+    ipcRenderer.invoke('codex:subagent-send', id, text),
   answerRequest: (id, request, answer) =>
     ipcRenderer.invoke('codex:answer', id, request, answer),
   renameSession: (id, title) => ipcRenderer.invoke('codex:rename', id, title),

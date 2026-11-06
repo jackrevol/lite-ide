@@ -396,7 +396,7 @@ try {
   const composerBefore = await input.boundingBox()
   await page.screenshot({ path: 'artifacts/workspace-new-chat.png' })
   await input.press('Enter')
-  await page.locator('.status-label.completed').waitFor()
+  await page.locator('.agent-heading .status-label.completed').waitFor()
   assert.equal(
     await page.locator('.user-message').innerText(),
     '프로젝트를 확인해 주세요\n구조도 알려 주세요',
@@ -405,8 +405,10 @@ try {
   const composerAfter = await input.boundingBox()
   assert.ok(
     Math.abs(
-      composerBefore.y + composerBefore.height -
-        composerAfter.y - composerAfter.height,
+      composerBefore.y +
+        composerBefore.height -
+        composerAfter.y -
+        composerAfter.height,
     ) <= 1,
   )
   await usage.getByText('70% 남음', { exact: true }).waitFor()
@@ -423,7 +425,7 @@ try {
   await page.waitForFunction(
     () => document.querySelectorAll('.assistant-message').length === 2,
   )
-  await page.locator('.status-label.completed').waitFor()
+  await page.locator('.agent-heading .status-label.completed').waitFor()
   assert.equal(await page.locator('.assistant-message').count(), 2)
   assert.equal(
     await page.evaluate(
@@ -445,14 +447,14 @@ try {
   await input.fill('승인 요청')
   await input.press('Enter')
   await page.getByRole('button', { name: '이번 실행 허용' }).click()
-  await page.locator('.status-label.completed').waitFor()
+  await page.locator('.agent-heading .status-label.completed').waitFor()
   await input.fill('질문 요청')
   await input.press('Enter')
   await page
     .getByRole('textbox', { name: '어떤 범위로 진행할까요?' })
     .fill('전체')
   await page.getByRole('button', { name: '답변 보내기' }).click()
-  await page.locator('.status-label.completed').waitFor()
+  await page.locator('.agent-heading .status-label.completed').waitFor()
   await input.fill('중단 테스트')
   await input.press('Enter')
   await page.getByRole('button', { name: '작업 중단', exact: true }).click()
@@ -468,7 +470,7 @@ try {
   await page.waitForFunction(
     () => document.querySelectorAll('.assistant-message').length === 5,
   )
-  await page.locator('.status-label.completed').waitFor()
+  await page.locator('.agent-heading .status-label.completed').waitFor()
   await page.keyboard.press('Control+k')
   await page
     .getByRole('textbox', { name: '프로젝트 및 작업 검색' })
@@ -476,8 +478,100 @@ try {
   assert.equal(await page.locator('.command-results > button').count(), 1)
   await page.keyboard.press('Escape')
   assert.equal(await page.locator('.sidebar-top .new-task').count(), 0)
+  await input.fill('서브에이전트 테스트')
+  await input.press('Enter')
+  const monitor = page.getByRole('region', { name: '서브에이전트 관리' })
+  await monitor.locator('.subagent-card').first().waitFor()
+  await page.locator('.agent-heading .status-label.completed').waitFor()
+  assert.equal(await monitor.locator('.subagent-card').count(), 3)
+  assert.equal(
+    await page
+      .getByRole('button', { name: '작업 삭제', exact: true })
+      .isDisabled(),
+    true,
+  )
+  await monitor
+    .getByRole('button', { name: '확인 필요 1', exact: true })
+    .click()
+  assert.equal(await monitor.locator('.subagent-card').count(), 1)
+  await monitor.getByRole('button', { name: '검증 담당 상세 보기' }).click()
+  const childDialog = page.getByRole('dialog', {
+    name: '검증 담당',
+    exact: true,
+  })
+  await childDialog
+    .getByText('서브에이전트 테스트 실행', { exact: false })
+    .waitFor()
+  assert.equal(
+    await childDialog.getByRole('button', { name: '지시 보내기' }).isDisabled(),
+    true,
+  )
+  await childDialog.getByRole('button', { name: '이번 실행 허용' }).click()
+  await childDialog.getByText('요청을 처리했습니다.', { exact: true }).waitFor()
+  await childDialog.locator('.status-label.completed').waitFor()
+  await childDialog
+    .getByRole('button', { name: '서브에이전트 상세 닫기' })
+    .click()
+  await monitor.getByRole('button', { name: '전체 3', exact: true }).click()
+  await monitor
+    .getByRole('textbox', { name: '서브에이전트 검색' })
+    .fill('로그인')
+  assert.equal(await monitor.locator('.subagent-card').count(), 1)
+  await monitor.getByRole('button', { name: '구현 담당 상세 보기' }).click()
+  const workerDialog = page.getByRole('dialog', {
+    name: '구현 담당',
+    exact: true,
+  })
+  await workerDialog.getByText('npm run typecheck', { exact: true }).waitFor()
+  const childInput = workerDialog.getByRole('textbox', {
+    name: '서브에이전트에게 추가 지시',
+  })
+  await childInput.fill('접근성도 확인해 주세요.')
+  await workerDialog
+    .getByRole('button', { name: '지시 보내기', exact: true })
+    .click()
+  await workerDialog
+    .getByText('추가 지시를 받았습니다: 접근성도 확인해 주세요.', {
+      exact: true,
+    })
+    .waitFor()
+  await workerDialog
+    .getByRole('button', { name: '활동 새로고침', exact: true })
+    .click()
+  await workerDialog
+    .getByRole('button', { name: '서브에이전트 중단', exact: true })
+    .click()
+  await workerDialog.locator('.status-label.interrupted').waitFor()
+  await childInput.fill('중단한 작업을 이어가 주세요.')
+  await workerDialog
+    .getByRole('button', { name: '지시 보내기', exact: true })
+    .click()
+  await workerDialog
+    .getByText('작업을 완료했습니다.', { exact: false })
+    .waitFor()
+  await workerDialog.locator('.status-label.completed').waitFor()
+  await workerDialog
+    .getByRole('button', { name: '서브에이전트 상세 닫기' })
+    .click()
+  await monitor.getByRole('textbox', { name: '서브에이전트 검색' }).fill('')
+  await monitor.getByRole('button', { name: '종료 3', exact: true }).click()
+  assert.equal(await monitor.locator('.subagent-card').count(), 3)
+  assert.equal(
+    await page
+      .getByRole('button', { name: '작업 삭제', exact: true })
+      .isDisabled(),
+    false,
+  )
+  assert.equal(
+    await page.locator('.session-row').filter({ hasText: '구현 담당' }).count(),
+    0,
+  )
+  await page.screenshot({ path: 'artifacts/workspace-subagents.png' })
   await page
-    .getByRole('button', { name: '한글 project 작업 설정하여 만들기', exact: true })
+    .getByRole('button', {
+      name: '한글 project 작업 설정하여 만들기',
+      exact: true,
+    })
     .click()
   const newTask = page.getByRole('dialog', { name: '새 작업', exact: true })
   assert.equal(
@@ -512,7 +606,7 @@ try {
   await page.screenshot({ path: 'artifacts/workspace-new-task.png' })
   await newTask.getByRole('button', { name: '만들고 시작' }).click()
   await newTask.waitFor({ state: 'detached' })
-  await page.locator('.status-label.completed').waitFor()
+  await page.locator('.agent-heading .status-label.completed').waitFor()
   assert.match(
     await page.locator('.markdown').innerText(),
     /model=fixture-model-alt; effort=high/,
@@ -622,7 +716,7 @@ try {
     .click()
   await input.fill('첫 전송 후에도 이름 유지')
   await input.press('Enter')
-  await page.locator('.status-label.completed').waitFor()
+  await page.locator('.agent-heading .status-label.completed').waitFor()
   await page
     .getByRole('heading', { name: '빈 작업 이름 유지', exact: true })
     .waitFor()
@@ -674,7 +768,10 @@ try {
     project,
   )
   await page
-    .getByRole('button', { name: '한글 project 작업 설정하여 만들기', exact: true })
+    .getByRole('button', {
+      name: '한글 project 작업 설정하여 만들기',
+      exact: true,
+    })
     .click()
   assert.equal(
     await newTask
@@ -706,7 +803,7 @@ try {
   )
   await newTask.getByRole('button', { name: '다시 시도', exact: true }).click()
   await newTask.waitFor({ state: 'detached' })
-  await page.locator('.status-label.completed').waitFor()
+  await page.locator('.agent-heading .status-label.completed').waitFor()
   assert.equal(
     await page.evaluate(
       async (directory) =>
@@ -837,6 +934,22 @@ try {
     true,
   )
   await page.screenshot({ path: 'artifacts/workspace-compact.png' })
+  await monitor.getByRole('button', { name: '조사 담당 상세 보기' }).click()
+  const compactChild = page.getByRole('dialog', {
+    name: '조사 담당',
+    exact: true,
+  })
+  const compactBounds = await compactChild.boundingBox()
+  assert.ok(
+    compactBounds.x >= 0 &&
+      compactBounds.y >= 43 &&
+      compactBounds.x + compactBounds.width <= 960 &&
+      compactBounds.y + compactBounds.height <= 640,
+  )
+  await page.screenshot({ path: 'artifacts/workspace-subagent-detail.png' })
+  await compactChild
+    .getByRole('button', { name: '서브에이전트 상세 닫기' })
+    .click()
   await checkTitlebar(page, app)
   const usageBounds = await page.locator('.codex-usage').boundingBox()
   assert.ok(usageBounds.y >= 43 && usageBounds.y + usageBounds.height <= 640)
@@ -859,6 +972,14 @@ try {
     .waitFor()
   await page.waitForFunction(
     () => document.querySelectorAll('.assistant-message').length >= 4,
+  )
+  assert.equal(await page.locator('.subagent-card').count(), 3)
+  assert.equal(
+    await page
+      .locator('.session-row')
+      .filter({ hasText: /구현 담당|검증 담당|조사 담당/ })
+      .count(),
+    0,
   )
   assert.equal(
     await page.evaluate(() =>
@@ -1054,7 +1175,10 @@ try {
   )
   // 현재 선택과 다른 프로젝트의 설정 버튼이 해당 프로젝트에 작업을 만듭니다.
   await page
-    .getByRole('button', { name: '한글 project 작업 설정하여 만들기', exact: true })
+    .getByRole('button', {
+      name: '한글 project 작업 설정하여 만들기',
+      exact: true,
+    })
     .click()
   const targetDialog = page.getByRole('dialog', {
     name: '새 작업',
@@ -1260,7 +1384,10 @@ try {
     existingSessions,
   )
   await page
-    .getByRole('button', { name: '한글 project 작업 설정하여 만들기', exact: true })
+    .getByRole('button', {
+      name: '한글 project 작업 설정하여 만들기',
+      exact: true,
+    })
     .click()
   const configuredTask = page.getByRole('dialog', {
     name: '새 작업',
@@ -1297,7 +1424,7 @@ try {
     .getByRole('button', { name: '만들고 시작', exact: true })
     .click()
   await configuredTask.waitFor({ state: 'detached' })
-  await page.locator('.status-label.completed').waitFor()
+  await page.locator('.agent-heading .status-label.completed').waitFor()
   assert.match(
     await page.locator('.markdown').innerText(),
     /model=fixture-model-alt; effort=high/,
@@ -1367,6 +1494,76 @@ try {
   const persistedSettings = await page.evaluate(() =>
     window.desktop.getSettings(),
   )
+  const settingsComposer = page.getByRole('textbox', {
+    name: 'Codex에게 메시지',
+    exact: true,
+  })
+  await page
+    .getByRole('combobox', { name: '모델', exact: true })
+    .selectOption('fixture-model-alt')
+  await page
+    .getByRole('combobox', { name: '추론 수준', exact: true })
+    .selectOption('low')
+  await page.evaluate(
+    (directory) =>
+      window.desktop.updateProjectSettings(directory, {
+        baseRef: 'HEAD',
+        model: '',
+        effort: 'high',
+      }),
+    project,
+  )
+  await page
+    .getByRole('button', { name: '한글 project 새 작업', exact: true })
+    .click()
+  await page.waitForFunction(
+    () =>
+      document.querySelector('select[aria-label="모델"]').value ===
+        'fixture-model' &&
+      document.querySelector('select[aria-label="추론 수준"]').value === 'high',
+  )
+  await settingsComposer.fill('모델 전달 확인')
+  await settingsComposer.press('Enter')
+  await page.locator('.agent-heading .status-label.completed').waitFor()
+  assert.match(
+    await page.locator('.markdown').innerText(),
+    /model=fixture-model; effort=high/,
+  )
+  await page.evaluate(
+    (directory) =>
+      window.desktop.updateProjectSettings(directory, {
+        baseRef: 'HEAD',
+        model: 'fixture-model',
+        effort: '',
+      }),
+    project,
+  )
+  await page
+    .getByRole('button', { name: '한글 project 새 작업', exact: true })
+    .click()
+  await page.waitForFunction(
+    () =>
+      document.querySelector('select[aria-label="추론 수준"]').value ===
+      'medium',
+  )
+  await settingsComposer.fill('모델 전달 확인')
+  await settingsComposer.press('Enter')
+  await page.locator('.agent-heading .status-label.completed').waitFor()
+  assert.match(
+    await page.locator('.markdown').innerText(),
+    /model=fixture-model; effort=medium/,
+  )
+  await page.evaluate(
+    ({ directory, defaults }) =>
+      window.desktop.updateProjectSettings(directory, defaults),
+    {
+      directory: project,
+      defaults:
+        persistedSettings.projects[
+          process.platform === 'win32' ? project.toLowerCase() : project
+        ],
+    },
+  )
   const keyFor = (path) =>
     process.platform === 'win32' ? path.toLowerCase() : path
   assert.equal(
@@ -1410,7 +1607,7 @@ try {
     )
   }
   console.log(
-    'UI 검증 통과: 프로젝트별 +·단축키 채팅 시작·초안 보존·설정 생성·모델/추론 전달·생성 후 재시도, 작업/Worktree 이름 변경·삭제·재시작 영속, 실행 중/dirty 삭제 보호·연결 브랜치 삭제, 사용량, Git 복제, 통합 타이틀바, Codex 전송/재개/승인/질문/중단, diff, 검색, 960px 3열 및 960x600 생성 창. 모든 창을 숨김 상태로 유지했습니다.',
+    'UI 검증 통과: 서브에이전트 관찰·추가 지시·중단·재개·복원, 프로젝트별 +·단축키 채팅 시작·초안 보존·설정 생성·모델/추론 전달·생성 후 재시도, 작업/Worktree 이름 변경·삭제·재시작 영속, 실행 중/dirty 삭제 보호·연결 브랜치 삭제, 사용량, Git 복제, 통합 타이틀바, Codex 전송/재개/승인/질문/중단, diff, 검색, 960px 3열 및 960x600 생성 창. 모든 창을 숨김 상태로 유지했습니다.',
   )
 } catch (error) {
   if (page && !page.isClosed()) {
