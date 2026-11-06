@@ -203,6 +203,14 @@ app.whenReady().then(() => {
   ipcMain.handle('codex:interrupt', (_event, id: string) =>
     agents!.interrupt(id),
   )
+  ipcMain.handle('codex:subagent-inspect', (_event, id: string) =>
+    agents!.inspectSubagent(id),
+  )
+  ipcMain.handle('codex:subagent-send', (_event, id: string, text: string) => {
+    if (updates?.snapshot().status === 'installing')
+      throw new Error('업데이트 설치를 시작하고 있습니다.')
+    return agents!.sendSubagentMessage(id, text)
+  })
   ipcMain.handle(
     'codex:answer',
     (_event, id: string, request: string, answer: RequestAnswer) =>

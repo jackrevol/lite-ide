@@ -52,6 +52,8 @@ export interface DesktopApi {
   listSessions(): Promise<AgentSession[]>
   sendMessage(input: SendMessage): Promise<void>
   interruptSession(sessionId: string): Promise<void>
+  inspectSubagent(sessionId: string): Promise<void>
+  sendSubagentMessage(sessionId: string, text: string): Promise<void>
   answerRequest(
     sessionId: string,
     requestId: string,
@@ -150,6 +152,14 @@ export interface AgentSession {
   requests: AgentRequest[]
   error?: string
   updatedAt: number
+  parentSessionId?: string
+  nickname?: string
+  role?: string
+  model?: string
+  task?: string
+  observationError?: string
+  canAcceptDirectInput?: boolean
+  closed?: boolean
 }
 export interface CodexModel {
   id: string
