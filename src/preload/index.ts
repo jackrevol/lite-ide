@@ -1,8 +1,23 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AgentSession, DesktopApi } from '../shared/types'
+import type { AgentSession, AppUpdateState, DesktopApi } from '../shared/types'
 
 const api: DesktopApi = {
   platform: process.platform,
+  updateStatus: () => ipcRenderer.invoke('app:update-status'),
+  checkUpdate: () => ipcRenderer.invoke('app:update-check'),
+  downloadUpdate: () => ipcRenderer.invoke('app:update-download'),
+  cancelUpdateDownload: () => ipcRenderer.invoke('app:update-cancel'),
+  installUpdate: () => ipcRenderer.invoke('app:update-install'),
+  onUpdate: (listener) => {
+    const receive = (
+      _event: Electron.IpcRendererEvent,
+      state: AppUpdateState,
+    ) => listener(state)
+    ipcRenderer.on('app:update', receive)
+    return () => {
+      ipcRenderer.removeListener('app:update', receive)
+    }
+  },
   setWindowTheme: (theme) => ipcRenderer.invoke('window:theme', theme),
   listProjects: () => ipcRenderer.invoke('project:list'),
   openProject: () => ipcRenderer.invoke('project:open'),

@@ -22,6 +22,12 @@ export interface RepositorySnapshot {
 
 export interface DesktopApi {
   platform: string
+  updateStatus(): Promise<AppUpdateState>
+  checkUpdate(): Promise<AppUpdateState>
+  downloadUpdate(): Promise<AppUpdateState>
+  cancelUpdateDownload(): Promise<void>
+  installUpdate(): Promise<AppUpdateState>
+  onUpdate(listener: (state: AppUpdateState) => void): () => void
   setWindowTheme(theme: 'light' | 'dark'): Promise<void>
   listProjects(): Promise<Project[]>
   openProject(): Promise<Project | null>
@@ -48,6 +54,23 @@ export interface DesktopApi {
   loginCodex(): Promise<void>
   openLink(url: string): Promise<void>
   createWorktree(projectPath: string, branch: string): Promise<Worktree>
+}
+
+export interface AppUpdateState {
+  status:
+    | 'idle'
+    | 'checking'
+    | 'current'
+    | 'available'
+    | 'downloading'
+    | 'downloaded'
+    | 'installing'
+    | 'error'
+  currentVersion: string
+  version?: string
+  progress?: number
+  error?: string
+  canInstall: boolean
 }
 
 export type AgentStatus =

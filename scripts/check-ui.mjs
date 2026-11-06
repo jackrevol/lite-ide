@@ -1,12 +1,20 @@
 import { _electron as electron } from 'playwright'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, mkdir, writeFile, readFile, stat } from 'node:fs/promises'
+import {
+  mkdtemp,
+  mkdir,
+  writeFile,
+  readFile,
+  realpath,
+  stat,
+} from 'node:fs/promises'
 import { createServer } from 'node:http'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join, resolve, relative, isAbsolute } from 'node:path'
 
-const fixture = await mkdtemp(join(tmpdir(), 'lite-ide-ui-'))
+const fixture = await realpath(await mkdtemp(join(tmpdir(), 'lite-ide-ui-')))
 const project = join(fixture, '한글 project')
 await mkdir(project)
 const git = (...args) =>
@@ -139,6 +147,72 @@ try {
     )
   })
   await checkTitlebar(page, app)
+  const updateContent = 'UI update installer fixture'
+  await app.evaluate(
+    ({ net }, fixture) => {
+      const version = '99.0.0'
+      const platform = process.platform === 'win32' ? 'win' : 'mac'
+      const name = `Lite-IDE-${version}-${platform}-${process.arch}.${platform === 'win' ? 'exe' : 'dmg'}`
+      const root = `https://github.com/jackrevol/lite-ide/releases/download/v${version}/`
+      const sums = `${fixture.hash}  ${name}\n`
+      net.fetch = async (url) => {
+        if (String(url).endsWith('/releases/latest'))
+          return Response.json({
+            tag_name: `v${version}`,
+            draft: false,
+            prerelease: false,
+            assets: [
+              {
+                name,
+                browser_download_url: root + name,
+                size: fixture.content.length,
+              },
+              {
+                name: 'SHA256SUMS.txt',
+                browser_download_url: root + 'SHA256SUMS.txt',
+                size: sums.length,
+              },
+            ],
+          })
+        return new Response(
+          String(url).endsWith('SHA256SUMS.txt') ? sums : fixture.content,
+        )
+      }
+    },
+    {
+      content: updateContent,
+      hash: createHash('sha256').update(updateContent).digest('hex'),
+    },
+  )
+  await page.getByRole('button', { name: '앱 업데이트', exact: true }).click()
+  const updateDialog = page.getByRole('dialog', {
+    name: '앱 업데이트',
+    exact: true,
+  })
+  await updateDialog
+    .getByRole('button', { name: '업데이트 확인', exact: true })
+    .click()
+  await updateDialog
+    .getByText('새 버전을 다운로드할 수 있습니다.', { exact: true })
+    .waitFor()
+  await page.screenshot({ path: 'artifacts/workspace-update.png' })
+  await updateDialog
+    .getByRole('button', { name: '다운로드', exact: true })
+    .click()
+  await updateDialog
+    .getByText('다운로드와 무결성 검증이 완료되었습니다.', { exact: true })
+    .waitFor()
+  assert.equal(
+    (await page.evaluate(() => window.desktop.updateStatus())).progress,
+    100,
+  )
+  assert.equal(
+    await updateDialog
+      .getByRole('button', { name: /종료하고 설치|DMG 열기/ })
+      .isDisabled(),
+    true,
+  )
+  await updateDialog.getByRole('button', { name: '닫기', exact: true }).click()
   const usage = page.getByRole('region', { name: 'Codex 사용량 한도' })
   await usage.getByText('75% 남음', { exact: true }).waitFor()
   assert.equal(

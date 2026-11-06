@@ -27,6 +27,7 @@ import { Button } from './components/ui/button'
 import { Conversation } from './components/Conversation'
 import { CodexUsagePanel } from './components/CodexUsagePanel'
 import { ProjectDialog } from './components/ProjectDialog'
+import { AppUpdateButton } from './components/AppUpdateButton'
 import { createSession, loadWorkspace, storageKey } from './lib/workspace-state'
 import type {
   AgentSession,
@@ -505,6 +506,7 @@ export function App() {
             <span>{tree?.branch ?? 'Codex'}</span>
           </div>
           <div className="titlebar-actions">
+            <AppUpdateButton />
             <button
               className="header-search"
               onClick={() => {

@@ -4,13 +4,23 @@ import {
   dialog,
   ipcMain,
   nativeTheme,
+  net,
   shell,
 } from 'electron'
 import { basename, isAbsolute, join, relative, resolve } from 'node:path'
-import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
+import {
+  mkdir,
+  readFile,
+  realpath,
+  rename,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { createWorktree, inspectRepository, readDiff } from './git'
 import { AgentService } from './agent-service'
 import { cloneRepository, validateCloneInput } from './clone'
+import { UpdateService } from './update-service'
 import type { RequestAnswer, SendMessage } from '../shared/types'
 
 const projects = new Set<string>()
@@ -19,6 +29,7 @@ const cloneDirectories = new Set<string>()
 let cloning = false
 let window: BrowserWindow | null = null
 let agents: AgentService | undefined
+let updates: UpdateService | undefined
 let windowTheme: 'light' | 'dark' = 'dark'
 const titleBarHeight = 43
 const iconDirectory = app.isPackaged
@@ -80,10 +91,65 @@ app.whenReady().then(() => {
         window.webContents.send('codex:usage-changed')
     },
   )
+  updates = new UpdateService({
+    version: app.isPackaged
+      ? app.getVersion()
+      : JSON.parse(readFileSync(join(__dirname, '../../package.json'), 'utf8'))
+          .version,
+    platform: process.platform,
+    arch: process.arch,
+    cacheDirectory: join(app.getPath('userData'), 'updates'),
+    canInstall: app.isPackaged,
+    fetch: (url, init) => net.fetch(url, init),
+    emit: (state) => {
+      if (window && !window.isDestroyed())
+        window.webContents.send('app:update', state)
+    },
+    beforeInstall: async () => {
+      if (
+        cloning ||
+        (await agents!.all()).some((session) =>
+          ['running', 'waiting'].includes(session.status),
+        )
+      )
+        throw new Error(
+          '진행 중인 작업이나 저장소 복제를 마친 후 설치해 주세요.',
+        )
+    },
+    openInstaller: async (path) => {
+      const error = await shell.openPath(path)
+      if (error) throw new Error(`설치 파일을 열지 못했습니다: ${error}`)
+      if (process.platform === 'win32') app.quit()
+    },
+  })
+  const updateHandlers: Record<string, () => unknown> = {
+    'app:update-status': () => updates!.snapshot(),
+    'app:update-check': () => updates!.check(),
+    'app:update-download': () => updates!.download(),
+    'app:update-cancel': () => updates!.cancel(),
+    'app:update-install': () => updates!.install(),
+  }
+  for (const [channel, handler] of Object.entries(updateHandlers)) {
+    ipcMain.handle(channel, (event) => {
+      if (
+        !window ||
+        event.sender !== window.webContents ||
+        event.senderFrame !== event.sender.mainFrame
+      )
+        throw new Error('현재 앱 창에서만 업데이트할 수 있습니다.')
+      return handler()
+    })
+  }
+  if (app.isPackaged) {
+    setTimeout(() => void updates?.check(), 10000).unref()
+    setInterval(() => void updates?.check(), 6 * 60 * 60000).unref()
+  }
   ipcMain.handle('codex:status', () => agents!.status())
   ipcMain.handle('codex:usage', () => agents!.usage())
   ipcMain.handle('codex:sessions', () => agents!.all())
   ipcMain.handle('codex:send', (_event, input: SendMessage) => {
+    if (updates?.snapshot().status === 'installing')
+      throw new Error('업데이트 설치를 시작하고 있습니다.')
     const workspace = requireWorkspace(input?.workspace)
     return agents!.send({ ...input, workspace })
   })
@@ -151,8 +217,9 @@ app.whenReady().then(() => {
       for (const path of saved) {
         if (typeof path !== 'string' || !isAbsolute(path)) continue
         if (!(await stat(path).catch(() => null))?.isDirectory()) continue
-        projects.add(resolve(path))
-        workspaces.add(resolve(path))
+        const canonicalPath = await realpath(path)
+        projects.add(canonicalPath)
+        workspaces.add(canonicalPath)
       }
     } catch {
       /* 처음 실행하거나 저장 파일이 손상된 경우 빈 목록으로 시작합니다. */
@@ -169,7 +236,7 @@ app.whenReady().then(() => {
       properties: ['openDirectory'],
     })
     if (result.canceled || !result.filePaths[0]) return null
-    const directory = resolve(result.filePaths[0])
+    const directory = await realpath(result.filePaths[0])
     return registerProject(directory)
   })
   const defaultCloneDirectory = join(
@@ -199,6 +266,8 @@ app.whenReady().then(() => {
       )
         throw new Error('저장 위치를 먼저 선택해 주세요.')
       if (cloning) throw new Error('이미 저장소를 복제하고 있습니다.')
+      if (updates?.snapshot().status === 'installing')
+        throw new Error('업데이트 설치를 시작하고 있습니다.')
       cloning = true
       try {
         await restoredProjects
@@ -302,5 +371,6 @@ app.on('before-quit', (event) => {
   if (quitting || !agents) return
   event.preventDefault()
   quitting = true
+  updates?.cancel()
   void agents.close().finally(() => app.quit())
 })

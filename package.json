@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck && electron-vite build",
     "start": "electron-vite preview",
-    "test": "node --experimental-strip-types --test src/main/git.test.ts src/main/codex-client.test.ts",
+    "test": "node --experimental-strip-types --test src/main/git.test.ts src/main/codex-client.test.ts src/main/update-service.test.ts",
     "test:ui": "node scripts/check-ui.mjs",
     "test:codex": "node scripts/check-codex.mjs",
     "build:icons": "electron scripts/build-icons.cjs",

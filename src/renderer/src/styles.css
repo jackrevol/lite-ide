@@ -166,6 +166,46 @@
   height: 24px;
   margin-right: 2px;
 }
+.titlebar-update {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 7px;
+  border-radius: 5px;
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--muted-foreground) !important;
+}
+.titlebar-update:hover {
+  background: var(--accent);
+}
+.titlebar-update.update-available {
+  color: var(--foreground) !important;
+}
+.update-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #75a8ec;
+}
+.update-dialog {
+  width: min(440px, 80vw);
+  user-select: text;
+}
+.update-dialog progress {
+  width: 100%;
+  height: 6px;
+  accent-color: #8196c4;
+  margin-top: 16px;
+}
+.update-dialog .update-error {
+  color: #d8847b;
+  overflow-wrap: anywhere;
+}
+.update-version {
+  font-variant-numeric: tabular-nums;
+}
 .brand-mark img,
 .welcome-icon img {
   display: block;

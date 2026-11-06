@@ -93,7 +93,12 @@ export async function inspectRepository(
   const changes = parseStatus(status)
   return {
     isGitRepository: true,
-    worktrees: parseWorktrees(worktreeList),
+    worktrees: await Promise.all(
+      parseWorktrees(worktreeList).map(async (tree) => ({
+        ...tree,
+        path: await realpath(tree.path).catch(() => resolve(tree.path)),
+      })),
+    ),
     changes: changes.slice(0, 200),
     totalChanges: changes.length,
   }
