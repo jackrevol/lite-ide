@@ -17,11 +17,16 @@
     "package:mac": "npm run build && electron-builder --mac"
   },
   "dependencies": {
+    "@base-ui/react": "1.9.0",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "lucide-react": "0.577.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "lucide-react": "0.577.0"
+    "tailwind-merge": "3.7.0"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "4.3.4",
     "@types/node": "24.19.2",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.7",
@@ -30,15 +35,32 @@
     "electron-builder": "26.15.3",
     "electron-vite": "6.0.0",
     "playwright": "1.64.1",
+    "tailwindcss": "4.3.4",
     "typescript": "7.0.2",
     "vite": "8.3.5"
   },
   "build": {
     "appId": "dev.jackrevol.liteide",
     "productName": "Lite IDE",
-    "directories": { "output": "release" },
-    "files": ["out/**/*", "package.json"],
-    "mac": { "target": ["dmg"], "category": "public.app-category.developer-tools" },
-    "win": { "target": ["nsis"] }
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json",
+      "LICENSE",
+      "LICENSE.coss-ui"
+    ],
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    }
   }
 }

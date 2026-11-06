@@ -72,7 +72,7 @@ function createWindow(): void {
     minWidth: 960,
     minHeight: 600,
     title: 'Lite IDE',
-    backgroundColor: '#f7f7f5',
+    backgroundColor: '#fafafa',
     autoHideMenuBar: true,
     show: process.env.LITE_IDE_HEADLESS !== '1',
     webPreferences: {

@@ -34,3 +34,7 @@ UI 검증은 숨겨진 Electron 창에서 실행하며 `artifacts/`에 스크린
 Windows에서는 `npm run package:win`, macOS에서는 `npm run package:mac`을 실행합니다. 배포용 서명·공증은 별도 설정해야 합니다. macOS 실기기 검증은 아직 수행하지 않았습니다.
 
 Git이 없거나 저장소가 아닌 폴더에서는 프로젝트와 작업 초안만 사용할 수 있습니다. 변경 파일은 최대 200개까지 표시하고 전체 파일 수는 별도로 표시합니다. 새 파일의 diff는 `git add` 이후 확인할 수 있습니다.
+
+## UI 컴포넌트
+
+[coss UI](https://coss.com/ui)의 공식 레지스트리에서 Button, Tabs, Badge, Textarea, Separator와 필요한 의존 컴포넌트를 가져왔습니다. Base UI와 Tailwind CSS v4를 사용하며, 소스는 `src/renderer/src/components/ui/`, 색상 토큰은 `theme.css`에서 관리합니다. 레지스트리 import 경로만 프로젝트에 맞게 조정했습니다. 원본의 MIT 라이선스는 `LICENSE.coss-ui`에 포함되어 있습니다.

@@ -23,9 +23,7 @@ try {
   const page = await app.firstWindow()
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
-  await page
-    .getByRole('heading', { name: '작게 시작하고, 하나씩 완성하세요.' })
-    .waitFor()
+  await page.getByRole('tab', { name: 'Agent 1' }).waitFor()
   assert.equal(
     await app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].isVisible(),
@@ -41,6 +39,16 @@ try {
     await page.getByRole('textbox').inputValue(),
     '첫 번째 작업 초안',
   )
+  await page.getByRole('tab', { name: 'Agent 1' }).focus()
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('Enter')
+  assert.equal(
+    await page
+      .getByRole('tab', { name: 'Agent 2' })
+      .getAttribute('aria-selected'),
+    'true',
+  )
+  assert.equal(await page.getByRole('textbox').inputValue(), '')
   assert.equal(
     await page
       .getByRole('button', { name: 'Codex 실행 연동 예정' })
@@ -58,7 +66,9 @@ try {
     .first()
     .click()
   try {
-    await page.getByRole('button', { name: 'hello.txt' }).waitFor({ timeout: 10_000 })
+    await page
+      .getByRole('button', { name: 'hello.txt' })
+      .waitFor({ timeout: 10_000 })
   } catch (error) {
     await page.screenshot({ path: 'artifacts/workspace-failure.png' })
     console.error(await page.locator('body').innerText(), errors)
