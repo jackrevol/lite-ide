@@ -302,7 +302,7 @@ export function App() {
     )
     setState((previous) => ({ ...previous, project: opened.path, taskId: '' }))
   }
-  async function openNewTask(item: Project) {
+  const openNewTask = useCallback(async (item: Project) => {
     if (openingTask.current) return
     openingTask.current = true
     try {
@@ -324,7 +324,7 @@ export function App() {
     } finally {
       openingTask.current = false
     }
-  }
+  }, [])
   async function createTask(task: WorkspaceTask) {
     setState((previous) => ({
       tasks: previous.tasks.some((item) => item.id === task.id)
@@ -345,40 +345,9 @@ export function App() {
         setOpening(true)
         return
       }
-      if (openingTask.current) return
-      openingTask.current = true
-      try {
-        const settings = await window.desktop.getSettings()
-        const defaults = settings.projects[projectSettingsKey(item.path)]
-        const branch = `task/${new Date().toISOString().slice(0, 10)}-${crypto.randomUUID().slice(0, 8)}`
-        const tree = await window.desktop.createWorktree(
-          item.path,
-          branch,
-          defaults?.baseRef ?? 'HEAD',
-        )
-        const task: WorkspaceTask = {
-          id: crypto.randomUUID(),
-          project: item.path,
-          path: tree.path,
-          branch: tree.branch,
-          name: '새 작업',
-          model: defaults?.model ?? '',
-          effort: defaults?.effort ?? '',
-          terminalKind: 'codex',
-        }
-        setState((previous) => ({
-          tasks: [...previous.tasks, task],
-          project: item.path,
-          taskId: task.id,
-        }))
-        setRefresh((value) => value + 1)
-      } catch (cause) {
-        setError(errorText(cause))
-      } finally {
-        openingTask.current = false
-      }
+      await openNewTask(item)
     },
-    [projects, state.project],
+    [projects, state.project, openNewTask],
   )
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
@@ -602,25 +571,15 @@ export function App() {
                         <FolderOpen size={14} />
                         <span>{item.name}</span>
                       </button>
-                      <SidebarActionMenu
+                      <button
                         className="project-new-task"
-                        label={`${item.name} 새 작업`}
-                        heading={`${item.name} · 새 작업`}
-                        icon={<Plus size={15} />}
+                        aria-label={`${item.name} 새 작업`}
+                        title={`${item.name} 새 작업`}
                         disabled={!ready || !repositories[item.path]}
-                        actions={[
-                          {
-                            label: '새 작업',
-                            icon: <Terminal size={14} />,
-                            onClick: () => void addTask(item),
-                          },
-                          {
-                            label: '옵션 선택하여 만들기',
-                            icon: <GitBranch size={14} />,
-                            onClick: () => void openNewTask(item),
-                          },
-                        ]}
-                      />
+                        onClick={() => void addTask(item)}
+                      >
+                        <Plus size={15} />
+                      </button>
                     </div>
                     {!collapsed.includes(item.path) &&
                       state.tasks

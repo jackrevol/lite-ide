@@ -75,7 +75,7 @@ export function NewTaskDialog({
           project: project.path,
           path: target,
           branch: tree.branch,
-          name: name.trim() || '새 작업',
+          name: name.trim() || tree.branch,
           model,
           effort,
           terminalKind: 'codex',
@@ -112,7 +112,10 @@ export function NewTaskDialog({
         <h2 id="new-task-title">새 작업</h2>
         <p title={project.path}>{project.name}에서 작업을 시작합니다.</p>
         <fieldset disabled={pending || !!created.current}>
-          <p>작업 전용 브랜치와 폴더를 함께 생성합니다.</p>
+          <p>
+            선택한 기준 브랜치에서 작업 전용 브랜치와 폴더를 생성합니다.
+            기본값은 설정 → 프로젝트에서 변경할 수 있습니다.
+          </p>
           <label>
             기준 브랜치
             <select

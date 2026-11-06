@@ -34,6 +34,12 @@ git(
   '-m',
   'fixture',
 )
+const baseCommit = git('rev-parse', 'HEAD').trim()
+git('branch', 'settings-base')
+await writeFile(join(project, 'newer.txt'), 'main에만 있는 파일\n', 'utf8')
+git('add', 'newer.txt')
+git('-c', 'user.name=UI Test', '-c', 'user.email=test@example.invalid',
+  'commit', '-m', 'newer fixture')
 await mkdir('artifacts', { recursive: true })
 const launch = () =>
   electron.launch({
@@ -87,12 +93,18 @@ async function waitScreen(text) {
     { timeout: 15000 },
   )
 }
-async function quickTask() {
-  const count = (await tasks()).length
+async function openTaskCreation() {
   await page
     .getByRole('button', { name: '한글 project 새 작업', exact: true })
     .click()
-  await page.getByRole('menuitem', { name: '새 작업', exact: true }).click()
+  await page.getByRole('dialog', { name: '새 작업', exact: true }).waitFor()
+}
+async function createDraftTask() {
+  const count = (await tasks()).length
+  await openTaskCreation()
+  const dialog = page.getByRole('dialog', { name: '새 작업', exact: true })
+  await dialog.getByRole('button', { name: '만들기', exact: true }).click()
+  await dialog.waitFor({ state: 'detached' })
   await until(async () => (await tasks()).length === count + 1, '새 작업 저장')
   await readyTerminal()
 }
@@ -232,8 +244,36 @@ try {
     ),
     /Worktree/,
   )
-  await quickTask()
+  await page.getByRole('button', { name: '설정', exact: true }).click()
+  const projectSettings = page.getByRole('dialog', { name: '설정', exact: true })
+  await projectSettings.getByRole('tab', { name: '프로젝트', exact: true }).click()
+  await projectSettings
+    .getByRole('combobox', { name: '기본 기준 브랜치', exact: true })
+    .selectOption('refs/heads/settings-base')
+  await projectSettings.getByRole('button', { name: '저장', exact: true }).click()
+  await projectSettings.getByText(
+    '프로젝트 기본값을 저장했습니다. 다음 새 작업부터 적용됩니다.',
+    { exact: true },
+  ).waitFor()
+  await projectSettings.getByRole('button', { name: '닫기', exact: true }).click()
+  const worktreesBefore = git('worktree', 'list', '--porcelain')
+  await openTaskCreation()
+  const creation = page.getByRole('dialog', { name: '새 작업', exact: true })
+  const baseBranch = creation.getByRole('combobox', {
+    name: '이번 작업 기준 브랜치', exact: true,
+  })
+  assert.equal(await baseBranch.inputValue(), 'refs/heads/settings-base')
+  assert.equal((await tasks()).length, 0)
+  await baseBranch.selectOption('refs/heads/main')
+  await creation.getByRole('button', { name: '취소', exact: true }).click()
+  await creation.waitFor({ state: 'detached' })
+  assert.equal(git('worktree', 'list', '--porcelain'), worktreesBefore)
+  await createDraftTask()
   const first = (await tasks())[0]
+  assert.equal(first.name, first.branch)
+  assert.equal(execFileSync('git', ['-C', first.path, 'rev-parse', 'HEAD'], {
+    windowsHide: true, encoding: 'utf8',
+  }).trim(), baseCommit)
   await waitOutput(first.id, 'codex> ')
   assert.equal(
     await page.locator('.composer, .user-message, .assistant-message').count(),
@@ -278,12 +318,40 @@ try {
   assert.equal((await snapshot(first.id)).generation, firstGeneration)
   assert.equal((await terminalText()).split(unique).length - 1, 1)
   await page.getByLabel('작업 터미널 입력').focus()
+  const stateBefore = await tasks()
   await page.keyboard.press('Control+n')
+  await creation.waitFor()
+  assert.equal(await baseBranch.inputValue(), 'refs/heads/settings-base')
+  assert.deepEqual(await tasks(), stateBefore)
+  await page.keyboard.press('Escape')
+  await creation.waitFor({ state: 'detached' })
+  assert.deepEqual(await tasks(), stateBefore)
+  await page.getByRole('button', { name: '새 작업', exact: true }).click()
+  await creation.waitFor()
+  assert.equal(await baseBranch.inputValue(), 'refs/heads/settings-base')
+  assert.equal((await tasks()).length, 1)
+  await creation.getByRole('button', { name: '취소', exact: true }).click()
+  await creation.waitFor({ state: 'detached' })
+  await page.keyboard.press('Control+n')
+  await creation.waitFor()
+  await baseBranch.selectOption('refs/heads/main')
+  await creation.getByRole('textbox', { name: '새 작업 이름', exact: true })
+    .fill('단축키 작업')
+  await creation.getByRole('button', { name: '만들기', exact: true }).click()
+  await creation.waitFor({ state: 'detached' })
   await page.waitForFunction(
     () => document.querySelectorAll('.task-row').length === 2,
   )
   await readyTerminal()
   const second = (await tasks()).find((task) => task.id !== first.id)
+  assert.equal(second.name, '단축키 작업')
+  assert.equal(execFileSync('git', ['-C', second.path, 'rev-parse', 'HEAD'], {
+    windowsHide: true, encoding: 'utf8',
+  }).trim(), git('rev-parse', 'main').trim())
+  assert.equal(await page.evaluate(async (path) => {
+    const key = window.desktop.platform === 'win32' ? path.toLowerCase() : path
+    return (await window.desktop.getSettings()).projects[key].baseRef
+  }, project), 'refs/heads/settings-base')
   await windowWrite(first.id, 'BACKGROUND_ONCE\r')
   await waitOutput(first.id, 'BACKGROUND_ONCE')
   await page
@@ -423,7 +491,7 @@ try {
   assert.equal((await tasks()).length, 1)
   assert.equal((await tasks())[0].path, first.path)
   // Git에서 이미 제거된 작업을 재시작 후에도 보존하고, 파일을 건드리지 않고 정리합니다.
-  await quickTask()
+  await createDraftTask()
   const stale = (await tasks()).find((task) => task.id !== first.id)
   await page.evaluate((id) => window.desktop.closeTerminal(id), stale.id)
   git('worktree', 'remove', '--force', '--', stale.path)
@@ -450,7 +518,7 @@ try {
     false,
   )
   console.log(
-    'UI 검증 통과: 실제 PTY 셸 명령, Codex 터미널 명령·Ctrl+C, 입력/재연결 출력 중복 방지, 탭 전환과 백그라운드 출력, 작업·Worktree 단일 이름/삭제, 변경 사항 1회 확인 삭제·취소 시 보존·프로세스 종료·브랜치 삭제, 재시작 복원, 패널 조절·960px·라이트 테마·타이틀바·설정·diff. 창을 숨김 상태로 유지했습니다.',
+    'UI 검증 통과: 프로젝트/탭 +·단축키 생성 창·취소 시 작업/Worktree 보존, 기준 브랜치 기본값 저장·작업별 변경·실제 생성 커밋 확인, 실제 PTY 셸 명령, Codex 터미널 명령·Ctrl+C, 입력/재연결 출력 중복 방지, 탭 전환과 백그라운드 출력, 작업·Worktree 단일 이름/삭제, 변경 사항 1회 확인 삭제·취소 시 보존·프로세스 종료·브랜치 삭제, 재시작 복원, 패널 조절·960px·라이트 테마·타이틀바·설정·diff. 창을 숨김 상태로 유지했습니다.',
   )
 } catch (error) {
   if (page && !page.isClosed()) {
