@@ -1,5 +1,6 @@
 import {
   app,
+  clipboard,
   BrowserWindow,
   dialog,
   ipcMain,
@@ -20,17 +21,28 @@ import { readFileSync } from 'node:fs'
 import {
   createWorktree,
   inspectRepository,
-  listBranches,
   readDiff,
+  removeWorktree,
+  pathKey,
+  listBranches,
+  resolveBaseRef,
   requireLinkedWorktree,
 } from './git'
+import { SettingsService, validateDefaults } from './settings-service'
+import { appInfo } from './app-info'
 import { AgentService } from './agent-service'
 import { cloneRepository, validateCloneInput } from './clone'
 import { UpdateService } from './update-service'
-import type { RequestAnswer, SendMessage } from '../shared/types'
+import { installAfterExit, takeInstallError } from './update-installer'
+import type {
+  RequestAnswer,
+  SendMessage,
+  ProjectDefaults,
+} from '../shared/types'
 
 const projects = new Set<string>()
 const workspaces = new Set<string>()
+const deletedWorkspaces = new Set<string>()
 const cloneDirectories = new Set<string>()
 let cloning = false
 let window: BrowserWindow | null = null
@@ -49,7 +61,11 @@ function titleBarColors(theme: 'light' | 'dark') {
 }
 
 function requireWorkspace(value: unknown): string {
-  if (typeof value !== 'string' || !workspaces.has(resolve(value))) {
+  if (
+    typeof value !== 'string' ||
+    !workspaces.has(resolve(value)) ||
+    deletedWorkspaces.has(pathKey(value))
+  ) {
     throw new Error('프로젝트를 먼저 열어주세요.')
   }
   return resolve(value)
@@ -61,6 +77,16 @@ if (process.env.LITE_IDE_HEADLESS === '1' && process.env.LITE_IDE_TEST_DATA)
   app.setPath('userData', process.env.LITE_IDE_TEST_DATA)
 
 app.whenReady().then(() => {
+  const settings = new SettingsService(
+    join(app.getPath('userData'), 'settings.json'),
+  )
+  ipcMain.handle('settings:get', () => settings.get())
+  ipcMain.handle('app:info', () => appInfo(app.isPackaged, app.getVersion()))
+  ipcMain.handle('app:info-copy', () => {
+    clipboard.writeText(
+      JSON.stringify(appInfo(app.isPackaged, app.getVersion()), null, 2),
+    )
+  })
   if (process.platform === 'darwin')
     app.dock?.setIcon(join(iconDirectory, 'icon.png'))
   nativeTheme.themeSource = windowTheme
@@ -122,15 +148,27 @@ app.whenReady().then(() => {
           '진행 중인 작업이나 저장소 복제를 마친 후 설치해 주세요.',
         )
     },
-    openInstaller: async (path) => {
-      const error = await shell.openPath(path)
-      if (error) throw new Error(`설치 파일을 열지 못했습니다: ${error}`)
-      if (process.platform === 'win32') app.quit()
+    openInstaller: async (path, sha256) => {
+      await installAfterExit({
+        platform: process.platform,
+        installer: path,
+        sha256,
+        executable: process.execPath,
+        cacheDirectory: join(app.getPath('userData'), 'updates'),
+        version: updates!.snapshot().version!,
+      })
+      app.quit()
     },
   })
+  let updateCheck: ReturnType<UpdateService['check']> | undefined
+  const checkUpdateOnce = async () => {
+    await (updateCheck ??= updates!.check())
+    return updates!.snapshot()
+  }
   const updateHandlers: Record<string, () => unknown> = {
     'app:update-status': () => updates!.snapshot(),
     'app:update-check': () => updates!.check(),
+    'app:update-start': () => updates!.update(),
     'app:update-download': () => updates!.download(),
     'app:update-cancel': () => updates!.cancel(),
     'app:update-install': () => updates!.install(),
@@ -146,9 +184,13 @@ app.whenReady().then(() => {
       return handler()
     })
   }
-  if (app.isPackaged && process.env.LITE_IDE_HEADLESS !== '1') {
-    setTimeout(() => void updates?.check(), 10000).unref()
-    setInterval(() => void updates?.check(), 6 * 60 * 60000).unref()
+  if (process.env.LITE_IDE_HEADLESS !== '1') {
+    void takeInstallError(join(app.getPath('userData'), 'updates')).then(
+      (error) => {
+        if (error) dialog.showErrorBox('업데이트 설치 실패', error)
+      },
+    )
+    setTimeout(() => void checkUpdateOnce(), 10000).unref()
   }
   ipcMain.handle('codex:status', () => agents!.status())
   ipcMain.handle('codex:usage', () => agents!.usage())
@@ -163,6 +205,14 @@ app.whenReady().then(() => {
   ipcMain.handle('codex:interrupt', (_event, id: string) =>
     agents!.interrupt(id),
   )
+  ipcMain.handle('codex:subagent-inspect', (_event, id: string) =>
+    agents!.inspectSubagent(id),
+  )
+  ipcMain.handle('codex:subagent-send', (_event, id: string, text: string) => {
+    if (updates?.snapshot().status === 'installing')
+      throw new Error('업데이트 설치를 시작하고 있습니다.')
+    return agents!.sendSubagentMessage(id, text)
+  })
   ipcMain.handle(
     'codex:answer',
     (_event, id: string, request: string, answer: RequestAnswer) =>
@@ -193,12 +243,29 @@ app.whenReady().then(() => {
   })
   ipcMain.handle(
     'worktree:create',
-    async (_event, path: string, branch: string, baseBranch: string) => {
+    async (_event, path: string, branch: string, baseRef?: string) => {
       const directory = requireWorkspace(path)
-      const tree = await createWorktree(directory, branch, baseBranch)
+      const tree = await createWorktree(directory, branch, baseRef)
       const worktreePath = resolve(tree.path)
       workspaces.add(worktreePath)
       return { ...tree, path: worktreePath }
+    },
+  )
+  ipcMain.handle(
+    'worktree:delete',
+    async (_event, projectPath: string, target: string) => {
+      await restoredProjects
+      const directory = requireWorkspace(projectPath)
+      if (!projects.has(directory))
+        throw new Error('열린 프로젝트를 선택해 주세요.')
+      const workspace = await realpath(requireWorkspace(target))
+      return agents!.removeWorkspace(workspace, async () => {
+        await removeWorktree(directory, workspace, [...projects])
+        deletedWorkspaces.add(pathKey(workspace))
+        for (const path of workspaces) {
+          if (pathKey(path) === pathKey(workspace)) workspaces.delete(path)
+        }
+      })
     },
   )
   const projectFile = join(app.getPath('userData'), 'projects.json')
@@ -232,6 +299,29 @@ app.whenReady().then(() => {
       /* 처음 실행하거나 저장 파일이 손상된 경우 빈 목록으로 시작합니다. */
     }
   })()
+  async function requireProject(path: string) {
+    await restoredProjects
+    const directory = requireWorkspace(path)
+    if (!projects.has(directory))
+      throw new Error('등록된 프로젝트를 선택해 주세요.')
+    return directory
+  }
+  ipcMain.handle('repository:branches', async (_event, path: string) =>
+    listBranches(await requireProject(path)),
+  )
+  ipcMain.handle(
+    'settings:project-update',
+    async (_event, path: string, value: ProjectDefaults) => {
+      const directory = await requireProject(path)
+      const defaults = validateDefaults(value)
+      if (defaults.baseRef !== 'HEAD')
+        await resolveBaseRef(directory, defaults.baseRef)
+      return settings.update(directory, defaults)
+    },
+  )
+  ipcMain.handle('settings:project-reset', async (_event, path: string) =>
+    settings.update(await requireProject(path), null),
+  )
   ipcMain.handle('project:list', async () => {
     await restoredProjects
     return [...projects].map((path) => ({ path, name: basename(path) }))
@@ -287,9 +377,6 @@ app.whenReady().then(() => {
       }
     },
   )
-  ipcMain.handle('repository:branches', (_event, projectPath: unknown) =>
-    listBranches(requireWorkspace(projectPath)),
-  )
   ipcMain.handle('repository:inspect', async (_event, projectPath: unknown) => {
     const directory = requireWorkspace(projectPath)
     const snapshot = await inspectRepository(directory)
@@ -300,7 +387,8 @@ app.whenReady().then(() => {
     // 사용자가 연 프로젝트에서 확인된 Worktree만 추가 접근을 허용합니다.
     if (projects.has(directory)) {
       for (const worktree of snapshot.worktrees)
-        workspaces.add(resolve(worktree.path))
+        if (!deletedWorkspaces.has(pathKey(worktree.path)))
+          workspaces.add(resolve(worktree.path))
     }
     return snapshot
   })

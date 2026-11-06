@@ -28,7 +28,7 @@ interface UpdateOptions {
   fetch: (url: string, init?: RequestInit) => Promise<Response>
   emit: (state: AppUpdateState) => void
   beforeInstall: () => Promise<void>
-  openInstaller: (path: string) => Promise<void>
+  openInstaller: (path: string, sha256: string) => Promise<void>
 }
 
 export class UpdateService {
@@ -37,6 +37,7 @@ export class UpdateService {
   private release?: { asset: Asset; checksum: Asset }
   private controller?: AbortController
   private downloaded?: { path: string; sha256: string }
+  private updating?: Promise<AppUpdateState>
   constructor(options: UpdateOptions) {
     this.options = options
     this.state = {
@@ -228,6 +229,24 @@ export class UpdateService {
   cancel() {
     this.controller?.abort()
   }
+  update() {
+    if (this.updating) return this.updating
+    this.updating = this.downloadAndInstall().finally(() => {
+      this.updating = undefined
+    })
+    return this.updating
+  }
+  private async downloadAndInstall() {
+    if (
+      !this.release ||
+      !['available', 'error', 'downloaded'].includes(this.state.status)
+    )
+      return this.snapshot()
+    if (this.state.status !== 'downloaded') await this.download()
+    if (this.state.status === 'downloaded' && this.options.canInstall)
+      return this.install()
+    return this.snapshot()
+  }
   async install() {
     if (!this.downloaded || this.state.status !== 'downloaded')
       return this.snapshot()
@@ -245,8 +264,11 @@ export class UpdateService {
         this.downloaded = undefined
         throw new Error('설치 파일이 변경되었습니다. 다시 다운로드해 주세요.')
       }
-      await this.options.openInstaller(this.downloaded.path)
-      return this.publish({ status: 'downloaded' })
+      await this.options.openInstaller(
+        this.downloaded.path,
+        this.downloaded.sha256,
+      )
+      return this.snapshot()
     } catch (error) {
       return this.publish({
         status: this.downloaded ? 'downloaded' : 'error',

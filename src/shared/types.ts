@@ -8,11 +8,6 @@ export interface Worktree {
   branch: string
 }
 
-export interface RepositoryBranch {
-  name: string
-  ref: string
-}
-
 export interface ChangedFile {
   path: string
   status: string
@@ -27,8 +22,18 @@ export interface RepositorySnapshot {
 
 export interface DesktopApi {
   platform: string
+  getSettings(): Promise<AppSettings>
+  updateProjectSettings(
+    projectPath: string,
+    defaults: ProjectDefaults,
+  ): Promise<AppSettings>
+  resetProjectSettings(projectPath: string): Promise<AppSettings>
+  getAppInfo(): Promise<AppInfo>
+  copyAppInfo(): Promise<void>
+  listBranches(projectPath: string): Promise<string[]>
   updateStatus(): Promise<AppUpdateState>
   checkUpdate(): Promise<AppUpdateState>
+  startUpdate(): Promise<AppUpdateState>
   downloadUpdate(): Promise<AppUpdateState>
   cancelUpdateDownload(): Promise<void>
   installUpdate(): Promise<AppUpdateState>
@@ -40,7 +45,6 @@ export interface DesktopApi {
   defaultCloneDirectory(): Promise<string>
   cloneProject(url: string, parent: string, name: string): Promise<Project>
   inspectRepository(projectPath: string): Promise<RepositorySnapshot>
-  listBranches(projectPath: string): Promise<RepositoryBranch[]>
   readDiff(projectPath: string, filePath: string): Promise<string>
   codexStatus(): Promise<CodexStatus>
   codexUsage(): Promise<CodexUsage>
@@ -48,6 +52,8 @@ export interface DesktopApi {
   listSessions(): Promise<AgentSession[]>
   sendMessage(input: SendMessage): Promise<void>
   interruptSession(sessionId: string): Promise<void>
+  inspectSubagent(sessionId: string): Promise<void>
+  sendSubagentMessage(sessionId: string, text: string): Promise<void>
   answerRequest(
     sessionId: string,
     requestId: string,
@@ -62,8 +68,35 @@ export interface DesktopApi {
   createWorktree(
     projectPath: string,
     branch: string,
-    baseBranch: string,
+    baseRef?: string,
   ): Promise<Worktree>
+  deleteWorktree(
+    projectPath: string,
+    worktreePath: string,
+  ): Promise<{ warning?: string }>
+}
+
+export interface ProjectDefaults {
+  baseRef: string
+  model: string
+  effort: string
+}
+export interface AppSettings {
+  schemaVersion: 1
+  projects: Record<string, ProjectDefaults>
+}
+export interface AppInfo {
+  name: string
+  version: string
+  buildTime: string | null
+  repositoryUrl: string
+  commit: string | null
+  dirty: boolean | null
+  platform: string
+  arch: string
+  electronVersion: string
+  nodeVersion: string
+  packaged: boolean
 }
 
 export interface AppUpdateState {
@@ -84,7 +117,12 @@ export interface AppUpdateState {
 }
 
 export type AgentStatus =
-  'idle' | 'running' | 'waiting' | 'completed' | 'interrupted' | 'failed'
+  | 'idle'
+  | 'running'
+  | 'waiting'
+  | 'completed'
+  | 'interrupted'
+  | 'failed'
 export interface AgentMessage {
   id: string
   kind: 'user' | 'assistant' | 'command' | 'files' | 'reasoning' | 'tool'
@@ -114,6 +152,14 @@ export interface AgentSession {
   requests: AgentRequest[]
   error?: string
   updatedAt: number
+  parentSessionId?: string
+  nickname?: string
+  role?: string
+  model?: string
+  task?: string
+  observationError?: string
+  canAcceptDirectInput?: boolean
+  closed?: boolean
 }
 export interface CodexModel {
   id: string
@@ -162,6 +208,7 @@ export interface SendMessage {
   text: string
   model?: string
   effort?: string
+  title?: string
 }
 export interface RequestAnswer {
   approved?: boolean

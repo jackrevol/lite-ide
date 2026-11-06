@@ -3,8 +3,17 @@ import type { AgentSession, AppUpdateState, DesktopApi } from '../shared/types'
 
 const api: DesktopApi = {
   platform: process.platform,
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  updateProjectSettings: (path, defaults) =>
+    ipcRenderer.invoke('settings:project-update', path, defaults),
+  resetProjectSettings: (path) =>
+    ipcRenderer.invoke('settings:project-reset', path),
+  getAppInfo: () => ipcRenderer.invoke('app:info'),
+  copyAppInfo: () => ipcRenderer.invoke('app:info-copy'),
+  listBranches: (path) => ipcRenderer.invoke('repository:branches', path),
   updateStatus: () => ipcRenderer.invoke('app:update-status'),
   checkUpdate: () => ipcRenderer.invoke('app:update-check'),
+  startUpdate: () => ipcRenderer.invoke('app:update-start'),
   downloadUpdate: () => ipcRenderer.invoke('app:update-download'),
   cancelUpdateDownload: () => ipcRenderer.invoke('app:update-cancel'),
   installUpdate: () => ipcRenderer.invoke('app:update-install'),
@@ -27,7 +36,6 @@ const api: DesktopApi = {
   cloneProject: (url, parent, name) =>
     ipcRenderer.invoke('project:clone', url, parent, name),
   inspectRepository: (path) => ipcRenderer.invoke('repository:inspect', path),
-  listBranches: (path) => ipcRenderer.invoke('repository:branches', path),
   readDiff: (path, file) => ipcRenderer.invoke('repository:diff', path, file),
   codexStatus: () => ipcRenderer.invoke('codex:status'),
   codexUsage: () => ipcRenderer.invoke('codex:usage'),
@@ -41,14 +49,19 @@ const api: DesktopApi = {
   listSessions: () => ipcRenderer.invoke('codex:sessions'),
   sendMessage: (input) => ipcRenderer.invoke('codex:send', input),
   interruptSession: (id) => ipcRenderer.invoke('codex:interrupt', id),
+  inspectSubagent: (id) => ipcRenderer.invoke('codex:subagent-inspect', id),
+  sendSubagentMessage: (id, text) =>
+    ipcRenderer.invoke('codex:subagent-send', id, text),
   answerRequest: (id, request, answer) =>
     ipcRenderer.invoke('codex:answer', id, request, answer),
   renameSession: (id, title) => ipcRenderer.invoke('codex:rename', id, title),
   deleteSession: (id) => ipcRenderer.invoke('codex:delete', id),
   loginCodex: () => ipcRenderer.invoke('codex:login'),
   openLink: (url) => ipcRenderer.invoke('link:open', url),
-  createWorktree: (path, branch, baseBranch) =>
-    ipcRenderer.invoke('worktree:create', path, branch, baseBranch),
+  createWorktree: (path, branch, baseRef) =>
+    ipcRenderer.invoke('worktree:create', path, branch, baseRef),
+  deleteWorktree: (project, path) =>
+    ipcRenderer.invoke('worktree:delete', project, path),
   onSession: (listener) => {
     const receive = (
       _event: Electron.IpcRendererEvent,

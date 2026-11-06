@@ -11,7 +11,6 @@ import {
 } from 'node:path'
 import type {
   ChangedFile,
-  RepositoryBranch,
   RepositorySnapshot,
   Worktree,
 } from '../shared/types.ts'
@@ -150,62 +149,108 @@ export async function readDiff(
   return git(directory, ['diff', ...options, 'HEAD', '--', file])
 }
 
-export async function requireLinkedWorktree(directory: string): Promise<void> {
-  const [gitDirectory, commonDirectory] = await Promise.all([
-    git(directory, ['rev-parse', '--absolute-git-dir']),
-    git(directory, ['rev-parse', '--path-format=absolute', '--git-common-dir']),
-  ])
-  if (resolve(gitDirectory.trim()) === resolve(commonDirectory.trim()))
-    throw new Error('새 작업을 만들어 전용 Worktree에서 실행해 주세요.')
-}
-
-export async function listBranches(
-  directory: string,
-): Promise<RepositoryBranch[]> {
-  const output = await git(directory, [
-    'for-each-ref',
-    '--sort=refname',
-    '--format=%(refname)%00%(symref)',
-    'refs/heads/',
-    'refs/remotes/',
-  ])
-  return output.split(/\r?\n/).flatMap((line) => {
-    const [ref, symbolic] = line.split('\0')
-    if (!ref || symbolic) return []
-    return [{ name: ref.replace(/^refs\/(heads|remotes)\//, ''), ref }]
-  })
-}
-
 export async function createWorktree(
   directory: string,
   branch: string,
-  baseBranch: string,
+  baseRef = 'HEAD',
 ): Promise<Worktree> {
   if (typeof branch !== 'string' || !branch.trim() || branch.length > 100)
     throw new Error('브랜치 이름을 입력해 주세요.')
   await git(directory, ['check-ref-format', '--branch', branch])
-  if (
-    typeof baseBranch !== 'string' ||
-    (baseBranch !== 'HEAD' &&
-      !(await listBranches(directory)).some((item) => item.ref === baseBranch))
-  )
-    throw new Error(
-      '기준 브랜치를 다시 선택해 주세요. 브랜치가 삭제되었을 수 있습니다.',
-    )
-  // 선택한 브랜치의 커밋을 고정하고, 원격 브랜치의 자동 추적 설정은 만들지 않습니다.
-  const commit = (
-    await git(directory, ['rev-parse', '--verify', `${baseBranch}^{commit}`])
-  ).trim()
+  const base = await resolveBaseRef(directory, baseRef)
   const name = branch.replace(/[^a-zA-Z0-9._-]/g, '-')
   const path = join(
     dirname(directory),
     `${basename(directory)}-worktrees`,
     `${name}-${crypto.randomUUID().slice(0, 8)}`,
   )
-  await git(directory, ['worktree', 'add', '-b', branch, path, commit])
+  await git(directory, ['worktree', 'add', '-b', branch, path, base])
   // Git이 정규화한 경로를 사용해 Windows의 짧은 경로·드라이브 표기 차이를 없앱니다.
   const snapshot = await inspectRepository(directory)
   const created = snapshot.worktrees.find((tree) => tree.branch === branch)
   if (!created) throw new Error('생성한 Worktree 경로를 확인하지 못했습니다.')
   return created
+}
+
+export async function requireLinkedWorktree(directory: string): Promise<void> {
+  const [gitDirectory, commonDirectory] = await Promise.all([
+    git(directory, ['rev-parse', '--absolute-git-dir']),
+    git(directory, ['rev-parse', '--path-format=absolute', '--git-common-dir']),
+  ])
+  if (pathKey(gitDirectory.trim()) === pathKey(commonDirectory.trim()))
+    throw new Error('새 작업을 만들어 전용 Worktree에서 실행해 주세요.')
+}
+
+export async function listBranches(directory: string): Promise<string[]> {
+  const output = await git(directory, [
+    'for-each-ref',
+    '--format=%(refname)%00%(symref)',
+    'refs/heads/',
+    'refs/remotes/',
+  ])
+  return output
+    .split(/\r?\n/)
+    .filter((line) => line.endsWith('\0'))
+    .map((line) => line.slice(0, -1))
+    .filter((ref) => /^refs\/(heads|remotes)\/.+/.test(ref))
+}
+
+export async function resolveBaseRef(
+  directory: string,
+  baseRef: string,
+): Promise<string> {
+  if (
+    typeof baseRef !== 'string' ||
+    (baseRef !== 'HEAD' && !(await listBranches(directory)).includes(baseRef))
+  )
+    throw new Error('사용 가능한 기준 브랜치를 선택해 주세요.')
+  const commit = (
+    await git(directory, [
+      'rev-parse',
+      '--verify',
+      '--end-of-options',
+      `${baseRef}^{commit}`,
+    ])
+  ).trim()
+  if (!/^[a-f0-9]{40,64}$/.test(commit))
+    throw new Error('기준 브랜치의 commit을 확인하지 못했습니다.')
+  return commit
+}
+
+export const pathKey = (path: string) => {
+  const value = resolve(path)
+  return process.platform === 'win32' ? value.toLowerCase() : value
+}
+
+export async function removeWorktree(
+  directory: string,
+  target: string,
+  protectedPaths: string[] = [],
+): Promise<void> {
+  const canonicalTarget = await realpath(target)
+  const snapshot = await inspectRepository(directory)
+  const member = snapshot.worktrees.find(
+    (tree) => pathKey(tree.path) === pathKey(canonicalTarget),
+  )
+  if (!member)
+    throw new Error('이 프로젝트에 등록된 Worktree만 삭제할 수 있습니다.')
+  if (
+    pathKey(snapshot.worktrees[0].path) === pathKey(canonicalTarget) ||
+    protectedPaths.some((path) => pathKey(path) === pathKey(canonicalTarget))
+  )
+    throw new Error(
+      '기본 작업 공간이나 별도로 연 프로젝트는 삭제할 수 없습니다.',
+    )
+  const status = await git(canonicalTarget, [
+    'status',
+    '--porcelain=v1',
+    '-z',
+    '--untracked-files=all',
+  ])
+  if (status)
+    throw new Error(
+      '변경 파일 또는 추적하지 않는 파일이 있어 삭제할 수 없습니다.',
+    )
+  // Git 자체가 잠금·서브모듈 등 추가 보호 조건을 검사합니다. 브랜치는 보존합니다.
+  await git(directory, ['worktree', 'remove', '--', canonicalTarget])
 }

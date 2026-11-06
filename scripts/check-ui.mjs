@@ -21,7 +21,12 @@ const git = (...args) =>
   execFileSync('git', ['-C', project, ...args], { windowsHide: true })
 git('init', '--initial-branch=main')
 await writeFile(join(project, 'hello.txt'), 'Hello from Lite IDE\n', 'utf8')
-git('add', 'hello.txt')
+await writeFile(
+  join(project, '.gitignore'),
+  '.env\nnode_modules/\nout/\n',
+  'utf8',
+)
+git('add', 'hello.txt', '.gitignore')
 git(
   '-c',
   'user.name=UI Test',
@@ -31,20 +36,25 @@ git(
   '-m',
   'fixture',
 )
+const settingsBaseCommit = git('rev-parse', 'HEAD').toString().trim()
+git('branch', 'settings-base')
+await writeFile(join(project, 'newer.txt'), '현재 main에만 있는 파일\n', 'utf8')
+git('add', 'newer.txt')
+git(
+  '-c',
+  'user.name=UI Test',
+  '-c',
+  'user.email=test@example.invalid',
+  'commit',
+  '-m',
+  'newer fixture',
+)
 await writeFile(
   join(project, 'hello.txt'),
   'Hello from Lite IDE\nChanged line\n',
   'utf8',
 )
 await writeFile(join(project, '새 파일.txt'), '새 파일 내용\n', 'utf8')
-const mainCommit = git('rev-parse', 'HEAD').toString().trim()
-const developCommit = git(
-  '-c', 'user.name=UI Test', '-c', 'user.email=test@example.invalid',
-  'commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'develop fixture',
-).toString().trim()
-git('update-ref', 'refs/heads/develop', developCommit)
-git('update-ref', 'refs/remotes/origin/develop', developCommit)
-git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/develop')
 await mkdir('artifacts', { recursive: true })
 git('update-server-info')
 const gitRoot = join(project, '.git')
@@ -82,9 +92,8 @@ const launch = (usageScenario = '') =>
   })
 await mkdir(join(fixture, 'user-data'), { recursive: true })
 await writeFile(join(fixture, 'user-data', 'sessions.json'), JSON.stringify([{
-  id: 'legacy-local', workspace: project, title: '이전 로컬 작업',
-  status: 'completed', messages: [{ id: 'old', kind: 'assistant', text: '이전 로컬 대화' }],
-  requests: [], updatedAt: Date.now(),
+  id: 'legacy-local', workspace: project, title: '이전 로컬 작업', status: 'completed',
+  messages: [{ id: 'old', kind: 'assistant', text: '이전 로컬 대화' }], requests: [], updatedAt: Date.now(),
 }]), 'utf8')
 let app = await launch()
 let page
@@ -148,6 +157,7 @@ async function checkTitlebar(page, app) {
 }
 try {
   page = await app.firstWindow()
+  page.setDefaultTimeout(30000)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   await page.getByRole('heading', { name: '무엇을 만들어 볼까요?' }).waitFor()
@@ -164,13 +174,15 @@ try {
   const updateContent = 'UI update installer fixture'
   await app.evaluate(
     ({ net }, fixture) => {
+      globalThis.updateChecks = 0
       const version = '99.0.0'
       const platform = process.platform === 'win32' ? 'win' : 'mac'
       const name = `Lite-IDE-${version}-${platform}-${process.arch}.${platform === 'win' ? 'exe' : 'dmg'}`
       const root = `https://github.com/jackrevol/lite-ide/releases/download/v${version}/`
       const sums = `${fixture.hash}  ${name}\n`
       net.fetch = async (url) => {
-        if (String(url).endsWith('/releases/latest'))
+        if (String(url).endsWith('/releases/latest')) {
+          globalThis.updateChecks++
           return Response.json({
             tag_name: `v${version}`,
             draft: false,
@@ -188,6 +200,7 @@ try {
               },
             ],
           })
+        }
         return new Response(
           String(url).endsWith('SHA256SUMS.txt') ? sums : fixture.content,
         )
@@ -198,31 +211,100 @@ try {
       hash: createHash('sha256').update(updateContent).digest('hex'),
     },
   )
+  assert.equal(
+    await page
+      .getByRole('button', { name: '앱 업데이트', exact: true })
+      .count(),
+    0,
+  )
+  await page.keyboard.press('Control+,')
+  const settingsDialog = page.getByRole('dialog', { name: '설정', exact: true })
+  await settingsDialog
+    .getByRole('button', { name: '업데이트 확인', exact: true })
+    .click()
+  await settingsDialog
+    .getByText('새 버전을 다운로드할 수 있습니다.', { exact: true })
+    .waitFor()
+  assert.equal(await app.evaluate(() => globalThis.updateChecks), 1)
+  await page.evaluate(() => window.desktop.checkUpdate())
+  assert.equal(await app.evaluate(() => globalThis.updateChecks), 2)
+  assert.equal(
+    (await page.evaluate(() => window.desktop.updateStatus())).status,
+    'available',
+  )
+  await settingsDialog
+    .getByRole('tab', { name: '프로그램 정보', exact: true })
+    .click()
+  const initialInfo = await page.evaluate(() => window.desktop.getAppInfo())
+  assert.equal(initialInfo.name, 'Lite IDE')
+  assert.equal(
+    initialInfo.version,
+    JSON.parse(await readFile('package.json', 'utf8')).version,
+  )
+  assert.match(initialInfo.buildTime, /^\d{4}-\d{2}-\d{2}T.*Z$/)
+  assert.equal(
+    initialInfo.repositoryUrl,
+    'https://github.com/jackrevol/lite-ide',
+  )
+  assert.match(initialInfo.commit, /^[a-f0-9]{40}$/)
+  assert.equal(initialInfo.packaged, false)
+  await settingsDialog
+    .getByText(`${initialInfo.buildTime} (UTC)`, { exact: true })
+    .waitFor()
+  await settingsDialog
+    .getByRole('button', { name: '정보 복사', exact: true })
+    .click()
+  assert.equal(
+    await app.evaluate(
+      ({ clipboard }) => JSON.parse(clipboard.readText()).buildTime,
+    ),
+    initialInfo.buildTime,
+  )
+  await app.evaluate(({ shell }) => {
+    globalThis.liteIdeOpenedUrl = ''
+    shell.openExternal = async (url) => {
+      globalThis.liteIdeOpenedUrl = url
+    }
+  })
+  await settingsDialog
+    .getByRole('button', { name: 'GitHub 열기', exact: true })
+    .click()
+  assert.equal(
+    await app.evaluate(() => globalThis.liteIdeOpenedUrl),
+    initialInfo.repositoryUrl,
+  )
+  await settingsDialog
+    .getByRole('button', { name: '닫기', exact: true })
+    .click()
+  await settingsDialog.waitFor({ state: 'detached' })
   await page.getByRole('button', { name: '앱 업데이트', exact: true }).click()
   const updateDialog = page.getByRole('dialog', {
     name: '앱 업데이트',
     exact: true,
   })
-  await updateDialog
-    .getByRole('button', { name: '업데이트 확인', exact: true })
-    .click()
-  await updateDialog
-    .getByText('새 버전을 다운로드할 수 있습니다.', { exact: true })
-    .waitFor()
-  await page.screenshot({ path: 'artifacts/workspace-update.png' })
-  await updateDialog
-    .getByRole('button', { name: '다운로드', exact: true })
-    .click()
+  assert.equal(
+    await updateDialog
+      .getByRole('button', { name: '업데이트 확인', exact: true })
+      .count(),
+    0,
+  )
   await updateDialog
     .getByText('다운로드와 무결성 검증이 완료되었습니다.', { exact: true })
     .waitFor()
+  await page.screenshot({ path: 'artifacts/workspace-update.png' })
+  assert.equal(
+    await updateDialog
+      .getByRole('button', { name: '다운로드', exact: true })
+      .count(),
+    0,
+  )
   assert.equal(
     (await page.evaluate(() => window.desktop.updateStatus())).progress,
     100,
   )
   assert.equal(
     await updateDialog
-      .getByRole('button', { name: /종료하고 설치|DMG 열기/ })
+      .getByRole('button', { name: '업데이트 다시 시도' })
       .isDisabled(),
     true,
   )
@@ -260,18 +342,15 @@ try {
   )
   await page.screenshot({ path: 'artifacts/workspace-empty.png' })
   const input = page.getByRole('textbox', { name: 'Codex에게 메시지' })
-  assert.equal(await input.isEnabled(), false)
-  await page.evaluate((directory) => {
-    localStorage.setItem('lite-ide.workspace.v1', JSON.stringify({
-      project: directory, workspace: directory,
-      sessions: { [directory]: [{ id: 'legacy-local', title: '이전 로컬 작업', draft: '이전 로컬 입력' }] },
-      selected: { [directory]: 'legacy-local' },
-    }))
-  }, project)
+  await page.evaluate((directory) => localStorage.setItem('lite-ide.workspace.v1', JSON.stringify({
+    project: directory, workspace: directory,
+    sessions: { [directory]: [{ id: 'legacy-local', title: '이전 로컬 작업', draft: '이전 입력' }] },
+  })), project)
   await page.reload()
-  await page.getByRole('heading', { name: '무엇을 만들어 볼까요?' }).waitFor()
+  await page.locator('.agent-heading').waitFor()
   assert.equal(await page.getByText('이전 로컬 작업', { exact: true }).count(), 0)
   assert.equal(await page.getByText('이전 로컬 대화', { exact: true }).count(), 0)
+
   await app.evaluate(({ dialog }, directory) => {
     dialog.showOpenDialog = async () => ({
       canceled: false,
@@ -284,8 +363,8 @@ try {
     .click()
   await page.getByRole('button', { name: '로컬 폴더 열기' }).click()
   await page.locator('.project-name').filter({ hasText: '한글 project' }).waitFor()
-  assert.equal(await page.locator('.task-row').count(), 0)
   assert.equal(await input.isEnabled(), false)
+  assert.equal(await page.locator('.task-row').count(), 0)
   assert.equal(await page.getByRole('button', { name: 'hello.txt', exact: true }).count(), 0)
   assert.equal(await page.evaluate(async (directory) => {
     try {
@@ -293,22 +372,11 @@ try {
       return false
     } catch (error) { return String(error).includes('전용 Worktree') }
   }, project), true)
-  await page.getByRole('button', { name: '새 작업', exact: false }).first().click()
-  await page.getByRole('dialog', { name: '새 작업', exact: true }).waitFor()
-  await page.getByRole('textbox', { name: '새 브랜치 이름' }).fill('task/first')
-  await page.waitForFunction(() => document.querySelector('.branch-dialog select')?.value === 'HEAD')
-  await page.screenshot({ path: 'artifacts/workspace-new-task.png' })
-  await page.getByRole('button', { name: '만들기', exact: true }).click()
-  await page.locator('.task-row.selected').filter({ hasText: 'task/first' }).waitFor()
-  const firstWorktree = await page.evaluate(async (directory) =>
-    (await window.desktop.inspectRepository(directory)).worktrees.find((entry) => entry.branch === 'task/first').path,
-    project,
-  )
-  assert.notEqual(firstWorktree, project)
-  assert.equal(await page.locator('.workspace-row, .session-row').count(), 0)
-  assert.equal(await page.locator('.task-row').count(), 1)
-  await writeFile(join(firstWorktree, 'hello.txt'), 'Hello from Lite IDE\nChanged line\n', 'utf8')
-  await writeFile(join(firstWorktree, '새 파일.txt'), '새 파일 내용\n', 'utf8')
+  await page.getByRole('button', { name: '한글 project 새 작업', exact: true }).click()
+  await page.locator('.task-row.selected').waitFor()
+  const initialWorkspace = await page.evaluate(() => JSON.parse(localStorage.getItem('lite-ide.workspace.v2')).workspace)
+  await writeFile(join(initialWorkspace, 'hello.txt'), 'Hello from Lite IDE\nChanged line\n', 'utf8')
+  await writeFile(join(initialWorkspace, '새 파일.txt'), '새 파일 내용\n', 'utf8')
   await page.getByRole('button', { name: '변경 사항 새로고침' }).click()
   await page.getByRole('button', { name: 'hello.txt', exact: true }).waitFor()
   await page.getByRole('button', { name: 'hello.txt', exact: true }).click()
@@ -327,9 +395,53 @@ try {
     }, project),
     true,
   )
-  await input.fill('프로젝트를 확인해 주세요')
-  await page.getByRole('button', { name: '메시지 보내기', exact: true }).click()
-  await page.locator('.status-label.completed').waitFor()
+  assert.equal(await page.locator('.welcome').count(), 0)
+  await page.locator('.conversation').waitFor()
+  await input.fill('첫 번째 작업 내용')
+  await page.keyboard.press('Control+n')
+  await page.waitForFunction(() => document.querySelectorAll('.task-row').length === 2)
+  assert.equal(await input.inputValue(), '')
+  assert.equal(
+    await page.getByRole('dialog', { name: '새 작업', exact: true }).count(),
+    0,
+  )
+  await page.locator('.task-row').and(page.getByTitle(initialWorkspace, { exact: true })).click()
+  assert.equal(await input.inputValue(), '첫 번째 작업 내용')
+  await page
+    .getByRole('button', { name: '새 작업', exact: false })
+    .first()
+    .click()
+  await page.waitForFunction(() => document.querySelectorAll('.task-row').length === 3)
+  assert.equal(
+    await input.evaluate((node) => node === document.activeElement),
+    true,
+  )
+  await page.keyboard.type('프로젝트를 확인해 주세요')
+  await input.press('Shift+Enter')
+  await page.keyboard.type('구조도 알려 주세요')
+  assert.equal(
+    await input.inputValue(),
+    '프로젝트를 확인해 주세요\n구조도 알려 주세요',
+  )
+  assert.equal(await page.locator('.user-message').count(), 0)
+  const composerBefore = await input.boundingBox()
+  await page.screenshot({ path: 'artifacts/workspace-new-chat.png' })
+  await input.press('Enter')
+  await page.locator('.agent-heading .status-label.completed').waitFor()
+  assert.equal(
+    await page.locator('.user-message').innerText(),
+    '프로젝트를 확인해 주세요\n구조도 알려 주세요',
+  )
+  assert.equal(await input.inputValue(), '')
+  const composerAfter = await input.boundingBox()
+  assert.ok(
+    Math.abs(
+      composerBefore.y +
+        composerBefore.height -
+        composerAfter.y -
+        composerAfter.height,
+    ) <= 1,
+  )
   await usage.getByText('70% 남음', { exact: true }).waitFor()
   assert.match(
     await page.locator('.markdown').innerText(),
@@ -337,28 +449,24 @@ try {
   )
   assert.equal(await page.locator('.markdown pre').count(), 1)
   const firstThread = await page.evaluate(
-    async () => (await window.desktop.listSessions()).find((session) => session.id !== 'legacy-local').threadId,
+    async () => (await window.desktop.listSessions()).find((session) => session.id !== 'legacy-local' && !session.parentSessionId).threadId,
   )
-  assert.equal(await page.evaluate(async (directory) => {
-    try {
-      await window.desktop.sendMessage({ sessionId: 'duplicate-task', workspace: directory, text: 'duplicate' })
-      return false
-    } catch (error) { return String(error).includes('연결된 기존 작업') }
-  }, firstWorktree), true)
   await input.fill('이어서 확인해 주세요')
   await input.press('Enter')
   await page.waitForFunction(
     () => document.querySelectorAll('.assistant-message').length === 2,
   )
-  await page.locator('.status-label.completed').waitFor()
+  await page.locator('.agent-heading .status-label.completed').waitFor()
   assert.equal(await page.locator('.assistant-message').count(), 2)
   assert.equal(
     await page.evaluate(
-      async () => (await window.desktop.listSessions()).find((session) => session.id !== 'legacy-local').threadId,
+      async () => (await window.desktop.listSessions()).find((session) => session.id !== 'legacy-local' && !session.parentSessionId).threadId,
     ),
     firstThread,
   )
-  await page.getByRole('button', { name: '작업 이름 변경' }).click()
+  await page
+    .getByRole('button', { name: '작업 이름 변경', exact: true })
+    .click()
   await page
     .getByRole('textbox', { name: '작업 이름', exact: true })
     .fill('제품 검증 작업')
@@ -370,14 +478,14 @@ try {
   await input.fill('승인 요청')
   await input.press('Enter')
   await page.getByRole('button', { name: '이번 실행 허용' }).click()
-  await page.locator('.status-label.completed').waitFor()
+  await page.locator('.agent-heading .status-label.completed').waitFor()
   await input.fill('질문 요청')
   await input.press('Enter')
   await page
     .getByRole('textbox', { name: '어떤 범위로 진행할까요?' })
     .fill('전체')
   await page.getByRole('button', { name: '답변 보내기' }).click()
-  await page.locator('.status-label.completed').waitFor()
+  await page.locator('.agent-heading .status-label.completed').waitFor()
   await input.fill('중단 테스트')
   await input.press('Enter')
   await page.getByRole('button', { name: '작업 중단', exact: true }).click()
@@ -393,38 +501,414 @@ try {
   await page.waitForFunction(
     () => document.querySelectorAll('.assistant-message').length === 5,
   )
-  await page.locator('.status-label.completed').waitFor()
+  await page.locator('.agent-heading .status-label.completed').waitFor()
   await page.keyboard.press('Control+k')
   await page
     .getByRole('textbox', { name: '프로젝트 및 작업 검색' })
     .fill('제품 검증')
   assert.equal(await page.locator('.command-results > button').count(), 1)
   await page.keyboard.press('Escape')
-  await page.getByRole('button', { name: '설정', exact: true }).click()
-  await page.getByRole('textbox', { name: 'Worktree 기본 기준 브랜치' }).fill('develop')
-  await page.getByRole('button', { name: '저장', exact: true }).click()
-  await page.keyboard.press('Control+n')
-  const baseBranch = page.getByRole('combobox', { name: '기준 브랜치', exact: true })
-  await page.waitForFunction(() => document.querySelector('.branch-dialog select')?.value === 'refs/heads/develop')
-  assert.equal(await baseBranch.locator('option[value="refs/remotes/origin/develop"]').count(), 1)
-  assert.equal(await baseBranch.locator('option[value="refs/remotes/origin/HEAD"]').count(), 0)
-  await baseBranch.selectOption('refs/heads/main')
+  assert.equal(await page.locator('.sidebar-top .new-task').count(), 0)
+  await input.fill('서브에이전트 테스트')
+  await input.press('Enter')
+  const monitor = page.getByRole('region', { name: '서브에이전트 관리' })
+  await monitor.locator('.subagent-card').first().waitFor()
+  await page.locator('.agent-heading .status-label.completed').waitFor()
+  assert.equal(await monitor.locator('.subagent-card').count(), 3)
+  assert.equal(
+    await page
+      .getByRole('button', { name: '작업 삭제', exact: true })
+      .isDisabled(),
+    true,
+  )
+  await monitor
+    .getByRole('button', { name: '확인 필요 1', exact: true })
+    .click()
+  assert.equal(await monitor.locator('.subagent-card').count(), 1)
+  await monitor.getByRole('button', { name: '검증 담당 상세 보기' }).click()
+  const childDialog = page.getByRole('dialog', {
+    name: '검증 담당',
+    exact: true,
+  })
+  await childDialog
+    .getByText('서브에이전트 테스트 실행', { exact: false })
+    .waitFor()
+  assert.equal(
+    await childDialog.getByRole('button', { name: '지시 보내기' }).isDisabled(),
+    true,
+  )
+  await childDialog.getByRole('button', { name: '이번 실행 허용' }).click()
+  await childDialog.getByText('요청을 처리했습니다.', { exact: true }).waitFor()
+  await childDialog.locator('.status-label.completed').waitFor()
+  await childDialog
+    .getByRole('button', { name: '서브에이전트 상세 닫기' })
+    .click()
+  await monitor.getByRole('button', { name: '전체 3', exact: true }).click()
+  await monitor
+    .getByRole('textbox', { name: '서브에이전트 검색' })
+    .fill('로그인')
+  assert.equal(await monitor.locator('.subagent-card').count(), 1)
+  await monitor.getByRole('button', { name: '구현 담당 상세 보기' }).click()
+  const workerDialog = page.getByRole('dialog', {
+    name: '구현 담당',
+    exact: true,
+  })
+  await workerDialog.getByText('npm run typecheck', { exact: true }).waitFor()
+  const childInput = workerDialog.getByRole('textbox', {
+    name: '서브에이전트에게 추가 지시',
+  })
+  await childInput.fill('접근성도 확인해 주세요.')
+  await workerDialog
+    .getByRole('button', { name: '지시 보내기', exact: true })
+    .click()
+  await workerDialog
+    .getByText('추가 지시를 받았습니다: 접근성도 확인해 주세요.', {
+      exact: true,
+    })
+    .waitFor()
+  await workerDialog
+    .getByRole('button', { name: '활동 새로고침', exact: true })
+    .click()
+  await workerDialog
+    .getByRole('button', { name: '서브에이전트 중단', exact: true })
+    .click()
+  await workerDialog.locator('.status-label.interrupted').waitFor()
+  await childInput.fill('중단한 작업을 이어가 주세요.')
+  await workerDialog
+    .getByRole('button', { name: '지시 보내기', exact: true })
+    .click()
+  await workerDialog
+    .getByText('작업을 완료했습니다.', { exact: false })
+    .waitFor()
+  await workerDialog.locator('.status-label.completed').waitFor()
+  await workerDialog
+    .getByRole('button', { name: '서브에이전트 상세 닫기' })
+    .click()
+  await monitor.getByRole('textbox', { name: '서브에이전트 검색' }).fill('')
+  await monitor.getByRole('button', { name: '종료 3', exact: true }).click()
+  assert.equal(await monitor.locator('.subagent-card').count(), 3)
+  assert.equal(
+    await page
+      .getByRole('button', { name: '작업 삭제', exact: true })
+      .isDisabled(),
+    false,
+  )
+  assert.equal(
+    await page.locator('.task-row').filter({ hasText: '구현 담당' }).count(),
+    0,
+  )
+  await page.screenshot({ path: 'artifacts/workspace-subagents.png' })
   await page
+    .getByRole('button', {
+      name: '한글 project 작업 설정하여 만들기',
+      exact: true,
+    })
+    .click()
+  const newTask = page.getByRole('dialog', { name: '새 작업', exact: true })
+  await newTask
+    .getByRole('textbox', { name: '새 작업 이름', exact: true })
+    .fill('통합 생성 작업')
+  await newTask
     .getByRole('textbox', { name: '새 브랜치 이름' })
     .fill('feature/ui-test')
-  await page.getByRole('button', { name: '만들기', exact: true }).click()
+  await newTask.getByRole('textbox', { name: '첫 요청' }).fill('모델 전달 확인')
+  await newTask
+    .getByRole('combobox', { name: '새 작업 모델', exact: true })
+    .selectOption('fixture-model-alt')
+  await newTask
+    .getByRole('combobox', { name: '새 작업 추론 수준' })
+    .selectOption('high')
+  await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setSize(960, 600),
+  )
+  await newTask
+    .getByRole('button', { name: '만들고 시작' })
+    .scrollIntoViewIfNeeded()
+  const createBounds = await newTask
+    .getByRole('button', { name: '만들고 시작' })
+    .boundingBox()
+  assert.ok(createBounds.y >= 0 && createBounds.y + createBounds.height <= 600)
+  await page.screenshot({ path: 'artifacts/workspace-new-task.png' })
+  await newTask.getByRole('button', { name: '만들고 시작' }).click()
+  await newTask.waitFor({ state: 'detached' })
+  await page.locator('.agent-heading .status-label.completed').waitFor()
+  assert.match(
+    await page.locator('.markdown').innerText(),
+    /model=fixture-model-alt; effort=high/,
+  )
+  assert.equal(
+    await page
+      .getByRole('combobox', { name: '모델', exact: true })
+      .inputValue(),
+    'fixture-model-alt',
+  )
+  assert.equal(
+    await page
+      .getByRole('combobox', { name: '추론 수준', exact: true })
+      .inputValue(),
+    'high',
+  )
   await page
     .locator('.task-row.selected')
     .filter({ hasText: 'feature/ui-test' })
     .waitFor()
-  assert.equal(git('rev-parse', 'feature/ui-test').toString().trim(), mainCommit)
-  assert.equal(await page.locator('.task-row').count(), 2)
-  assert.equal(await input.inputValue(), '')
+  const createdPath = await page.evaluate(
+    async (directory) =>
+      (await window.desktop.inspectRepository(directory)).worktrees.find(
+        (tree) => tree.branch === 'feature/ui-test',
+      ).path,
+    project,
+  )
+  await page
+    .getByRole('button', {
+      name: 'feature/ui-test Worktree 이름 변경',
+      exact: true,
+    })
+    .click()
+  await page
+    .getByRole('textbox', { name: 'Worktree 표시 이름' })
+    .fill('검증 Worktree')
+  await page
+    .getByRole('dialog', { name: 'Worktree 이름 변경', exact: true })
+    .getByRole('button', { name: '저장', exact: true })
+    .click()
+  await page
+    .locator('.task-row.selected')
+    .filter({ hasText: '검증 Worktree' })
+    .waitFor()
+  assert.equal(
+    await page.locator('.task-row.selected').getAttribute('title'),
+    createdPath,
+  )
   await input.fill('Worktree별 입력 보존')
+  const treeState = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem('lite-ide.workspace.v2')),
+  )
+  assert.equal(treeState.newTaskMode, 'worktree')
+  assert.equal(treeState.sessions[treeState.workspace].length, 1)
+  await page
+    .getByRole('button', { name: /작업 설정하여 만들기$/ })
+    .first()
+    .click()
+  await newTask
+    .getByRole('textbox', { name: '새 브랜치 이름' })
+    .fill('feature/ui-test')
+  await newTask.getByRole('button', { name: '만들기', exact: true }).click()
+  await newTask.getByRole('alert').waitFor()
+  assert.equal(await input.inputValue(), 'Worktree별 입력 보존')
+  await page.keyboard.press('Escape')
+  assert.equal(
+    await page.evaluate(
+      () =>
+        JSON.parse(localStorage.getItem('lite-ide.workspace.v2')).newTaskMode,
+    ),
+    'worktree',
+  )
   await page
     .locator('.task-row')
-    .filter({ hasText: 'task/first' })
+    .filter({ hasText: '제품 검증 작업' })
     .click()
+  await page
+    .getByRole('heading', { name: '제품 검증 작업', exact: true })
+    .waitFor()
+  await page
+    .getByRole('button', { name: /작업 설정하여 만들기$/ })
+    .first()
+    .click()
+  await newTask.getByRole('button', { name: '만들기', exact: true }).click()
+  await newTask.waitFor({ state: 'detached' })
+  await page
+    .getByRole('button', { name: '작업 이름 변경', exact: true })
+    .click()
+  await page
+    .getByRole('textbox', { name: '작업 이름', exact: true })
+    .fill('빈 작업 이름 유지')
+  await page
+    .getByRole('dialog', { name: '작업 이름 변경', exact: true })
+    .getByRole('button', { name: '저장', exact: true })
+    .click()
+  await input.fill('첫 전송 후에도 이름 유지')
+  await input.press('Enter')
+  await page.locator('.agent-heading .status-label.completed').waitFor()
+  await page
+    .getByRole('heading', { name: '빈 작업 이름 유지', exact: true })
+    .waitFor()
+  await page
+    .locator('.task-row')
+    .filter({ hasText: '제품 검증 작업' })
+    .click()
+  await page
+    .getByRole('button', {
+      name: '빈 작업 이름 유지 작업 이름 변경',
+      exact: true,
+    })
+    .click()
+  await page
+    .getByRole('textbox', { name: '작업 이름', exact: true })
+    .fill('비선택 작업 관리')
+  await page
+    .getByRole('dialog', { name: '작업 이름 변경', exact: true })
+    .getByRole('button', { name: '저장', exact: true })
+    .click()
+  await page
+    .getByRole('heading', { name: '제품 검증 작업', exact: true })
+    .waitFor()
+  await page
+    .getByRole('button', { name: '비선택 작업 관리 작업 삭제', exact: true })
+    .click()
+  await page
+    .getByRole('dialog', { name: '이 작업을 목록에서 삭제할까요?' })
+    .getByRole('button', { name: '삭제', exact: true })
+    .click()
+  await page
+    .getByRole('dialog', { name: '이 작업을 목록에서 삭제할까요?' })
+    .waitFor({ state: 'hidden' })
+  await page
+    .locator('.task-row')
+    .filter({ hasText: '비선택 작업 관리' })
+    .waitFor({ state: 'detached' })
+  assert.equal(
+    await page
+      .locator('.task-row')
+      .filter({ hasText: '비선택 작업 관리' })
+      .count(),
+    0,
+  )
+  // 첫 시작 실패 후 재시도해도 Worktree와 세션은 하나씩만 생성합니다.
+  const beforeRetryTrees = await page.evaluate(
+    async (directory) =>
+      (await window.desktop.inspectRepository(directory)).worktrees.length,
+    project,
+  )
+  await page
+    .getByRole('button', {
+      name: '한글 project 작업 설정하여 만들기',
+      exact: true,
+    })
+    .click()
+  await newTask
+    .getByRole('textbox', { name: '새 브랜치 이름' })
+    .fill('feature/retry-test')
+  await newTask
+    .getByRole('textbox', { name: '새 작업 이름', exact: true })
+    .fill('재시도 작업')
+  await newTask
+    .getByRole('textbox', { name: '첫 요청' })
+    .fill('시작 재시도 테스트')
+  await newTask.getByRole('button', { name: '만들고 시작' }).click()
+  await newTask
+    .getByRole('alert')
+    .filter({ hasText: '첫 시작 실패 테스트' })
+    .waitFor()
+  const retrySession = await page.evaluate(async () =>
+    (await window.desktop.listSessions()).find(
+      (session) => session.title === '재시도 작업',
+    ),
+  )
+  await newTask.getByRole('button', { name: '다시 시도', exact: true }).click()
+  await newTask.waitFor({ state: 'detached' })
+  await page.locator('.agent-heading .status-label.completed').waitFor()
+  assert.equal(
+    await page.evaluate(
+      async (directory) =>
+        (await window.desktop.inspectRepository(directory)).worktrees.length,
+      project,
+    ),
+    beforeRetryTrees + 1,
+  )
+  assert.equal(
+    await page.evaluate(
+      async () =>
+        (await window.desktop.listSessions()).filter(
+          (session) => session.title === '재시도 작업',
+        ).length,
+    ),
+    1,
+  )
+  await input.fill('중단 테스트')
+  await input.press('Enter')
+  await page.getByRole('button', { name: '작업 중단', exact: true }).waitFor()
+  assert.equal(
+    await page
+      .getByRole('button', {
+        name: 'feature/retry-test Worktree 삭제',
+        exact: true,
+      })
+      .isDisabled(),
+    true,
+  )
+  assert.equal(
+    await page.evaluate(
+      async ({ project, workspace }) => {
+        try {
+          await window.desktop.deleteWorktree(project, workspace)
+          return false
+        } catch {
+          return true
+        }
+      },
+      { project, workspace: retrySession.workspace },
+    ),
+    true,
+  )
+  await page.getByRole('button', { name: '작업 중단', exact: true }).click()
+  await page.locator('.status-label.interrupted').waitFor()
+  await writeFile(
+    join(retrySession.workspace, '보존 파일.txt'),
+    '삭제하면 안 되는 내용\n',
+    'utf8',
+  )
+  await page
+    .getByRole('button', {
+      name: 'feature/retry-test Worktree 삭제',
+      exact: true,
+    })
+    .click()
+  const treeDelete = page.getByRole('dialog', {
+    name: 'Worktree 삭제',
+    exact: true,
+  })
+  assert.equal(await treeDelete.getByRole('checkbox').count(), 0)
+  await treeDelete
+    .getByText('node_modules·out·.env', { exact: false })
+    .waitFor()
+  await writeFile(
+    join(retrySession.workspace, '.env'),
+    '폴더와 함께 삭제할 무시 파일',
+    'utf8',
+  )
+  await mkdir(join(retrySession.workspace, 'out'))
+  await writeFile(
+    join(retrySession.workspace, 'out', 'build.js'),
+    'ignored build result',
+    'utf8',
+  )
+  await treeDelete.getByRole('button', { name: '삭제', exact: true }).click()
+  await treeDelete.getByRole('alert').filter({ hasText: '변경 파일' }).waitFor()
+  assert.match(
+    await readFile(join(retrySession.workspace, '보존 파일.txt'), 'utf8'),
+    /삭제하면 안 되는 내용/,
+  )
+  const { rm } = await import('node:fs/promises')
+  await rm(join(retrySession.workspace, '보존 파일.txt'))
+  await treeDelete.getByRole('button', { name: '삭제', exact: true }).click()
+  await treeDelete.waitFor({ state: 'hidden' })
+  assert.equal(await stat(retrySession.workspace).catch(() => null), null)
+  assert.equal(
+    await page.evaluate(
+      async (id) =>
+        (await window.desktop.listSessions()).some(
+          (session) => session.id === id,
+        ),
+      retrySession.id,
+    ),
+    false,
+  )
+  assert.match(
+    git('branch', '--list', 'feature/retry-test').toString(),
+    /feature\/retry-test/,
+  )
+  await page.locator('.task-row').filter({ hasText: '제품 검증 작업' }).click()
   await page
     .getByRole('heading', { name: '제품 검증 작업', exact: true })
     .waitFor()
@@ -449,6 +933,22 @@ try {
     true,
   )
   await page.screenshot({ path: 'artifacts/workspace-compact.png' })
+  await monitor.getByRole('button', { name: '조사 담당 상세 보기' }).click()
+  const compactChild = page.getByRole('dialog', {
+    name: '조사 담당',
+    exact: true,
+  })
+  const compactBounds = await compactChild.boundingBox()
+  assert.ok(
+    compactBounds.x >= 0 &&
+      compactBounds.y >= 43 &&
+      compactBounds.x + compactBounds.width <= 960 &&
+      compactBounds.y + compactBounds.height <= 640,
+  )
+  await page.screenshot({ path: 'artifacts/workspace-subagent-detail.png' })
+  await compactChild
+    .getByRole('button', { name: '서브에이전트 상세 닫기' })
+    .click()
   await checkTitlebar(page, app)
   const usageBounds = await page.locator('.codex-usage').boundingBox()
   assert.ok(usageBounds.y >= 43 && usageBounds.y + usageBounds.height <= 640)
@@ -466,11 +966,20 @@ try {
   await app.close()
   app = await launch()
   page = await app.firstWindow()
+  page.setDefaultTimeout(30000)
   await page
     .getByRole('heading', { name: '제품 검증 작업', exact: true })
     .waitFor()
   await page.waitForFunction(
     () => document.querySelectorAll('.assistant-message').length >= 4,
+  )
+  assert.equal(await page.locator('.subagent-card').count(), 3)
+  assert.equal(
+    await page
+      .locator('.task-row')
+      .filter({ hasText: /구현 담당|검증 담당|조사 담당/ })
+      .count(),
+    0,
   )
   assert.equal(
     await page.evaluate(() =>
@@ -484,37 +993,70 @@ try {
     'light',
   )
   await checkTitlebar(page, app)
-  assert.equal(await page.locator('.task-row').count(), 2)
-  assert.equal(await page.getByText('이전 로컬 작업', { exact: true }).count(), 0)
-  assert.equal(await page.getByText('이전 로컬 대화', { exact: true }).count(), 0)
-  await page.getByRole('button', { name: '설정', exact: true }).click()
-  assert.equal(await page.getByRole('textbox', { name: 'Worktree 기본 기준 브랜치' }).inputValue(), 'develop')
-  await page.getByRole('textbox', { name: 'Worktree 기본 기준 브랜치' }).fill('missing-branch')
-  await page.getByRole('button', { name: '저장', exact: true }).click()
-  await page.getByRole('button', { name: '새 작업', exact: false }).first().click()
-  await page.getByRole('status').filter({ hasText: 'missing-branch' }).waitFor()
-  await page.getByRole('textbox', { name: '새 브랜치 이름' }).fill('feature/missing-default')
-  assert.equal(await page.getByRole('button', { name: '만들기', exact: true }).isEnabled(), false)
-  await page.getByRole('button', { name: '취소', exact: true }).click()
-  await page.getByRole('button', { name: '설정', exact: true }).click()
-  await page.getByRole('textbox', { name: 'Worktree 기본 기준 브랜치' }).fill('')
-  await page.getByRole('button', { name: '저장', exact: true }).click()
-  await page.getByRole('button', { name: '새 작업', exact: false }).first().click()
-  await page.waitForFunction(() => document.querySelector('.branch-dialog select')?.value === 'HEAD')
-  await page.getByRole('button', { name: '취소', exact: true }).click()
+  assert.equal(
+    await page.evaluate(
+      async (id) =>
+        (await window.desktop.listSessions()).some(
+          (session) => session.id === id,
+        ),
+      retrySession.id,
+    ),
+    false,
+  )
+  assert.equal(
+    await page
+      .locator('.task-row')
+      .filter({ hasText: 'feature/retry-test' })
+      .count(),
+    0,
+  )
+  assert.equal(
+    await page
+      .locator('.task-row')
+      .filter({ hasText: '비선택 작업 관리' })
+      .count(),
+    0,
+  )
   await page
     .locator('.task-row')
     .filter({ hasText: 'feature/ui-test' })
     .click()
+  await page
+    .locator('.task-row.selected')
+    .filter({ hasText: '검증 Worktree' })
+    .waitFor()
   assert.equal(
     await page.getByRole('textbox', { name: 'Codex에게 메시지' }).inputValue(),
     'Worktree별 입력 보존',
   )
-  await page.getByRole('button', { name: '작업 삭제', exact: true }).click()
-  await page.getByRole('button', { name: '삭제', exact: true }).click()
-  await page.waitForFunction(() => document.querySelectorAll('.task-row').length === 1)
-  assert.equal(await page.getByRole('textbox', { name: 'Codex에게 메시지' }).isEnabled(), false)
-  assert.equal((await readFile(join(project, 'hello.txt'), 'utf8')).replaceAll('\r\n', '\n'), 'Hello from Lite IDE\nChanged line\n')
+  await page
+    .getByRole('button', { name: /작업 설정하여 만들기$/ })
+    .first()
+    .click()
+  const restoredTaskDialog = page.getByRole('dialog', {
+    name: '새 작업',
+    exact: true,
+  })
+  await restoredTaskDialog
+    .getByRole('button', { name: '만들기', exact: true })
+    .click()
+  await restoredTaskDialog.waitFor({ state: 'detached' })
+  await page.locator('.task-row.selected').waitFor()
+  assert.equal(
+    await page.getByRole('textbox', { name: 'Codex에게 메시지' }).inputValue(),
+    '',
+  )
+  const localState = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem('lite-ide.workspace.v2')),
+  )
+  assert.equal(localState.newTaskMode, 'worktree')
+  assert.notEqual(localState.workspace, localState.project)
+  await page
+    .getByRole('button', { name: /작업 설정하여 만들기$/ })
+    .first()
+    .click()
+  await restoredTaskDialog.waitFor({ state: 'visible' })
+  await page.keyboard.press('Escape')
   assert.equal(
     await app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].isVisible(),
@@ -614,11 +1156,289 @@ try {
       (item) => item.name === '복제한 project',
     ),
   )
+  // 현재 선택과 다른 프로젝트의 설정 버튼이 해당 프로젝트에 작업을 만듭니다.
+  await page
+    .getByRole('button', {
+      name: '한글 project 작업 설정하여 만들기',
+      exact: true,
+    })
+    .click()
+  const targetDialog = page.getByRole('dialog', {
+    name: '새 작업',
+    exact: true,
+  })
+  await targetDialog
+    .getByRole('textbox', { name: '새 작업 이름', exact: true })
+    .fill('프로젝트 대상 검증')
+  await targetDialog
+    .getByRole('textbox', { name: '새 브랜치 이름' })
+    .fill('feature/project-target')
+  await targetDialog
+    .getByRole('button', { name: '만들기', exact: true })
+    .click()
+  await targetDialog.waitFor({ state: 'detached' })
+  await page
+    .getByRole('heading', { name: '프로젝트 대상 검증', exact: true })
+    .waitFor()
+  const targetTree = await page.evaluate(
+    async (directory) =>
+      (await window.desktop.inspectRepository(directory)).worktrees.find(
+        (tree) => tree.branch === 'feature/project-target',
+      ),
+    project,
+  )
+  assert.ok(targetTree)
+  assert.equal(
+    await page.evaluate(
+      () => JSON.parse(localStorage.getItem('lite-ide.workspace.v2')).project,
+    ),
+    project,
+  )
+  await page
+    .getByRole('button', {
+      name: 'feature/project-target Worktree 삭제',
+      exact: true,
+    })
+    .click()
+  await page
+    .getByRole('dialog', { name: 'Worktree 삭제', exact: true })
+    .getByRole('button', { name: '삭제', exact: true })
+    .click()
+  await page
+    .locator('.task-row')
+    .filter({ hasText: 'feature/project-target' })
+    .waitFor({ state: 'detached' })
+  const existingSessions = await page.evaluate(
+    (directory) =>
+      JSON.parse(localStorage.getItem('lite-ide.workspace.v2')).sessions[
+        directory
+      ],
+    project,
+  )
+  await page.getByRole('button', { name: '설정', exact: true }).click()
+  const projectSettings = page.getByRole('dialog', {
+    name: '설정',
+    exact: true,
+  })
+  await projectSettings
+    .getByRole('tab', { name: '프로젝트', exact: true })
+    .click()
+  await projectSettings
+    .getByRole('combobox', { name: '설정 프로젝트', exact: true })
+    .selectOption(project)
+  await projectSettings
+    .getByRole('combobox', { name: '기본 기준 브랜치', exact: true })
+    .selectOption('refs/heads/settings-base')
+  await projectSettings
+    .getByRole('combobox', { name: '기본 모델', exact: true })
+    .selectOption('fixture-model-alt')
+  await projectSettings
+    .getByRole('combobox', { name: '기본 추론 수준', exact: true })
+    .selectOption('high')
+  await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setSize(960, 600),
+  )
+  await projectSettings
+    .getByRole('button', { name: '저장', exact: true })
+    .scrollIntoViewIfNeeded()
+  await page.screenshot({ path: 'artifacts/workspace-settings-project.png' })
+  await projectSettings
+    .getByRole('button', { name: '저장', exact: true })
+    .click()
+  await projectSettings
+    .getByText('프로젝트 기본값을 저장했습니다. 다음 새 작업부터 적용됩니다.', {
+      exact: true,
+    })
+    .waitFor()
+  const secondProject = join(fixture, '복제한 project')
+  await projectSettings
+    .getByRole('combobox', { name: '설정 프로젝트', exact: true })
+    .selectOption(secondProject)
+  await projectSettings
+    .getByRole('combobox', { name: '기본 모델', exact: true })
+    .selectOption('fixture-model')
+  await projectSettings
+    .getByRole('combobox', { name: '기본 추론 수준', exact: true })
+    .selectOption('medium')
+  await projectSettings
+    .getByRole('button', { name: '저장', exact: true })
+    .click()
+  await projectSettings
+    .getByText('프로젝트 기본값을 저장했습니다. 다음 새 작업부터 적용됩니다.', {
+      exact: true,
+    })
+    .waitFor()
+  await projectSettings
+    .getByRole('combobox', { name: '설정 프로젝트', exact: true })
+    .selectOption(project)
+  assert.equal(
+    await projectSettings
+      .getByRole('combobox', { name: '기본 기준 브랜치', exact: true })
+      .inputValue(),
+    'refs/heads/settings-base',
+  )
+  assert.equal(
+    await projectSettings
+      .getByRole('combobox', { name: '기본 모델', exact: true })
+      .inputValue(),
+    'fixture-model-alt',
+  )
+  assert.equal(
+    await projectSettings
+      .getByRole('combobox', { name: '기본 추론 수준', exact: true })
+      .inputValue(),
+    'high',
+  )
+  await projectSettings
+    .getByRole('tab', { name: '프로그램 정보', exact: true })
+    .click()
+  await page.screenshot({ path: 'artifacts/workspace-settings-about.png' })
+  await projectSettings
+    .getByRole('button', { name: '닫기', exact: true })
+    .click()
+  await projectSettings.waitFor({ state: 'detached' })
+  assert.deepEqual(
+    await page.evaluate(
+      (directory) =>
+        JSON.parse(localStorage.getItem('lite-ide.workspace.v2')).sessions[
+          directory
+        ],
+      project,
+    ),
+    existingSessions,
+  )
+  await page
+    .getByRole('button', {
+      name: '한글 project 작업 설정하여 만들기',
+      exact: true,
+    })
+    .click()
+  const configuredTask = page.getByRole('dialog', {
+    name: '새 작업',
+    exact: true,
+  })
+  assert.equal(
+    await configuredTask
+      .getByRole('combobox', { name: '이번 작업 기준 브랜치', exact: true })
+      .inputValue(),
+    'refs/heads/settings-base',
+  )
+  assert.equal(
+    await configuredTask
+      .getByRole('combobox', { name: '새 작업 모델', exact: true })
+      .inputValue(),
+    'fixture-model-alt',
+  )
+  assert.equal(
+    await configuredTask
+      .getByRole('combobox', { name: '새 작업 추론 수준', exact: true })
+      .inputValue(),
+    'high',
+  )
+  await configuredTask
+    .getByRole('textbox', { name: '새 브랜치 이름', exact: true })
+    .fill('feature/settings-test')
+  await configuredTask
+    .getByRole('textbox', { name: '새 작업 이름', exact: true })
+    .fill('설정 적용 작업')
+  await configuredTask
+    .getByRole('textbox', { name: '첫 요청', exact: true })
+    .fill('모델 전달 확인')
+  await configuredTask
+    .getByRole('button', { name: '만들고 시작', exact: true })
+    .click()
+  await configuredTask.waitFor({ state: 'detached' })
+  await page.locator('.agent-heading .status-label.completed').waitFor()
+  assert.match(
+    await page.locator('.markdown').innerText(),
+    /model=fixture-model-alt; effort=high/,
+  )
+  const configuredSession = await page.evaluate(async () =>
+    (await window.desktop.listSessions()).find(
+      (session) => session.title === '설정 적용 작업',
+    ),
+  )
+  assert.equal(
+    execFileSync(
+      'git',
+      ['-C', configuredSession.workspace, 'rev-parse', 'HEAD'],
+      { windowsHide: true },
+    )
+      .toString()
+      .trim(),
+    settingsBaseCommit,
+  )
+  assert.equal(
+    await stat(join(configuredSession.workspace, 'newer.txt')).catch(
+      () => null,
+    ),
+    null,
+  )
+  assert.match(
+    await readFile(join(project, 'hello.txt'), 'utf8'),
+    /Changed line/,
+  )
+  await page
+    .getByRole('button', {
+      name: 'feature/settings-test Worktree 삭제',
+      exact: true,
+    })
+    .click()
+  await page
+    .getByRole('dialog', { name: 'Worktree 삭제', exact: true })
+    .getByRole('button', { name: '삭제', exact: true })
+    .click()
+  await page
+    .locator('.task-row')
+    .filter({ hasText: 'feature/settings-test' })
+    .waitFor({ state: 'detached' })
+  await page.getByRole('button', { name: '설정', exact: true }).click()
+  await projectSettings
+    .getByRole('tab', { name: '프로젝트', exact: true })
+    .click()
+  await projectSettings
+    .getByRole('combobox', { name: '설정 프로젝트', exact: true })
+    .selectOption(secondProject)
+  await projectSettings
+    .getByRole('button', { name: '프로젝트 기본값 초기화', exact: true })
+    .click()
+  await projectSettings
+    .getByText('이 프로젝트의 기본값을 초기화했습니다.', { exact: true })
+    .waitFor()
+  assert.equal(
+    await projectSettings
+      .getByRole('combobox', { name: '기본 모델', exact: true })
+      .inputValue(),
+    '',
+  )
+  await projectSettings
+    .getByRole('button', { name: '닫기', exact: true })
+    .click()
+  await projectSettings.waitFor({ state: 'detached' })
+  const persistedSettings = await page.evaluate(() =>
+    window.desktop.getSettings(),
+  )
+  const keyFor = (path) =>
+    process.platform === 'win32' ? path.toLowerCase() : path
+  assert.equal(
+    persistedSettings.projects[keyFor(project)].model,
+    'fixture-model-alt',
+  )
+  assert.equal(persistedSettings.projects[keyFor(secondProject)], undefined)
   await page.screenshot({ path: 'artifacts/workspace-usage.png' })
   for (const scenario of ['error', 'empty', 'partial', 'zero']) {
     await app.close()
     app = await launch(scenario)
     page = await app.firstWindow()
+  page.setDefaultTimeout(30000)
+    assert.deepEqual(
+      await page.evaluate(() => window.desktop.getSettings()),
+      persistedSettings,
+    )
+    assert.equal(
+      (await page.evaluate(() => window.desktop.getAppInfo())).buildTime,
+      initialInfo.buildTime,
+    )
     const panel = page.getByRole('region', { name: 'Codex 사용량 한도' })
     const expected = {
       error: '한도를 불러오지 못했습니다.',
@@ -642,7 +1462,7 @@ try {
     )
   }
   console.log(
-    'UI 검증 통과: 사용량 조회·알림 갱신·초기화 시각·초기화권·미제공/실패 상태, Git 복제·기존 폴더 보호·실패 정리·재시작 복원, 통합 타이틀바, Codex 전송/스트리밍/재개/승인/질문/중단, 작업별 Worktree 생성·기준 브랜치 설정·단축키·통합 목록·기존 로컬 작업 숨김·원본 폴더 실행 차단·1:1 연결·삭제, diff, 검색, 960px 3열. 모든 창을 숨김 상태로 유지했습니다.',
+    'UI 검증 통과: 서브에이전트 관찰·추가 지시·중단·재개·복원, 프로젝트별 +·단축키 채팅 시작·초안 보존·설정 생성·모델/추론 전달·생성 후 재시도, 작업/Worktree 이름 변경·삭제·재시작 영속, 실행 중/dirty 삭제 보호·브랜치 보존, 사용량, Git 복제, 통합 타이틀바, Codex 전송/재개/승인/질문/중단, diff, 검색, 960px 3열 및 960x600 생성 창. 모든 창을 숨김 상태로 유지했습니다.',
   )
 } catch (error) {
   if (page && !page.isClosed()) {

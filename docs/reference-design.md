@@ -23,7 +23,7 @@
 - 로컬 `codex-cli 0.166.0`의 `app-server generate-ts`가 생성한 프로토콜 타입을 기준으로 구현했습니다. 생성 결과는 검증용 `artifacts/codex-protocol/`에만 보관하며 배포하지 않습니다.
 - `initialize`, `account/read`, `model/list`, `thread/start`, `thread/resume`, `turn/start`, `turn/interrupt`와 스트리밍 알림을 사용합니다.
 - 명령·파일·추가 권한 승인 및 질문에 대한 응답은 전용 IPC로 전달합니다. 미지원 서버 요청은 명시적 오류로 반환합니다.
-- 기본 작업 권한은 `workspace-write`, 승인 정책은 `on-request`입니다. 렌더러는 임의 셸 명령을 직접 실행할 수 없습니다.
+- 기본 작업 권한은 YOLO 모드의 `danger-full-access`, 승인 정책은 `never`입니다. 새 대화·재개와 각 턴에 적용합니다. 렌더러는 임의 셸 명령을 직접 실행할 수 없습니다.
 - 프로젝트 및 대화는 Electron 사용자 데이터 디렉터리에 원자적 파일 교체 방식으로 저장합니다. 입력 내용·선택 작업·테마는 렌더러 로컬 저장소에 보관합니다.
 
 ## 검증 구분

@@ -26,18 +26,27 @@ import {
 } from 'lucide-react'
 import { Button } from './components/ui/button'
 import { Conversation } from './components/Conversation'
+import { SubagentPanel } from './components/SubagentPanel'
 import { CodexUsagePanel } from './components/CodexUsagePanel'
 import { ProjectDialog } from './components/ProjectDialog'
 import { AppUpdateButton } from './components/AppUpdateButton'
-import { SettingsDialog } from './components/SettingsDialog'
-import { WorktreeDialog } from './components/WorktreeDialog'
-import { loadWorkspace, storageKey } from './lib/workspace-state'
-import { defaultBaseBranchKey, loadDefaultBaseBranch } from './lib/preferences'
+import { NewTaskDialog } from './components/NewTaskDialog'
+import { SettingsDialog, projectSettingsKey } from './components/SettingsDialog'
+import {
+  createSession,
+  loadWorkspace,
+  storageKey,
+  type Session,
+  type TaskMode,
+} from './lib/workspace-state'
+import { getSubagents, isAgentActive } from './lib/subagents'
 import type {
   AgentSession,
   CodexStatus,
   Project,
   RepositorySnapshot,
+  Worktree,
+  ProjectDefaults,
 } from '../../shared/types'
 
 const emptyRepository: RepositorySnapshot = {
@@ -55,7 +64,14 @@ const labels = {
   failed: '오류',
 }
 const samePath = (a: string, b: string) =>
-  a.replaceAll('\\', '/') === b.replaceAll('\\', '/')
+  (window.desktop.platform === 'win32' ? a.toLowerCase() : a).replaceAll(
+    '\\',
+    '/',
+  ) ===
+  (window.desktop.platform === 'win32' ? b.toLowerCase() : b).replaceAll(
+    '\\',
+    '/',
+  )
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error)
 
@@ -91,18 +107,42 @@ export function App() {
   const [search, setSearch] = useState('')
   const [collapsed, setCollapsed] = useState<string[]>([])
   const [rename, setRename] = useState('')
-  const [showWorktree, setShowWorktree] = useState(false)
+  const [newTaskProject, setNewTaskProject] = useState<Project | null>(null)
   const [showSettings, setShowSettings] = useState(false)
-  const [defaultBaseBranch, setDefaultBaseBranch] = useState(loadDefaultBaseBranch)
+  const [newTaskDefaults, setNewTaskDefaults] = useState<ProjectDefaults>({
+    baseRef: 'HEAD',
+    model: '',
+    effort: '',
+  })
+  const [newTaskBranches, setNewTaskBranches] = useState<string[]>([])
+  const openingTask = useRef(false)
+  const [sessionTarget, setSessionTarget] = useState<{
+    workspace: string
+    sessionId: string
+  } | null>(null)
+  const [treeTarget, setTreeTarget] = useState<{
+    project: Project
+    tree: Worktree
+    action: 'rename' | 'delete'
+  } | null>(null)
+  const [treeName, setTreeName] = useState('')
+  const [managingTree, setManagingTree] = useState(false)
+  const [managementError, setManagementError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const searchDialog = useRef<HTMLDialogElement>(null)
   const renameDialog = useRef<HTMLDialogElement>(null)
   const deleteDialog = useRef<HTMLDialogElement>(null)
+  const treeDialog = useRef<HTMLDialogElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
-  const key = state.workspace
-  const current = state.tasks[key]
+  const key = state.workspace || 'welcome'
+  const tabs = state.sessions[key] ?? []
+  const current =
+    tabs.find((session) => session.id === state.selected[key]) ?? tabs[0]
   const agent = current ? agents[current.id] : undefined
   const active = agent?.status === 'running' || agent?.status === 'waiting'
+  const hasActiveSubagents = current
+    ? getSubagents(current.id, agents).some(isAgentActive)
+    : false
   const project = projects.find((item) => item.path === state.project)
   const tree = repository.worktrees.find((item) =>
     samePath(item.path, state.workspace),
@@ -110,14 +150,41 @@ export function App() {
   const selectedModel = connection.models.find((item) => item.id === model)
   const title = agent?.title ?? current?.title ?? '새 작업'
 
+  function manageSession(
+    workspace: string,
+    session: Session,
+    action: 'rename' | 'delete',
+  ) {
+    setSessionTarget({ workspace, sessionId: session.id })
+    setRename(agents[session.id]?.title ?? session.title)
+    setManagementError('')
+    if (action === 'rename') renameDialog.current?.showModal()
+    else deleteDialog.current?.showModal()
+  }
+
+  function manageTree(
+    project: Project,
+    tree: Worktree,
+    action: 'rename' | 'delete',
+  ) {
+    setTreeTarget({ project, tree, action })
+    setTreeName(state.worktreeNames[tree.path] ?? tree.branch)
+    setManagementError('')
+    treeDialog.current?.showModal()
+  }
+
   function selectWorkspace(
     path: string,
     projectPath = state.project,
+    sessionId?: string,
   ) {
     setState((previous) => ({
       ...previous,
       project: projectPath,
-      workspace: previous.tasks[path]?.project === projectPath ? path : '',
+      workspace: previous.sessions[path]?.[0]?.project === projectPath ? path : '',
+      selected: sessionId
+        ? { ...previous.selected, [path]: sessionId }
+        : previous.selected,
     }))
   }
 
@@ -161,8 +228,16 @@ export function App() {
     }
   }, [state])
   useEffect(() => {
-    setEffort(selectedModel?.defaultEffort ?? '')
+    setEffort(
+      current?.model === selectedModel?.id && current?.effort
+        ? current.effort
+        : (selectedModel?.defaultEffort ?? ''),
+    )
   }, [selectedModel?.id, selectedModel?.defaultEffort])
+  useEffect(() => {
+    if (current?.model) setModel(current.model)
+    if (current?.effort) setEffort(current.effort)
+  }, [current?.id])
   useEffect(() => {
     let disposed = false
     const unsubscribeDisconnect = window.desktop.onCodexDisconnect((reason) => {
@@ -197,25 +272,21 @@ export function App() {
         if (disposed) return
         setProjects(opened)
         setRepositories(Object.fromEntries(snapshots))
+        setAgents((previous) => ({
+          ...Object.fromEntries(saved.map((item) => [item.id, item])),
+          ...previous,
+        }))
         setState((previous) => {
-          const tasks = Object.fromEntries(
-            Object.entries(previous.tasks).filter(([path, task]) => {
-              const snapshot = snapshots.find(([projectPath]) => projectPath === task.project)?.[1]
+          const sessions = Object.fromEntries(
+            Object.entries(previous.sessions).filter(([path, entries]) => {
+              const snapshot = snapshots.find(([projectPath]) => projectPath === entries[0]?.project)?.[1]
               return snapshot?.worktrees.some((item, index) => index > 0 && samePath(item.path, path))
             }),
           )
-          const restored =
-            opened.find((item) => item.path === previous.project) ?? opened[0]
-          const workspace = tasks[previous.workspace]?.project === restored?.path
-            ? previous.workspace : ''
-          return {
-            ...previous,
-            tasks,
-            project: restored?.path ?? '',
-            workspace,
-          }
+          const restored = opened.find((item) => item.path === previous.project) ?? opened[0]
+          const workspace = sessions[previous.workspace]?.[0]?.project === restored?.path ? previous.workspace : ''
+          return { ...previous, sessions, project: restored?.path ?? '', workspace }
         })
-        setAgents(Object.fromEntries(saved.map((item) => [item.id, item])))
         setReady(true)
       })
       .catch((cause) => {
@@ -286,20 +357,91 @@ export function App() {
     }
   }, [selectedFile, state.workspace, refresh])
 
-  const addSession = useCallback(() => {
-    if (!state.project) {
-      setOpening(true)
-      return
+  const openNewTask = useCallback(async (target: Project) => {
+    if (openingTask.current) return
+    openingTask.current = true
+    try {
+      const [snapshot, settings, branches] = await Promise.all([
+        window.desktop.inspectRepository(target.path),
+        window.desktop.getSettings(),
+        window.desktop.listBranches(target.path).catch(() => []),
+      ])
+      setRepositories((previous) => ({
+        ...previous,
+        [target.path]: snapshot,
+      }))
+      setNewTaskDefaults(
+        settings.projects[projectSettingsKey(target.path)] ?? {
+          baseRef: 'HEAD',
+          model: '',
+          effort: '',
+        },
+      )
+      setNewTaskBranches(branches)
+      setNewTaskProject(target)
+    } catch (cause) {
+      setError(errorText(cause))
+    } finally {
+      openingTask.current = false
     }
-    if (!repositories[state.project]?.isGitRepository) {
-      setError('Git 저장소를 열어 Worktree 작업을 만들어 주세요.')
-      return
-    }
-    setShowWorktree(true)
-  }, [state.project, repositories])
+  }, [])
+  const addSession = useCallback(
+    async (requestedProject?: Project) => {
+      const target =
+        requestedProject ??
+        projects.find((item) => item.path === state.project) ??
+        projects[0]
+      if (!target) {
+        setOpening(true)
+        return
+      }
+      if (openingTask.current) return
+      openingTask.current = true
+      try {
+        const settings = await window.desktop.getSettings()
+        const defaults = settings.projects[projectSettingsKey(target.path)]
+        const branch = `task/${new Date().toISOString().slice(0, 10)}-${crypto.randomUUID().slice(0, 8)}`
+        const created = await window.desktop.createWorktree(target.path, branch, defaults?.baseRef ?? 'HEAD')
+        const workspace = created.path
+        const session = {
+          ...createSession(),
+          title: '새 작업',
+          project: target.path,
+          branch: created.branch,
+          model: defaults?.model || model,
+          effort: defaults?.model ? defaults.effort : effort,
+        }
+        setState((previous) => ({
+          ...previous,
+          project: target.path,
+          workspace,
+          sessions: {
+            ...previous.sessions,
+            [workspace]: [session],
+          },
+          selected: { ...previous.selected, [workspace]: session.id },
+        }))
+        setRefresh((value) => value + 1)
+      } catch (cause) {
+        setError(errorText(cause))
+      } finally {
+        openingTask.current = false
+      }
+    },
+    [projects, state.project, state.workspace, state.sessions, model, effort],
+  )
+
+  useEffect(() => {
+    if (ready && !document.querySelector('dialog[open]'))
+      composer.current?.focus({ preventScroll: true })
+  }, [ready, current?.id])
   useEffect(() => {
     function shortcut(event: KeyboardEvent) {
       if (!(event.ctrlKey || event.metaKey) || event.isComposing) return
+      if (event.key === ',' && !document.querySelector('dialog[open]')) {
+        event.preventDefault()
+        setShowSettings(true)
+      }
       if (event.key.toLowerCase() === 'k') {
         event.preventDefault()
         setSearch('')
@@ -333,14 +475,31 @@ export function App() {
     selectWorkspace(opened.path, opened.path)
   }
   function updateDraft(draft: string) {
-    if (!current) return
     setState((previous) => ({
       ...previous,
-      tasks: {
-        ...previous.tasks,
-        [key]: { ...previous.tasks[key], draft },
+      sessions: {
+        ...previous.sessions,
+        [key]: (previous.sessions[key] ?? []).map((session) =>
+          session.id === current?.id ? { ...session, draft } : session,
+        ),
       },
     }))
+  }
+  function updateSettings(nextModel: string, nextEffort: string) {
+    setModel(nextModel)
+    setEffort(nextEffort)
+    if (current)
+      setState((previous) => ({
+        ...previous,
+        sessions: {
+          ...previous.sessions,
+          [key]: (previous.sessions[key] ?? []).map((item) =>
+            item.id === current.id
+              ? { ...item, model: nextModel, effort: nextEffort }
+              : item,
+          ),
+        },
+      }))
   }
   async function send() {
     if (!current?.draft.trim() || !state.workspace || submitting || active)
@@ -357,15 +516,19 @@ export function App() {
         text,
         model,
         effort,
+        title: current.customTitle ? current.title : undefined,
       })
     } catch (cause) {
       setError(errorText(cause))
       setState((previous) => ({
         ...previous,
-        tasks: {
-          ...previous.tasks,
-          [key]: previous.tasks[key]?.id === sessionId && !previous.tasks[key].draft
-            ? { ...previous.tasks[key], draft: text } : previous.tasks[key],
+        sessions: {
+          ...previous.sessions,
+          [key]: previous.sessions[key].map((item) =>
+            item.id === sessionId && !item.draft
+              ? { ...item, draft: text }
+              : item,
+          ),
         },
       }))
     } finally {
@@ -374,55 +537,186 @@ export function App() {
     }
   }
   async function renameCurrent() {
-    if (!current || !rename.trim()) return
+    if (!sessionTarget || !rename.trim()) return
+    const { workspace, sessionId } = sessionTarget
     try {
-      if (agent) await window.desktop.renameSession(current.id, rename)
+      if (agents[sessionId])
+        await window.desktop.renameSession(sessionId, rename)
       setState((previous) => ({
         ...previous,
-        tasks: {
-          ...previous.tasks,
-          [key]: { ...previous.tasks[key], title: rename.trim() },
+        sessions: {
+          ...previous.sessions,
+          [workspace]: previous.sessions[workspace].map((item) =>
+            item.id === sessionId
+              ? { ...item, title: rename.trim(), customTitle: true }
+              : item,
+          ),
         },
       }))
       renameDialog.current?.close()
     } catch (cause) {
-      setError(errorText(cause))
+      setManagementError(errorText(cause))
     }
   }
   async function deleteCurrent() {
-    if (!current || active) return
+    if (!sessionTarget) return
+    const { workspace, sessionId } = sessionTarget
     try {
-      if (agent) await window.desktop.deleteSession(current.id)
+      await window.desktop.deleteSession(sessionId)
       setAgents((previous) => {
         const next = { ...previous }
-        delete next[current.id]
+        for (const item of getSubagents(sessionId, previous))
+          delete next[item.id]
+        delete next[sessionId]
         return next
       })
       setState((previous) => {
-        const tasks = { ...previous.tasks }
-        delete tasks[key]
+        const remaining = previous.sessions[workspace].filter(
+          (item) => item.id !== sessionId,
+        )
+        const sessions = remaining
         return {
           ...previous,
-          tasks,
-          workspace: '',
+          sessions: {
+            ...previous.sessions,
+            [workspace]: sessions,
+          },
+          workspace: previous.workspace === workspace && !sessions.length ? '' : previous.workspace,
+          selected:
+            previous.selected[workspace] === sessionId
+              ? { ...previous.selected, [workspace]: sessions[0]?.id ?? ''  }
+              : previous.selected,
         }
       })
       deleteDialog.current?.close()
     } catch (cause) {
-      setError(errorText(cause))
+      setManagementError(errorText(cause))
     }
   }
+  async function createTask(
+    workspace: string,
+    session: Session,
+    mode: TaskMode,
+  ) {
+    const target = newTaskProject!
+    setState((previous) => ({
+      ...previous,
+      project: target.path,
+      workspace,
+      newTaskMode: mode,
+      sessions: {
+        ...previous.sessions,
+        [workspace]: [session],
+      },
+      selected: { ...previous.selected, [workspace]: session.id },
+    }))
+    setModel(session.model ?? '')
+    setEffort(session.effort ?? '')
+    setRefresh((value) => value + 1)
+    if (session.draft.trim()) {
+      await window.desktop.sendMessage({
+        sessionId: session.id,
+        workspace,
+        text: session.draft,
+        model: session.model,
+        effort: session.effort,
+        title: session.customTitle ? session.title : undefined,
+      })
+      setState((previous) => ({
+        ...previous,
+        sessions: {
+          ...previous.sessions,
+          [workspace]: previous.sessions[workspace].map((item) =>
+            item.id === session.id ? { ...item, draft: '' } : item,
+          ),
+        },
+      }))
+    }
+  }
+  async function saveTree() {
+    if (!treeTarget || managingTree) return
+    const { project: targetProject, tree: target, action } = treeTarget
+    setManagingTree(true)
+    setManagementError('')
+    try {
+      if (action === 'rename') {
+        if (!treeName.trim()) return
+        setState((previous) => ({
+          ...previous,
+          worktreeNames: {
+            ...previous.worktreeNames,
+            [target.path]: treeName.trim(),
+          },
+        }))
+      } else {
+        const result = await window.desktop.deleteWorktree(
+          targetProject.path,
+          target.path,
+        )
+        if (result.warning) setError(result.warning)
+        setState((previous) => {
+          const sessions = { ...previous.sessions },
+            selected = { ...previous.selected },
+            worktreeNames = { ...previous.worktreeNames }
+          delete sessions[target.path]
+          delete selected[target.path]
+          delete worktreeNames[target.path]
+          return {
+            ...previous,
+            sessions,
+            selected,
+            worktreeNames,
+            ...(samePath(previous.workspace, target.path)
+              ? { project: targetProject.path, workspace: '' }
+              : {}),
+          }
+        })
+        setAgents((previous) =>
+          Object.fromEntries(
+            Object.entries(previous).filter(
+              ([, item]) => !samePath(item.workspace, target.path),
+            ),
+          ),
+        )
+        setRepositories((previous) =>
+          Object.fromEntries(
+            Object.entries(previous).map(([path, snapshot]) => [
+              path,
+              {
+                ...snapshot,
+                worktrees: snapshot.worktrees.filter(
+                  (item) => !samePath(item.path, target.path),
+                ),
+              },
+            ]),
+          ),
+        )
+      }
+      setRefresh((value) => value + 1)
+      treeDialog.current?.close()
+    } catch (cause) {
+      setManagementError(errorText(cause))
+    } finally {
+      setManagingTree(false)
+    }
+  }
+
   const query = search.trim().toLowerCase()
   const searchResults = projects
     .flatMap((item) => {
-      return Object.entries(state.tasks)
-        .filter(([, task]) => task.project === item.path)
-        .map(([path, session]) => ({
+      const paths = new Set([
+        item.path,
+        ...(repositories[item.path]?.worktrees.map((entry) => entry.path) ??
+          []),
+      ])
+      return [...paths].flatMap((path) =>
+        (state.sessions[path] ?? []).map((session) => ({
           project: item,
           path,
           session,
           title: agents[session.id]?.title ?? session.title,
-        }))
+        })),
+      )
     })
     .filter((item) =>
       `${item.title} ${item.project.name} ${item.path}`
@@ -482,11 +776,6 @@ export function App() {
           className="panel projects-panel"
           aria-label="프로젝트 및 Worktree"
         >
-          <div className="sidebar-top">
-            <Button className="new-task" variant="outline" onClick={addSession}>
-              <Plus size={15} />새 작업<kbd>Ctrl N</kbd>
-            </Button>
-          </div>
           <div className="section-label">
             <span>프로젝트</span>
             <button
@@ -518,8 +807,9 @@ export function App() {
               </div>
             )}
             {projects.map((item) => {
-              const tasks = Object.entries(state.tasks).filter(
-                ([, task]) => task.project === item.path,
+              const trees = repositories[item.path]?.worktrees ?? []
+              const workspaces = trees.filter((entry, index) =>
+                index > 0 && state.sessions[entry.path]?.[0]?.project === item.path,
               )
               const folded = collapsed.includes(item.path)
               return (
@@ -552,29 +842,119 @@ export function App() {
                       <FolderOpen size={14} />
                       <span>{item.name}</span>
                     </button>
+                    <button
+                      className="project-new-task"
+                      aria-label={`${item.name} 새 작업`}
+                      title="새 작업 (Ctrl N)"
+                      disabled={!repositories[item.path]}
+                      onClick={() => void addSession(item)}
+                    >
+                      <Plus size={15} />
+                    </button>
+                    <button
+                      className="project-new-task"
+                      aria-label={`${item.name} 작업 설정하여 만들기`}
+                      title="작업 설정하여 만들기"
+                      disabled={!repositories[item.path]}
+                      onClick={() => void openNewTask(item)}
+                    >
+                      <Settings size={13} />
+                    </button>
                   </div>
-                  {!folded && tasks.map(([path, task]) => {
-                    const live = agents[task.id]
-                    return (
-                      <button
-                        key={path}
-                        className={`task-row ${state.workspace === path ? 'selected' : ''}`}
-                        title={`${task.branch} · ${path}`}
-                        aria-current={state.workspace === path ? 'page' : undefined}
-                        onClick={() => selectWorkspace(path, item.path)}
-                      >
-                        <span className={`session-dot ${live?.status ?? 'idle'}`} />
-                        <span className="task-label">
-                          <span>{live?.title ?? task.title}</span>
-                          <small>{task.branch}</small>
-                        </span>
-                        {live?.status === 'waiting' && <span className="attention-tag">응답</span>}
-                      </button>
-                    )
-                  })}
-                  {!folded && !tasks.length && (
-                    <p className="project-no-tasks">새 작업을 만들면 전용 Worktree가 생성됩니다.</p>
-                  )}
+                  {!folded &&
+                    workspaces.map((entry) => (
+                      <div className="workspace-group" key={entry.path}>
+                        {(state.sessions[entry.path] ?? []).map((session) => {
+                          const live = agents[session.id]
+                          const children = getSubagents(session.id, agents)
+                          const childAttention = children.filter(
+                            (child) =>
+                              child.status === 'waiting' ||
+                              child.status === 'failed' ||
+                              child.observationError,
+                          ).length
+                          const childActive =
+                            children.filter(isAgentActive).length
+                          return (
+                            <div className="managed-row" key={session.id}>
+                              <button
+                                className={`task-row ${current?.id === session.id ? 'selected' : ''}`}
+                                title={entry.path}
+                                aria-current={
+                                  current?.id === session.id
+                                    ? 'page'
+                                    : undefined
+                                }
+                                onClick={() =>
+                                  selectWorkspace(
+                                    entry.path,
+                                    item.path,
+                                    session.id,
+                                  )
+                                }
+                              >
+                                <span
+                                  className={`session-dot ${live?.status ?? 'idle'}`}
+                                />
+                                <span className="task-label">
+                                  <span>{state.worktreeNames[entry.path] ?? live?.title ?? session.title}</span>
+                                  <small>{entry.branch}</small>
+                                </span>
+                                {children.length > 0 && (
+                                  <small
+                                    className={`subagent-sidebar-count ${childAttention ? 'needs-attention' : ''}`}
+                                    title={`서브에이전트 ${children.length}개 · 진행 중 ${childActive} · 확인 필요 ${childAttention}`}
+                                    aria-label={`서브에이전트 ${children.length}개, 진행 중 ${childActive}, 확인 필요 ${childAttention}`}
+                                  >
+                                    {childAttention
+                                      ? `확인 ${childAttention}`
+                                      : `↳ ${childActive}/${children.length}`}
+                                  </small>
+                                )}
+                                {live?.status === 'waiting' && (
+                                  <span className="attention-tag">응답</span>
+                                )}
+                              </button>
+                              <button
+                                className="row-action"
+                                aria-label={`${live?.title ?? session.title} 작업 이름 변경`}
+                                onClick={() =>
+                                  manageSession(entry.path, session, 'rename')
+                                }
+                              >
+                                <Pencil size={12} />
+                              </button>
+                              <button
+                                className="row-action"
+                                aria-label={`${live?.title ?? session.title} 작업 삭제`}
+                                disabled={
+                                  live?.status === 'running' ||
+                                  live?.status === 'waiting' ||
+                                  children.some(isAgentActive)
+                                }
+                                onClick={() =>
+                                  manageSession(entry.path, session, 'delete')
+                                }
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                              <button
+                                className="row-action"
+                                aria-label={`${state.worktreeNames[entry.path] ?? entry.branch} Worktree 이름 변경`}
+                                onClick={() => manageTree(item, entry, 'rename')}
+                              ><Pencil size={12} /></button>
+                              <button
+                                className="row-action"
+                                aria-label={`${entry.branch} Worktree 삭제`}
+                                disabled={projects.some((opened) => samePath(opened.path, entry.path)) ||
+                                  Object.values(agents).some((live) => samePath(live.workspace, entry.path) && isAgentActive(live))}
+                                onClick={() => manageTree(item, entry, 'delete')}
+                              ><Trash2 size={12} /></button>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    ))}
                 </div>
               )
             })}
@@ -583,6 +963,13 @@ export function App() {
             <CodexUsagePanel connection={connection} connecting={connecting} />
             <div className="sidebar-bottom">
               <button
+                aria-label="설정"
+                title="설정 (Ctrl ,)"
+                onClick={() => setShowSettings(true)}
+              >
+                <Settings size={16} />
+              </button>
+              <button
                 title="프로젝트 열기"
                 onClick={() => void openProject()}
                 disabled={opening}
@@ -590,13 +977,6 @@ export function App() {
                 <FolderOpen size={16} />
               </button>
               <span>Lite IDE</span>
-              <button
-                aria-label="설정"
-                title="설정"
-                onClick={() => setShowSettings(true)}
-              >
-                <Settings size={16} />
-              </button>
               <button
                 aria-label={theme === 'dark' ? '라이트 테마' : '다크 테마'}
                 onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
@@ -621,10 +1001,7 @@ export function App() {
                 size="icon-sm"
                 aria-label="작업 이름 변경"
                 disabled={!current}
-                onClick={() => {
-                  setRename(title)
-                  renameDialog.current?.showModal()
-                }}
+                onClick={() => current && manageSession(key, current, 'rename')}
               >
                 <Pencil />
               </Button>
@@ -632,14 +1009,17 @@ export function App() {
                 variant="ghost"
                 size="icon-sm"
                 aria-label="작업 삭제"
-                disabled={!current || active}
-                onClick={() => deleteDialog.current?.showModal()}
+                disabled={active || hasActiveSubagents || !current}
+                onClick={() => current && manageSession(key, current, 'delete')}
               >
                 <Trash2 />
               </Button>
             </div>
           </div>
-          {agent?.messages.length ? (
+          {agent && (
+            <SubagentPanel key={agent.id} parent={agent} agents={agents} />
+          )}
+          {project ? (
             <Conversation session={agent} />
           ) : (
             <div className="welcome">
@@ -651,47 +1031,15 @@ export function App() {
                 />
               </div>
               <h2>무엇을 만들어 볼까요?</h2>
-              <p>
-                {project
-                  ? current
-                    ? `${project.name}에서 Codex와 함께 작업하세요.`
-                    : '새 작업을 만들어 전용 Worktree에서 시작하세요.'
-                  : '프로젝트를 열고, 생각을 코드로 옮겨보세요.'}
-              </p>
-              <div className="starter-actions">
-                {[
-                  '프로젝트 구조를 파악해 줘',
-                  '변경 사항을 검토해 줘',
-                  '실패하는 테스트를 찾아 고쳐 줘',
-                ].map((prompt) => (
-                  <button
-                    key={prompt}
-                    disabled={!current}
-                    onClick={() => {
-                      updateDraft(prompt)
-                      composer.current?.focus()
-                    }}
-                  >
-                    <span>{prompt}</span>
-                    <ArrowUp size={13} />
-                  </button>
-                ))}
-              </div>
-              {project && !current && (
-                <Button variant="outline" onClick={addSession}>
-                  <Plus size={14} />새 작업
-                </Button>
-              )}
-              {!project && (
-                <Button
-                  variant="outline"
-                  onClick={() => void openProject()}
-                  disabled={opening}
-                >
-                  <FolderOpen size={14} />
-                  프로젝트 열기
-                </Button>
-              )}
+              <p>프로젝트를 열고, 생각을 코드로 옮겨보세요.</p>
+              <Button
+                variant="outline"
+                onClick={() => void openProject()}
+                disabled={opening}
+              >
+                <FolderOpen size={14} />
+                프로젝트 열기
+              </Button>
             </div>
           )}
           {error && (
@@ -708,9 +1056,9 @@ export function App() {
                 ref={composer}
                 aria-label="Codex에게 메시지"
                 placeholder={
-                  current
-                    ? 'Codex에게 작업을 요청하세요…'
-                    : '새 작업을 만들어 주세요'
+                  project
+                    ? 'Codex에게 메시지 보내기…'
+                    : '어떤 작업을 하고 싶으신가요?'
                 }
                 value={current?.draft ?? ''}
                 disabled={!current}
@@ -726,7 +1074,7 @@ export function App() {
                     void send()
                   }
                 }}
-                rows={3}
+                rows={1}
               />
               <div className="composer-toolbar">
                 <Code2 size={15} />
@@ -734,7 +1082,14 @@ export function App() {
                   aria-label="모델"
                   value={model}
                   disabled={connecting || !connection.models.length || active}
-                  onChange={(event) => setModel(event.target.value)}
+                  onChange={(event) =>
+                    updateSettings(
+                      event.target.value,
+                      connection.models.find(
+                        (item) => item.id === event.target.value,
+                      )?.defaultEffort ?? '',
+                    )
+                  }
                 >
                   {!connection.models.length && <option value="">Codex</option>}
                   {connection.models.map((item) => (
@@ -748,7 +1103,9 @@ export function App() {
                     aria-label="추론 수준"
                     value={effort}
                     disabled={active}
-                    onChange={(event) => setEffort(event.target.value)}
+                    onChange={(event) =>
+                      updateSettings(model, event.target.value)
+                    }
                   >
                     {selectedModel.efforts.map((item) => (
                       <option value={item} key={item}>
@@ -989,6 +1346,37 @@ export function App() {
           onClose={() => setOpening(false)}
         />
       )}
+      {newTaskProject && (
+        <NewTaskDialog
+          project={newTaskProject}
+          worktrees={repositories[newTaskProject.path]?.worktrees ?? []}
+          connection={connection}
+          initialModel={
+            newTaskDefaults.model ||
+            (
+              connection.models.find((item) => item.isDefault) ??
+              connection.models[0]
+            )?.id ||
+            ''
+          }
+          initialEffort={newTaskDefaults.effort}
+          initialMode={state.newTaskMode}
+          initialBaseRef={newTaskDefaults.baseRef}
+          branches={newTaskBranches}
+          onCreate={createTask}
+          onClose={() => setNewTaskProject(null)}
+        />
+      )}
+      {showSettings && (
+        <SettingsDialog
+          projects={projects}
+          currentProject={state.project}
+          connection={connection}
+          theme={theme}
+          onTheme={setTheme}
+          onClose={() => setShowSettings(false)}
+        />
+      )}
       <dialog
         ref={searchDialog}
         className="command-dialog"
@@ -1019,6 +1407,7 @@ export function App() {
                 selectWorkspace(
                   result.path,
                   result.project.path,
+                  result.session.id,
                 )
                 searchDialog.current?.close()
               }}
@@ -1058,6 +1447,7 @@ export function App() {
             onChange={(event) => setRename(event.target.value)}
             maxLength={100}
           />
+          {managementError && <p role="alert">{managementError}</p>}
           <div className="dialog-actions">
             <Button
               type="button"
@@ -1079,9 +1469,10 @@ export function App() {
       >
         <h2 id="delete-title">이 작업을 목록에서 삭제할까요?</h2>
         <p>
-          이 앱의 대화 기록과 입력 내용을 삭제합니다. 프로젝트 파일과 Codex 원본
-          세션은 유지됩니다.
+          {rename} · 이 앱의 대화 기록과 입력 내용을 삭제합니다. 프로젝트 파일과
+          Codex 원본 세션은 유지됩니다.
         </p>
+        {managementError && <p role="alert">{managementError}</p>}
         <div className="dialog-actions">
           <Button variant="ghost" onClick={() => deleteDialog.current?.close()}>
             취소
@@ -1091,40 +1482,78 @@ export function App() {
           </Button>
         </div>
       </dialog>
-      {showSettings && (
-        <SettingsDialog
-          defaultBaseBranch={defaultBaseBranch}
-          onSave={(value) => {
-            localStorage.setItem(defaultBaseBranchKey, value)
-            setDefaultBaseBranch(value)
+      <dialog
+        ref={treeDialog}
+        className="form-dialog"
+        aria-labelledby="tree-title"
+        onCancel={(event) => {
+          if (managingTree) event.preventDefault()
+        }}
+      >
+        <form
+          onSubmit={(event) => {
+            event.preventDefault()
+            void saveTree()
           }}
-          onClose={() => setShowSettings(false)}
-        />
-      )}
-      {showWorktree && project && (
-        <WorktreeDialog
-          key={project.path}
-          project={project}
-          defaultBaseBranch={defaultBaseBranch}
-          onCreated={(created) => {
-            const task = {
-              id: crypto.randomUUID(),
-              title: '새 작업',
-              draft: '',
-              project: project.path,
-              branch: created.branch,
-            }
-            setState((previous) => ({
-              ...previous,
-              project: project.path,
-              workspace: created.path,
-              tasks: { ...previous.tasks, [created.path]: task },
-            }))
-            setRefresh((value) => value + 1)
-          }}
-          onClose={() => setShowWorktree(false)}
-        />
-      )}
+        >
+          <h2 id="tree-title">
+            {treeTarget?.action === 'rename'
+              ? 'Worktree 이름 변경'
+              : 'Worktree 삭제'}
+          </h2>
+          <p className="target-path">{treeTarget?.tree.path}</p>
+          {treeTarget?.action === 'rename' ? (
+            <>
+              <p>
+                앱에 표시할 이름을 변경합니다. 브랜치와 폴더 경로는 유지됩니다.
+              </p>
+              <input
+                autoFocus
+                aria-label="Worktree 표시 이름"
+                value={treeName}
+                onChange={(event) => setTreeName(event.target.value)}
+                maxLength={100}
+              />
+            </>
+          ) : (
+            <p>
+              이 Worktree 폴더와 연결된 작업{' '}
+              {(state.sessions[treeTarget?.tree.path ?? ''] ?? []).length}개의
+              로컬 대화 기록·초안을 삭제합니다. Git 브랜치와 Codex 원본 세션은
+              유지됩니다. node_modules·out·.env 등 Git에서 무시한 파일도 폴더와
+              함께 삭제합니다. 변경 파일·추적하지 않는 파일이 있거나 작업 중이면
+              삭제할 수 없습니다.
+            </p>
+          )}
+          {managementError && <p role="alert">{managementError}</p>}
+          <div className="dialog-actions">
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={managingTree}
+              onClick={() => treeDialog.current?.close()}
+            >
+              취소
+            </Button>
+            <Button
+              type="submit"
+              variant={
+                treeTarget?.action === 'delete' ? 'destructive' : 'default'
+              }
+              disabled={
+                managingTree ||
+                (treeTarget?.action === 'rename' && !treeName.trim())
+              }
+            >
+              {managingTree
+                ? '처리 중…'
+                : treeTarget?.action === 'rename'
+                  ? '저장'
+                  : '삭제'}
+            </Button>
+          </div>
+        </form>
+      </dialog>
     </div>
   )
 }

@@ -1,9 +1,40 @@
 import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 
-export default defineConfig({
-  main: {},
+const packageInfo = JSON.parse(
+  readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
+)
+function gitValue(args: string[]) {
+  try {
+    return execFileSync('git', args, {
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+  } catch {
+    return null
+  }
+}
+
+export default defineConfig(({ command }) => ({
+  main: {
+    define: {
+      __APP_BUILD_INFO__: JSON.stringify({
+        name: packageInfo.build.productName,
+        version: packageInfo.version,
+        repositoryUrl: 'https://github.com/jackrevol/lite-ide',
+        buildTime: command === 'build' ? new Date().toISOString() : null,
+        commit: gitValue(['rev-parse', 'HEAD']),
+        dirty:
+          gitValue(['status', '--porcelain']) === null
+            ? null
+            : !!gitValue(['status', '--porcelain']),
+      }),
+    },
+  },
   preload: {},
   renderer: {
     plugins: [
@@ -26,4 +57,4 @@ export default defineConfig({
       },
     ],
   },
-})
+}))
