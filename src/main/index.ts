@@ -140,7 +140,7 @@ app.whenReady().then(() => {
       return handler()
     })
   }
-  if (app.isPackaged) {
+  if (app.isPackaged && process.env.LITE_IDE_HEADLESS !== '1') {
     setTimeout(() => void updates?.check(), 10000).unref()
     setInterval(() => void updates?.check(), 6 * 60 * 60000).unref()
   }

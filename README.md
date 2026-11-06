@@ -68,7 +68,7 @@ npm run test:codex -- --live --write
 
 ## 패키징과 범위
 
-`main`에 푸시하면 `.github/workflows/release.yml`이 Windows x64, macOS Apple Silicon(arm64), macOS Intel(x64)에서 테스트·빌드 후 GitHub Release를 자동으로 공개합니다. 수동 실행도 `main`에서 지원합니다. 세 플랫폼이 모두 성공해야 `.exe`, 두 종류의 `.dmg`, `SHA256SUMS.txt`를 등록합니다. 추가 PAT 없이 Actions의 `GITHUB_TOKEN`을 사용합니다.
+`main`에 푸시하면 `.github/workflows/release.yml`이 Windows x64, macOS Apple Silicon(arm64), macOS Intel(x64)에서 테스트·빌드·패키징된 앱의 숨김 실행 검증 후 GitHub Release를 자동으로 공개합니다. 수동 실행도 `main`에서 지원합니다. 세 플랫폼이 모두 성공해야 `.exe`, 두 종류의 `.dmg`, `SHA256SUMS.txt`를 등록합니다. 추가 PAT 없이 Actions의 `GITHUB_TOKEN`을 사용합니다.
 
 릴리스 버전은 `package.json`의 major·minor와 `기본 patch + GITHUB_RUN_NUMBER`로 생성합니다. 예를 들어 기본 `0.1.0`의 첫 실행은 `0.1.1`이고 태그는 `v0.1.1`입니다. 빌드 중의 버전 변경을 저장소에 다시 커밋하지 않으며, 같은 실행을 재시도해도 버전은 유지됩니다. 이미 공개된 릴리스는 재실행으로 덮어쓰지 않습니다. 현재 설치 파일은 개발자 인증서 서명·Apple 공증 없이 배포됩니다.
 

@@ -59,6 +59,8 @@
       "LICENSE.coss-ui"
     ],
     "mac": {
+      "identity": "-",
+      "hardenedRuntime": false,
       "icon": "resources/icon.icns",
       "target": [
         "dmg"
