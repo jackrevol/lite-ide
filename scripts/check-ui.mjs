@@ -287,6 +287,40 @@ try {
   await waitOutput(first.id, 'OK')
   await waitScreen(unique)
   assert.equal((await terminalText()).split(unique).length - 1, 1)
+  // 원시 입력 픽스처 대신 IPC 경계에서 수정 키의 보존과 중복 전송을 확인합니다.
+  await app.evaluate(({ ipcMain }) => {
+    globalThis.originalTerminalWrite = ipcMain._invokeHandlers.get('terminal:write')
+    globalThis.terminalKeyWrites = []
+    ipcMain.removeHandler('terminal:write')
+    ipcMain.handle('terminal:write', (_event, id, data) => {
+      globalThis.terminalKeyWrites.push({ id, data })
+    })
+  })
+  try {
+    await page.getByLabel('작업 터미널 입력').focus()
+    await page.keyboard.press('Shift+Enter')
+    await page.keyboard.press('Control+Enter')
+    await page.keyboard.press('Control+Shift+Enter')
+    await page.keyboard.press('Enter')
+    await until(
+      () => app.evaluate(() => globalThis.terminalKeyWrites.length === 4),
+      '줄바꿈·대기열·일반 Enter 키 전달',
+    )
+    const keys = await app.evaluate(() => globalThis.terminalKeyWrites)
+    const sequences = process.platform === 'win32'
+      ? [16, 8, 24].map((modifiers) =>
+          `\x1b[13;28;13;1;${modifiers};1_\x1b[13;28;13;0;${modifiers};1_`,
+        )
+      : [2, 5, 6].map((modifier) => `\x1b[13;${modifier}u`)
+    assert.deepEqual(keys, [...sequences, '\r'].map((data) => ({ id: first.id, data })))
+  } finally {
+    await app.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler('terminal:write')
+      ipcMain.handle('terminal:write', globalThis.originalTerminalWrite)
+      delete globalThis.originalTerminalWrite
+      delete globalThis.terminalKeyWrites
+    })
+  }
   const multilingual = 'UTF8_한글_😀'
   await page.evaluate(
     (text) =>

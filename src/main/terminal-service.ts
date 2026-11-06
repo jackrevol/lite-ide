@@ -130,7 +130,10 @@ export class TerminalService {
         else if (this.resumed.has(pathKey(input.workspace)))
           args.push('resume', '--last')
         args.push(
-          '--no-alt-screen',
+          '--config',
+          'tui.alternate_screen="always"',
+          '--config',
+          'tui.fullscreen_transcript=true',
           '--no-daemon',
           '--cd',
           input.workspace,

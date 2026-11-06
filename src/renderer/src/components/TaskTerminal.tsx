@@ -64,6 +64,27 @@ export function TaskTerminal({
     const input = term.onData(write)
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown') return true
+      if (
+        task.terminalKind === 'codex' &&
+        event.key === 'Enter' &&
+        (event.shiftKey || event.ctrlKey) &&
+        !event.altKey &&
+        !event.metaKey &&
+        !event.isComposing &&
+        event.keyCode !== 229
+      ) {
+        // xterm의 기본 Enter 변환에서 사라지는 수정 키를 Codex에 전달합니다.
+        event.preventDefault()
+        if (window.desktop.platform === 'win32') {
+          // ConPTY가 수정 키를 유지하도록 Win32 키 누름·해제 이벤트를 보냅니다.
+          const modifiers = (event.shiftKey ? 16 : 0) + (event.ctrlKey ? 8 : 0)
+          write(`\x1b[13;28;13;1;${modifiers};1_\x1b[13;28;13;0;${modifiers};1_`)
+        } else {
+          const modifier = 1 + (event.shiftKey ? 1 : 0) + (event.ctrlKey ? 4 : 0)
+          write(`\x1b[13;${modifier}u`)
+        }
+        return false
+      }
       if ((event.ctrlKey || event.metaKey) && !event.altKey) {
         if (
           [',', 'k', 'n'].includes(event.key.toLowerCase()) ||
@@ -210,7 +231,11 @@ export function TaskTerminal({
               ? 'PowerShell'
               : '로그인 셸'}
         </span>
-        <span>Ctrl+C 중단 · Ctrl+Shift+C/V 복사·붙여넣기</span>
+        <span>
+          {task.terminalKind === 'codex' &&
+            'Enter 전송 · Shift+Enter 줄바꿈 · Ctrl+Enter 대기열 · '}
+          Ctrl+C 중단 · Ctrl+Shift+C/V 복사·붙여넣기
+        </span>
       </div>
     </div>
   )

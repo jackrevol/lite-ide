@@ -68,6 +68,9 @@ test('터미널은 작업 경로당 하나이며 입력을 에코하지 않고 �
     assert.equal(a.generation, b.generation)
     assert.equal(children.length, 1)
     assert.ok(children[0].args.includes('--no-daemon'))
+    assert.ok(!children[0].args.includes('--no-alt-screen'))
+    assert.ok(children[0].args.includes('tui.alternate_screen="always"'))
+    assert.ok(children[0].args.includes('tui.fullscreen_transcript=true'))
     service.write('one', 'echo once\r')
     assert.deepEqual(children[0].writes, ['echo once\r'])
     assert.equal(events.length, 0)
@@ -94,6 +97,7 @@ test('터미널은 작업 경로당 하나이며 입력을 에코하지 않고 �
         children[2].args.includes('--last'),
     )
     assert.ok(!children[2].args.includes('첫 요청'))
+    assert.ok(children[2].args.includes('tui.fullscreen_transcript=true'))
     await assert.rejects(
       service.removeWorkspace(directory, async () => {
         await service.open(input)
