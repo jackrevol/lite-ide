@@ -205,6 +205,13 @@ export function Conversation({ session }: { session?: AgentSession }) {
       }}
     >
       <div className="conversation-inner">
+        {!session?.messages.length && (
+          <div className="conversation-start">
+            <Code2 size={25} strokeWidth={1.5} />
+            <h2>어떤 작업을 시작할까요?</h2>
+            <p>코드 수정, 오류 해결, 구현할 기능을 Codex에게 알려 주세요.</p>
+          </div>
+        )}
         {session?.messages.map((message) => (
           <Message key={message.id} message={message} />
         ))}

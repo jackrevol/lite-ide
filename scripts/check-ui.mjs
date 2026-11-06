@@ -92,6 +92,40 @@ const launch = (usageScenario = '') =>
   })
 let app = await launch()
 let page
+async function openTaskCreation(projectName = '한글 project') {
+  await page
+    .getByRole('button', { name: `${projectName} 새 작업`, exact: true })
+    .click()
+  await page
+    .getByRole('menuitem', {
+      name: 'Worktree·옵션 선택하여 만들기',
+      exact: true,
+    })
+    .click()
+}
+async function rowAction(name, kind, action) {
+  await page
+    .getByRole('button', { name: `${name} ${kind} 메뉴`, exact: true })
+    .click()
+  return page.getByRole('menuitem', { name: `${kind} ${action}`, exact: true })
+}
+async function panelWidths() {
+  return page
+    .locator('.workspace-panel > .panel')
+    .evaluateAll((panels) =>
+      panels.map((panel) => panel.getBoundingClientRect().width),
+    )
+}
+async function dragPanel(name, offset) {
+  const handle = page.getByRole('separator', { name, exact: true })
+  const bounds = await handle.boundingBox()
+  const x = bounds.x + bounds.width / 2
+  const y = bounds.y + bounds.height / 2
+  await page.mouse.move(x, y)
+  await page.mouse.down()
+  await page.mouse.move(x + offset, y, { steps: 8 })
+  await page.mouse.up()
+}
 async function checkTitlebar(page, app) {
   const layout = await page.evaluate(() => {
     const header = document.querySelector('.app-header')
@@ -164,6 +198,29 @@ try {
       icons.every((icon) => icon.complete && icon.naturalWidth === 256)
     )
   })
+  await checkTitlebar(page, app)
+  const initialWidths = await panelWidths()
+  await dragPanel('프로젝트 패널 크기 조절', 50)
+  let resizedWidths = await panelWidths()
+  assert.ok(resizedWidths[0] >= initialWidths[0] + 45)
+  assert.ok(resizedWidths[1] < initialWidths[1])
+  await dragPanel('변경 사항 패널 크기 조절', -60)
+  resizedWidths = await panelWidths()
+  assert.ok(resizedWidths[2] >= initialWidths[2] + 55)
+  await page
+    .getByRole('separator', { name: '프로젝트 패널 크기 조절' })
+    .press('ArrowLeft')
+  const keyboardWidths = await panelWidths()
+  assert.ok(keyboardWidths[0] < resizedWidths[0])
+  await page.reload()
+  await page.getByRole('heading', { name: '무엇을 만들어 볼까요?' }).waitFor()
+  await page.waitForFunction((expected) => {
+    const panels = [...document.querySelectorAll('.workspace-panel > .panel')]
+    return panels.every(
+      (panel, index) =>
+        Math.abs(panel.getBoundingClientRect().width - expected[index]) < 2,
+    )
+  }, keyboardWidths)
   await checkTitlebar(page, app)
   const updateContent = 'UI update installer fixture'
   await app.evaluate(
@@ -366,6 +423,37 @@ try {
   )
   assert.equal(await page.locator('.welcome').count(), 0)
   await page.locator('.conversation').waitFor()
+  assert.equal(await page.locator('.project-new-task').count(), 1)
+  assert.equal(
+    await page
+      .locator('.managed-row')
+      .evaluateAll((rows) =>
+        rows.every((row) => row.querySelectorAll('.row-action').length === 1),
+      ),
+    true,
+  )
+  const taskMenu = page.getByRole('button', {
+    name: '한글 project 새 작업',
+    exact: true,
+  })
+  await taskMenu.focus()
+  await taskMenu.press('ArrowDown')
+  await page
+    .getByRole('menuitem', { name: '현재 작업 공간에 새 작업', exact: true })
+    .waitFor()
+  await page.keyboard.press('Escape')
+  await page.getByRole('menu').waitFor({ state: 'hidden' })
+  assert.equal(
+    await taskMenu.evaluate((node) => node === document.activeElement),
+    true,
+  )
+  const primaryTreeDelete = await rowAction('main', 'Worktree', '삭제')
+  assert.equal(await primaryTreeDelete.isDisabled(), true)
+  await page.keyboard.press('Escape')
+  await page.getByRole('menu').waitFor({ state: 'hidden' })
+  await taskMenu.click()
+  await input.click()
+  await page.getByRole('menu').waitFor({ state: 'hidden' })
   await input.fill('첫 번째 작업 내용')
   await page.keyboard.press('Control+n')
   await page.getByRole('heading', { name: '작업 2', exact: true }).waitFor()
@@ -376,9 +464,22 @@ try {
   )
   await page.locator('.session-row').filter({ hasText: '작업 1' }).click()
   assert.equal(await input.inputValue(), '첫 번째 작업 내용')
+  const taskTabs = page.getByRole('tablist', { name: '작업 탭' })
+  await taskTabs.getByRole('tab', { name: '작업 2', exact: true }).click()
+  assert.equal(await input.inputValue(), '')
+  await taskTabs
+    .getByRole('tab', { name: '작업 2', exact: true })
+    .press('ArrowLeft')
+  assert.equal(await input.inputValue(), '첫 번째 작업 내용')
+  assert.equal(
+    await taskTabs
+      .getByRole('tab', { name: '작업 1', exact: true })
+      .getAttribute('aria-selected'),
+    'true',
+  )
+  await taskMenu.click()
   await page
-    .getByRole('button', { name: '새 작업', exact: false })
-    .first()
+    .getByRole('menuitem', { name: '현재 작업 공간에 새 작업', exact: true })
     .click()
   await page.getByRole('heading', { name: '작업 3', exact: true }).waitFor()
   assert.equal(
@@ -567,12 +668,7 @@ try {
     0,
   )
   await page.screenshot({ path: 'artifacts/workspace-subagents.png' })
-  await page
-    .getByRole('button', {
-      name: '한글 project 작업 설정하여 만들기',
-      exact: true,
-    })
-    .click()
+  await openTaskCreation()
   const newTask = page.getByRole('dialog', { name: '새 작업', exact: true })
   assert.equal(
     await newTask
@@ -634,12 +730,7 @@ try {
       ).path,
     project,
   )
-  await page
-    .getByRole('button', {
-      name: 'feature/ui-test Worktree 이름 변경',
-      exact: true,
-    })
-    .click()
+  await (await rowAction('feature/ui-test', 'Worktree', '이름 변경')).click()
   await page
     .getByRole('textbox', { name: 'Worktree 표시 이름' })
     .fill('검증 Worktree')
@@ -661,10 +752,7 @@ try {
   )
   assert.equal(treeState.newTaskMode, 'worktree')
   assert.equal(treeState.sessions[treeState.workspace].length, 1)
-  await page
-    .getByRole('button', { name: /작업 설정하여 만들기$/ })
-    .first()
-    .click()
+  await openTaskCreation()
   assert.equal(
     await newTask
       .getByRole('combobox', { name: '작업 공간 방식' })
@@ -695,10 +783,7 @@ try {
   await page
     .getByRole('heading', { name: '제품 검증 작업', exact: true })
     .waitFor()
-  await page
-    .getByRole('button', { name: /작업 설정하여 만들기$/ })
-    .first()
-    .click()
+  await openTaskCreation()
   await newTask
     .getByRole('combobox', { name: '작업 공간 방식' })
     .selectOption('existing')
@@ -724,12 +809,7 @@ try {
     .locator('.session-row')
     .filter({ hasText: '제품 검증 작업' })
     .click()
-  await page
-    .getByRole('button', {
-      name: '빈 작업 이름 유지 작업 이름 변경',
-      exact: true,
-    })
-    .click()
+  await (await rowAction('빈 작업 이름 유지', '작업', '이름 변경')).click()
   await page
     .getByRole('textbox', { name: '작업 이름', exact: true })
     .fill('비선택 작업 관리')
@@ -740,9 +820,7 @@ try {
   await page
     .getByRole('heading', { name: '제품 검증 작업', exact: true })
     .waitFor()
-  await page
-    .getByRole('button', { name: '비선택 작업 관리 작업 삭제', exact: true })
-    .click()
+  await (await rowAction('비선택 작업 관리', '작업', '삭제')).click()
   await page
     .getByRole('dialog', { name: '이 작업을 목록에서 삭제할까요?' })
     .getByRole('button', { name: '삭제', exact: true })
@@ -767,12 +845,7 @@ try {
       (await window.desktop.inspectRepository(directory)).worktrees.length,
     project,
   )
-  await page
-    .getByRole('button', {
-      name: '한글 project 작업 설정하여 만들기',
-      exact: true,
-    })
-    .click()
+  await openTaskCreation()
   assert.equal(
     await newTask
       .getByRole('combobox', { name: '작업 공간 방식' })
@@ -825,14 +898,12 @@ try {
   await input.press('Enter')
   await page.getByRole('button', { name: '작업 중단', exact: true }).waitFor()
   assert.equal(
-    await page
-      .getByRole('button', {
-        name: 'feature/retry-test Worktree 삭제',
-        exact: true,
-      })
-      .isDisabled(),
+    await (
+      await rowAction('feature/retry-test', 'Worktree', '삭제')
+    ).isDisabled(),
     true,
   )
+  await page.keyboard.press('Escape')
   assert.equal(
     await page.evaluate(
       async ({ project, workspace }) => {
@@ -854,12 +925,7 @@ try {
     '삭제하면 안 되는 내용\n',
     'utf8',
   )
-  await page
-    .getByRole('button', {
-      name: 'feature/retry-test Worktree 삭제',
-      exact: true,
-    })
-    .click()
+  await (await rowAction('feature/retry-test', 'Worktree', '삭제')).click()
   const treeDelete = page.getByRole('dialog', {
     name: 'Worktree 삭제',
     exact: true,
@@ -927,6 +993,21 @@ try {
     ),
     true,
   )
+  await dragPanel('프로젝트 패널 크기 조절', 1000)
+  const constrainedWidths = await panelWidths()
+  assert.ok(constrainedWidths[0] >= 189)
+  assert.ok(constrainedWidths[1] >= 359)
+  assert.ok(constrainedWidths[2] >= 239)
+  assert.equal(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+    true,
+  )
+  await page
+    .getByRole('separator', { name: '프로젝트 패널 크기 조절' })
+    .dblclick()
+  const widthsBeforeToggle = await panelWidths()
   await page.screenshot({ path: 'artifacts/workspace-compact.png' })
   await monitor.getByRole('button', { name: '조사 담당 상세 보기' }).click()
   const compactChild = page.getByRole('dialog', {
@@ -949,7 +1030,19 @@ try {
   assert.ok(usageBounds.y >= 43 && usageBounds.y + usageBounds.height <= 640)
   await page.getByRole('button', { name: '변경 패널 전환' }).click()
   assert.equal(await page.locator('.panel').count(), 2)
+  assert.equal(await page.getByRole('separator').count(), 1)
+  await dragPanel('프로젝트 패널 크기 조절', -25)
   await page.getByRole('button', { name: '변경 패널 전환' }).click()
+  await page.waitForFunction((expected) => {
+    const panels = [...document.querySelectorAll('.workspace-panel > .panel')]
+    return (
+      panels.length === 3 &&
+      panels.every(
+        (panel, index) =>
+          Math.abs(panel.getBoundingClientRect().width - expected[index]) < 2,
+      )
+    )
+  }, widthsBeforeToggle)
   await page.getByRole('button', { name: '라이트 테마' }).click()
   await page.evaluate(() => window.desktop.setWindowTheme('light'))
   assert.equal(
@@ -1023,10 +1116,7 @@ try {
     await page.getByRole('textbox', { name: 'Codex에게 메시지' }).inputValue(),
     'Worktree별 입력 보존',
   )
-  await page
-    .getByRole('button', { name: /작업 설정하여 만들기$/ })
-    .first()
-    .click()
+  await openTaskCreation()
   const restoredTaskDialog = page.getByRole('dialog', {
     name: '새 작업',
     exact: true,
@@ -1057,10 +1147,7 @@ try {
   )
   assert.equal(localState.newTaskMode, 'local')
   assert.equal(localState.workspace, localState.project)
-  await page
-    .getByRole('button', { name: /작업 설정하여 만들기$/ })
-    .first()
-    .click()
+  await openTaskCreation()
   assert.equal(
     await restoredTaskDialog
       .getByRole('combobox', { name: '작업 공간 방식' })
@@ -1167,13 +1254,8 @@ try {
       (item) => item.name === '복제한 project',
     ),
   )
-  // 현재 선택과 다른 프로젝트의 설정 버튼이 해당 프로젝트에 작업을 만듭니다.
-  await page
-    .getByRole('button', {
-      name: '한글 project 작업 설정하여 만들기',
-      exact: true,
-    })
-    .click()
+  // 현재 선택과 다른 프로젝트의 생성 메뉴가 해당 프로젝트에 작업을 만듭니다.
+  await openTaskCreation()
   const targetDialog = page.getByRole('dialog', {
     name: '새 작업',
     exact: true,
@@ -1208,12 +1290,7 @@ try {
     ),
     project,
   )
-  await page
-    .getByRole('button', {
-      name: 'feature/project-target Worktree 삭제',
-      exact: true,
-    })
-    .click()
+  await (await rowAction('feature/project-target', 'Worktree', '삭제')).click()
   await page
     .getByRole('dialog', { name: 'Worktree 삭제', exact: true })
     .getByRole('button', { name: '삭제', exact: true })
@@ -1321,12 +1398,7 @@ try {
     ),
     existingSessions,
   )
-  await page
-    .getByRole('button', {
-      name: '한글 project 작업 설정하여 만들기',
-      exact: true,
-    })
-    .click()
+  await openTaskCreation()
   const configuredTask = page.getByRole('dialog', {
     name: '새 작업',
     exact: true,
@@ -1392,12 +1464,7 @@ try {
     await readFile(join(project, 'hello.txt'), 'utf8'),
     /Changed line/,
   )
-  await page
-    .getByRole('button', {
-      name: 'feature/settings-test Worktree 삭제',
-      exact: true,
-    })
-    .click()
+  await (await rowAction('feature/settings-test', 'Worktree', '삭제')).click()
   await page
     .getByRole('dialog', { name: 'Worktree 삭제', exact: true })
     .getByRole('button', { name: '삭제', exact: true })
@@ -1475,7 +1542,7 @@ try {
     )
   }
   console.log(
-    'UI 검증 통과: 서브에이전트 관찰·추가 지시·중단·재개·복원, 프로젝트별 +·단축키 채팅 시작·초안 보존·설정 생성·모델/추론 전달·생성 후 재시도, 작업/Worktree 이름 변경·삭제·재시작 영속, 실행 중/dirty 삭제 보호·브랜치 보존, 사용량, Git 복제, 통합 타이틀바, Codex 전송/재개/승인/질문/중단, diff, 검색, 960px 3열 및 960x600 생성 창. 모든 창을 숨김 상태로 유지했습니다.',
+    'UI 검증 통과: 패널 드래그·키보드 조절·크기 복원·최소 너비·패널 전환, 작업 탭 전환·초안 보존, 서브에이전트 관찰·추가 지시·중단·재개·복원, 프로젝트별 + 메뉴·단축키 채팅 시작·초안 보존·설정 생성·모델/추론 전달·생성 후 재시도, 작업/Worktree 이름 변경·삭제·재시작 영속, 실행 중/dirty 삭제 보호·브랜치 보존, 사용량, Git 복제, 통합 타이틀바, Codex 전송/재개/승인/질문/중단, diff, 검색, 960px 3열 및 960x600 생성 창. 모든 창을 숨김 상태로 유지했습니다.',
   )
 } catch (error) {
   if (page && !page.isClosed()) {

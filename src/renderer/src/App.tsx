@@ -13,6 +13,7 @@ import {
   LoaderCircle,
   MessageSquare,
   Moon,
+  MoreHorizontal,
   PanelRight,
   Pencil,
   Plus,
@@ -29,6 +30,9 @@ import { Conversation } from './components/Conversation'
 import { SubagentPanel } from './components/SubagentPanel'
 import { CodexUsagePanel } from './components/CodexUsagePanel'
 import { ProjectDialog } from './components/ProjectDialog'
+import { SidebarActionMenu } from './components/SidebarActionMenu'
+import { WorkspacePanels } from './components/WorkspacePanels'
+import { TaskTabs } from './components/TaskTabs'
 import { AppUpdateButton } from './components/AppUpdateButton'
 import { NewTaskDialog } from './components/NewTaskDialog'
 import { SettingsDialog, projectSettingsKey } from './components/SettingsDialog'
@@ -453,7 +457,11 @@ export function App() {
   )
 
   useEffect(() => {
-    if (ready && !document.querySelector('dialog[open]'))
+    if (
+      ready &&
+      !document.querySelector('dialog[open]') &&
+      document.activeElement?.getAttribute('role') !== 'tab'
+    )
       composer.current?.focus({ preventScroll: true })
   }, [ready, current?.id])
   useEffect(() => {
@@ -799,620 +807,715 @@ export function App() {
       <main
         className={`workspace-layout ${showChanges ? '' : 'without-changes'}`}
       >
-        <aside
-          className="panel projects-panel"
-          aria-label="프로젝트 및 Worktree"
-        >
-          <div className="section-label">
-            <span>프로젝트</span>
-            <button
-              title="프로젝트 열기"
-              aria-label="프로젝트 열기"
-              disabled={opening}
-              onClick={() => void openProject()}
+        <WorkspacePanels
+          projects={
+            <aside
+              className="panel projects-panel"
+              aria-label="프로젝트 및 Worktree"
             >
-              <Plus size={15} />
-            </button>
-          </div>
-          <nav className="project-list">
-            {!projects.length && (
-              <div className="sidebar-empty">
-                <FolderOpen size={22} />
-                <p>
-                  프로젝트를 열어
-                  <br />
-                  작업을 시작하세요.
-                </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void openProject()}
+              <div className="section-label">
+                <span>프로젝트</span>
+                <button
+                  title="프로젝트 열기"
+                  aria-label="프로젝트 열기"
                   disabled={opening}
+                  onClick={() => void openProject()}
                 >
-                  폴더 열기
-                </Button>
+                  <Plus size={15} />
+                </button>
               </div>
-            )}
-            {projects.map((item) => {
-              const trees = repositories[item.path]?.worktrees ?? []
-              const workspaces = trees.length
-                ? trees
-                : [{ path: item.path, branch: '로컬 작업 공간' }]
-              const folded = collapsed.includes(item.path)
-              return (
-                <div className="project-group" key={item.path}>
-                  <div
-                    className={`project-row ${state.project === item.path ? 'current-project' : ''}`}
-                  >
+              <nav className="project-list">
+                {!projects.length && (
+                  <div className="sidebar-empty">
+                    <FolderOpen size={22} />
+                    <p>
+                      프로젝트를 열어
+                      <br />
+                      작업을 시작하세요.
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void openProject()}
+                      disabled={opening}
+                    >
+                      폴더 열기
+                    </Button>
+                  </div>
+                )}
+                {projects.map((item) => {
+                  const trees = repositories[item.path]?.worktrees ?? []
+                  const workspaces = trees.length
+                    ? trees
+                    : [{ path: item.path, branch: '로컬 작업 공간' }]
+                  const folded = collapsed.includes(item.path)
+                  return (
+                    <div className="project-group" key={item.path}>
+                      <div
+                        className={`project-row ${state.project === item.path ? 'current-project' : ''}`}
+                      >
+                        <button
+                          aria-label={`${item.name} ${folded ? '펼치기' : '접기'}`}
+                          aria-expanded={!folded}
+                          onClick={() =>
+                            setCollapsed(
+                              folded
+                                ? collapsed.filter((path) => path !== item.path)
+                                : [...collapsed, item.path],
+                            )
+                          }
+                        >
+                          {folded ? (
+                            <ChevronRight size={13} />
+                          ) : (
+                            <ChevronDown size={13} />
+                          )}
+                        </button>
+                        <button
+                          className="project-name"
+                          title={item.path}
+                          onClick={() => selectWorkspace(item.path, item.path)}
+                        >
+                          <FolderOpen size={14} />
+                          <span>{item.name}</span>
+                        </button>
+                        <SidebarActionMenu
+                          className="project-new-task"
+                          label={`${item.name} 새 작업`}
+                          heading={`${item.name} · 새 작업`}
+                          icon={<Plus size={15} />}
+                          disabled={!repositories[item.path]}
+                          actions={[
+                            {
+                              label: '현재 작업 공간에 새 작업',
+                              icon: <MessageSquare size={14} />,
+                              onClick: () => void addSession(item),
+                            },
+                            {
+                              label: 'Worktree·옵션 선택하여 만들기',
+                              icon: <GitBranch size={14} />,
+                              onClick: () => void openNewTask(item),
+                            },
+                          ]}
+                        />
+                      </div>
+                      {!folded &&
+                        workspaces.map((entry) => (
+                          <div className="workspace-group" key={entry.path}>
+                            <div className="managed-row">
+                              <button
+                                className={`workspace-row ${samePath(state.workspace, entry.path) ? 'selected' : ''}`}
+                                title={entry.path}
+                                onClick={() =>
+                                  selectWorkspace(entry.path, item.path)
+                                }
+                              >
+                                <GitBranch size={13} />
+                                <span>
+                                  {state.worktreeNames[entry.path] ??
+                                    entry.branch}
+                                  {state.worktreeNames[entry.path] && (
+                                    <small className="tree-branch">
+                                      {entry.branch}
+                                    </small>
+                                  )}
+                                </span>
+                                {samePath(state.workspace, entry.path) && (
+                                  <span className="active-dot" />
+                                )}
+                              </button>
+                              <SidebarActionMenu
+                                className="row-action"
+                                label={`${state.worktreeNames[entry.path] ?? entry.branch} Worktree 메뉴`}
+                                heading={`${state.worktreeNames[entry.path] ?? entry.branch} · Worktree`}
+                                icon={<MoreHorizontal size={15} />}
+                                actions={[
+                                  {
+                                    label: 'Worktree 이름 변경',
+                                    icon: <Pencil size={13} />,
+                                    onClick: () =>
+                                      manageTree(item, entry, 'rename'),
+                                  },
+                                  {
+                                    label: 'Worktree 삭제',
+                                    icon: <Trash2 size={13} />,
+                                    destructive: true,
+                                    disabled:
+                                      samePath(
+                                        entry.path,
+                                        workspaces[0].path,
+                                      ) ||
+                                      projects.some((opened) =>
+                                        samePath(opened.path, entry.path),
+                                      ) ||
+                                      Object.values(agents).some(
+                                        (live) =>
+                                          samePath(
+                                            live.workspace,
+                                            entry.path,
+                                          ) &&
+                                          ['running', 'waiting'].includes(
+                                            live.status,
+                                          ),
+                                      ),
+                                    onClick: () =>
+                                      manageTree(item, entry, 'delete'),
+                                  },
+                                ]}
+                              />
+                            </div>
+                            {(state.sessions[entry.path] ?? []).map(
+                              (session) => {
+                                const live = agents[session.id]
+                                const children = getSubagents(
+                                  session.id,
+                                  agents,
+                                )
+                                const childAttention = children.filter(
+                                  (child) =>
+                                    child.status === 'waiting' ||
+                                    child.status === 'failed' ||
+                                    child.observationError,
+                                ).length
+                                const childActive =
+                                  children.filter(isAgentActive).length
+                                return (
+                                  <div className="managed-row" key={session.id}>
+                                    <button
+                                      className={`session-row ${current?.id === session.id ? 'selected' : ''}`}
+                                      title={live?.title ?? session.title}
+                                      aria-current={
+                                        current?.id === session.id
+                                          ? 'page'
+                                          : undefined
+                                      }
+                                      onClick={() =>
+                                        selectWorkspace(
+                                          entry.path,
+                                          item.path,
+                                          session.id,
+                                        )
+                                      }
+                                    >
+                                      <span
+                                        className={`session-dot ${live?.status ?? 'idle'}`}
+                                      />
+                                      <span>
+                                        {live?.title ?? session.title}
+                                      </span>
+                                      {children.length > 0 && (
+                                        <small
+                                          className={`subagent-sidebar-count ${childAttention ? 'needs-attention' : ''}`}
+                                          title={`서브에이전트 ${children.length}개 · 진행 중 ${childActive} · 확인 필요 ${childAttention}`}
+                                          aria-label={`서브에이전트 ${children.length}개, 진행 중 ${childActive}, 확인 필요 ${childAttention}`}
+                                        >
+                                          {childAttention
+                                            ? `확인 ${childAttention}`
+                                            : `↳ ${childActive}/${children.length}`}
+                                        </small>
+                                      )}
+                                      {live?.status === 'waiting' && (
+                                        <span className="attention-tag">
+                                          응답
+                                        </span>
+                                      )}
+                                    </button>
+                                    <SidebarActionMenu
+                                      className="row-action"
+                                      label={`${live?.title ?? session.title} 작업 메뉴`}
+                                      heading={`${live?.title ?? session.title} · 작업`}
+                                      icon={<MoreHorizontal size={15} />}
+                                      actions={[
+                                        {
+                                          label: '작업 이름 변경',
+                                          icon: <Pencil size={13} />,
+                                          onClick: () =>
+                                            manageSession(
+                                              entry.path,
+                                              session,
+                                              'rename',
+                                            ),
+                                        },
+                                        {
+                                          label: '작업 삭제',
+                                          icon: <Trash2 size={13} />,
+                                          destructive: true,
+                                          disabled:
+                                            live?.status === 'running' ||
+                                            live?.status === 'waiting' ||
+                                            children.some(isAgentActive),
+                                          onClick: () =>
+                                            manageSession(
+                                              entry.path,
+                                              session,
+                                              'delete',
+                                            ),
+                                        },
+                                      ]}
+                                    />
+                                  </div>
+                                )
+                              },
+                            )}
+                          </div>
+                        ))}
+                    </div>
+                  )
+                })}
+                {!state.workspace &&
+                  tabs.map((session) => (
                     <button
-                      aria-label={`${item.name} ${folded ? '펼치기' : '접기'}`}
-                      aria-expanded={!folded}
+                      className={`session-row ${current?.id === session.id ? 'selected' : ''}`}
+                      key={session.id}
                       onClick={() =>
-                        setCollapsed(
-                          folded
-                            ? collapsed.filter((path) => path !== item.path)
-                            : [...collapsed, item.path],
-                        )
+                        setState((previous) => ({
+                          ...previous,
+                          selected: {
+                            ...previous.selected,
+                            welcome: session.id,
+                          },
+                        }))
                       }
                     >
-                      {folded ? (
-                        <ChevronRight size={13} />
-                      ) : (
-                        <ChevronDown size={13} />
-                      )}
+                      <MessageSquare size={13} />
+                      <span>{session.title}</span>
                     </button>
-                    <button
-                      className="project-name"
-                      title={item.path}
-                      onClick={() => selectWorkspace(item.path, item.path)}
+                  ))}
+              </nav>
+              <footer className="sidebar-footer">
+                <CodexUsagePanel
+                  connection={connection}
+                  connecting={connecting}
+                />
+                <div className="sidebar-bottom">
+                  <button
+                    aria-label="설정"
+                    title="설정 (Ctrl ,)"
+                    onClick={() => setShowSettings(true)}
+                  >
+                    <Settings size={16} />
+                  </button>
+                  <button
+                    title="프로젝트 열기"
+                    onClick={() => void openProject()}
+                    disabled={opening}
+                  >
+                    <FolderOpen size={16} />
+                  </button>
+                  <span>Lite IDE</span>
+                  <button
+                    aria-label={theme === 'dark' ? '라이트 테마' : '다크 테마'}
+                    onClick={() =>
+                      setTheme(theme === 'dark' ? 'light' : 'dark')
+                    }
+                  >
+                    {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+                  </button>
+                </div>
+              </footer>
+            </aside>
+          }
+          agent={
+            <section className="panel agent-panel" aria-label="Codex 작업">
+              <TaskTabs
+                tasks={tabs.map((session) => ({
+                  id: session.id,
+                  title: agents[session.id]?.title ?? session.title,
+                  active: ['running', 'waiting'].includes(
+                    agents[session.id]?.status ?? '',
+                  ),
+                }))}
+                selected={current?.id}
+                onSelect={(id) =>
+                  setState((previous) => ({
+                    ...previous,
+                    selected: { ...previous.selected, [key]: id },
+                  }))
+                }
+                onAdd={() => void addSession()}
+              />
+              <div
+                id="agent-task-content"
+                className="agent-task-content"
+                role="tabpanel"
+                aria-labelledby={current ? `task-tab-${current.id}` : undefined}
+              >
+                <div className="agent-heading">
+                  <div className="heading-title">
+                    <MessageSquare size={16} />
+                    <h1>{title}</h1>
+                    <span className={`status-label ${agent?.status ?? 'idle'}`}>
+                      {agent ? labels[agent.status] : 'Codex'}
+                    </span>
+                  </div>
+                  <div className="heading-actions">
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label="작업 이름 변경"
+                      disabled={!current}
+                      onClick={() =>
+                        current && manageSession(key, current, 'rename')
+                      }
+                    >
+                      <Pencil />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label="작업 삭제"
+                      disabled={active || hasActiveSubagents || !current}
+                      onClick={() =>
+                        current && manageSession(key, current, 'delete')
+                      }
+                    >
+                      <Trash2 />
+                    </Button>
+                  </div>
+                </div>
+                {agent && (
+                  <SubagentPanel
+                    key={agent.id}
+                    parent={agent}
+                    agents={agents}
+                  />
+                )}
+                {project ? (
+                  <Conversation session={agent} />
+                ) : (
+                  <div className="welcome">
+                    <div className="welcome-icon">
+                      <img
+                        src="./app-icon.png"
+                        alt="시베리안고양이"
+                        draggable={false}
+                      />
+                    </div>
+                    <h2>무엇을 만들어 볼까요?</h2>
+                    <p>프로젝트를 열고, 생각을 코드로 옮겨보세요.</p>
+                    <Button
+                      variant="outline"
+                      onClick={() => void openProject()}
+                      disabled={opening}
                     >
                       <FolderOpen size={14} />
-                      <span>{item.name}</span>
-                    </button>
-                    <button
-                      className="project-new-task"
-                      aria-label={`${item.name} 새 작업`}
-                      title="새 작업 (Ctrl N)"
-                      disabled={!repositories[item.path]}
-                      onClick={() => void addSession(item)}
-                    >
-                      <Plus size={15} />
-                    </button>
-                    <button
-                      className="project-new-task"
-                      aria-label={`${item.name} 작업 설정하여 만들기`}
-                      title="작업 설정하여 만들기"
-                      disabled={!repositories[item.path]}
-                      onClick={() => void openNewTask(item)}
-                    >
-                      <Settings size={13} />
-                    </button>
+                      프로젝트 열기
+                    </Button>
                   </div>
-                  {!folded &&
-                    workspaces.map((entry) => (
-                      <div className="workspace-group" key={entry.path}>
-                        <div className="managed-row">
-                          <button
-                            className={`workspace-row ${samePath(state.workspace, entry.path) ? 'selected' : ''}`}
-                            title={entry.path}
-                            onClick={() =>
-                              selectWorkspace(entry.path, item.path)
-                            }
-                          >
-                            <GitBranch size={13} />
-                            <span>
-                              {state.worktreeNames[entry.path] ?? entry.branch}
-                              {state.worktreeNames[entry.path] && (
-                                <small className="tree-branch">
-                                  {entry.branch}
-                                </small>
-                              )}
-                            </span>
-                            {samePath(state.workspace, entry.path) && (
-                              <span className="active-dot" />
-                            )}
-                          </button>
-                          <button
-                            className="row-action"
-                            aria-label={`${state.worktreeNames[entry.path] ?? entry.branch} Worktree 이름 변경`}
-                            onClick={() => manageTree(item, entry, 'rename')}
-                          >
-                            <Pencil size={12} />
-                          </button>
-                          <button
-                            className="row-action"
-                            aria-label={`${state.worktreeNames[entry.path] ?? entry.branch} Worktree 삭제`}
-                            disabled={
-                              samePath(entry.path, workspaces[0].path) ||
-                              projects.some((opened) =>
-                                samePath(opened.path, entry.path),
-                              ) ||
-                              Object.values(agents).some(
-                                (live) =>
-                                  samePath(live.workspace, entry.path) &&
-                                  ['running', 'waiting'].includes(live.status),
-                              )
-                            }
-                            onClick={() => manageTree(item, entry, 'delete')}
-                          >
-                            <Trash2 size={12} />
-                          </button>
-                        </div>
-                        {(state.sessions[entry.path] ?? []).map((session) => {
-                          const live = agents[session.id]
-                          const children = getSubagents(session.id, agents)
-                          const childAttention = children.filter(
-                            (child) =>
-                              child.status === 'waiting' ||
-                              child.status === 'failed' ||
-                              child.observationError,
-                          ).length
-                          const childActive =
-                            children.filter(isAgentActive).length
-                          return (
-                            <div className="managed-row" key={session.id}>
-                              <button
-                                className={`session-row ${current?.id === session.id ? 'selected' : ''}`}
-                                title={live?.title ?? session.title}
-                                aria-current={
-                                  current?.id === session.id
-                                    ? 'page'
-                                    : undefined
-                                }
-                                onClick={() =>
-                                  selectWorkspace(
-                                    entry.path,
-                                    item.path,
-                                    session.id,
-                                  )
-                                }
-                              >
-                                <span
-                                  className={`session-dot ${live?.status ?? 'idle'}`}
-                                />
-                                <span>{live?.title ?? session.title}</span>
-                                {children.length > 0 && (
-                                  <small
-                                    className={`subagent-sidebar-count ${childAttention ? 'needs-attention' : ''}`}
-                                    title={`서브에이전트 ${children.length}개 · 진행 중 ${childActive} · 확인 필요 ${childAttention}`}
-                                    aria-label={`서브에이전트 ${children.length}개, 진행 중 ${childActive}, 확인 필요 ${childAttention}`}
-                                  >
-                                    {childAttention
-                                      ? `확인 ${childAttention}`
-                                      : `↳ ${childActive}/${children.length}`}
-                                  </small>
-                                )}
-                                {live?.status === 'waiting' && (
-                                  <span className="attention-tag">응답</span>
-                                )}
-                              </button>
-                              <button
-                                className="row-action"
-                                aria-label={`${live?.title ?? session.title} 작업 이름 변경`}
-                                onClick={() =>
-                                  manageSession(entry.path, session, 'rename')
-                                }
-                              >
-                                <Pencil size={12} />
-                              </button>
-                              <button
-                                className="row-action"
-                                aria-label={`${live?.title ?? session.title} 작업 삭제`}
-                                disabled={
-                                  live?.status === 'running' ||
-                                  live?.status === 'waiting' ||
-                                  children.some(isAgentActive)
-                                }
-                                onClick={() =>
-                                  manageSession(entry.path, session, 'delete')
-                                }
-                              >
-                                <Trash2 size={12} />
-                              </button>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    ))}
-                </div>
-              )
-            })}
-            {!state.workspace &&
-              tabs.map((session) => (
-                <button
-                  className={`session-row ${current?.id === session.id ? 'selected' : ''}`}
-                  key={session.id}
-                  onClick={() =>
-                    setState((previous) => ({
-                      ...previous,
-                      selected: { ...previous.selected, welcome: session.id },
-                    }))
-                  }
-                >
-                  <MessageSquare size={13} />
-                  <span>{session.title}</span>
-                </button>
-              ))}
-          </nav>
-          <footer className="sidebar-footer">
-            <CodexUsagePanel connection={connection} connecting={connecting} />
-            <div className="sidebar-bottom">
-              <button
-                aria-label="설정"
-                title="설정 (Ctrl ,)"
-                onClick={() => setShowSettings(true)}
-              >
-                <Settings size={16} />
-              </button>
-              <button
-                title="프로젝트 열기"
-                onClick={() => void openProject()}
-                disabled={opening}
-              >
-                <FolderOpen size={16} />
-              </button>
-              <span>Lite IDE</span>
-              <button
-                aria-label={theme === 'dark' ? '라이트 테마' : '다크 테마'}
-                onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-              >
-                {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-              </button>
-            </div>
-          </footer>
-        </aside>
-        <section className="panel agent-panel" aria-label="Codex 작업">
-          <div className="agent-heading">
-            <div className="heading-title">
-              <MessageSquare size={16} />
-              <h1>{title}</h1>
-              <span className={`status-label ${agent?.status ?? 'idle'}`}>
-                {agent ? labels[agent.status] : 'Codex'}
-              </span>
-            </div>
-            <div className="heading-actions">
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="작업 이름 변경"
-                disabled={!current}
-                onClick={() => current && manageSession(key, current, 'rename')}
-              >
-                <Pencil />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="작업 삭제"
-                disabled={active || hasActiveSubagents || !current}
-                onClick={() => current && manageSession(key, current, 'delete')}
-              >
-                <Trash2 />
-              </Button>
-            </div>
-          </div>
-          {agent && (
-            <SubagentPanel key={agent.id} parent={agent} agents={agents} />
-          )}
-          {project ? (
-            <Conversation session={agent} />
-          ) : (
-            <div className="welcome">
-              <div className="welcome-icon">
-                <img
-                  src="./app-icon.png"
-                  alt="시베리안고양이"
-                  draggable={false}
-                />
-              </div>
-              <h2>무엇을 만들어 볼까요?</h2>
-              <p>프로젝트를 열고, 생각을 코드로 옮겨보세요.</p>
-              <Button
-                variant="outline"
-                onClick={() => void openProject()}
-                disabled={opening}
-              >
-                <FolderOpen size={14} />
-                프로젝트 열기
-              </Button>
-            </div>
-          )}
-          {error && (
-            <div className="error-message" role="alert">
-              <span>{error}</span>
-              <button aria-label="오류 닫기" onClick={() => setError('')}>
-                <X size={14} />
-              </button>
-            </div>
-          )}
-          <div className="composer-area">
-            <div className="composer">
-              <textarea
-                ref={composer}
-                aria-label="Codex에게 메시지"
-                placeholder={
-                  project
-                    ? 'Codex에게 메시지 보내기…'
-                    : '어떤 작업을 하고 싶으신가요?'
-                }
-                value={current?.draft ?? ''}
-                onChange={(event) => updateDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (
-                    event.key === 'Enter' &&
-                    !event.shiftKey &&
-                    !event.nativeEvent.isComposing &&
-                    event.nativeEvent.keyCode !== 229
-                  ) {
-                    event.preventDefault()
-                    void send()
-                  }
-                }}
-                rows={1}
-              />
-              <div className="composer-toolbar">
-                <Code2 size={15} />
-                <select
-                  aria-label="모델"
-                  value={model}
-                  disabled={connecting || !connection.models.length || active}
-                  onChange={(event) =>
-                    updateSettings(
-                      event.target.value,
-                      connection.models.find(
-                        (item) => item.id === event.target.value,
-                      )?.defaultEffort ?? '',
-                    )
-                  }
-                >
-                  {!connection.models.length && <option value="">Codex</option>}
-                  {connection.models.map((item) => (
-                    <option value={item.id} key={item.id}>
-                      {item.name}
-                    </option>
-                  ))}
-                </select>
-                {selectedModel?.efforts.length ? (
-                  <select
-                    aria-label="추론 수준"
-                    value={effort}
-                    disabled={active}
-                    onChange={(event) =>
-                      updateSettings(model, event.target.value)
-                    }
-                  >
-                    {selectedModel.efforts.map((item) => (
-                      <option value={item} key={item}>
-                        {item}
-                      </option>
-                    ))}
-                  </select>
-                ) : null}
-                <span className="toolbar-spacer" />
-                {active ? (
-                  <Button
-                    aria-label="작업 중단"
-                    title="작업 중단"
-                    size="icon-sm"
-                    variant="secondary"
-                    onClick={() =>
-                      void window.desktop
-                        .interruptSession(agent.id)
-                        .catch((cause) => setError(errorText(cause)))
-                    }
-                  >
-                    <Square size={13} fill="currentColor" />
-                  </Button>
-                ) : (
-                  <Button
-                    aria-label="메시지 보내기"
-                    title="메시지 보내기"
-                    size="icon-sm"
-                    disabled={
-                      !ready ||
-                      !state.workspace ||
-                      !current?.draft.trim() ||
-                      !connection.connected ||
-                      !connection.authenticated ||
-                      submitting
-                    }
-                    onClick={() => void send()}
-                  >
-                    <ArrowUp />
-                  </Button>
                 )}
-              </div>
-            </div>
-            <div className="composer-meta">
-              <span title={state.workspace}>
-                <GitBranch size={12} />
-                {tree?.branch ?? project?.name ?? '프로젝트 선택'}
-              </span>
-              <span>Enter 전송 · Shift Enter 줄바꿈</span>
-            </div>
-            {(!connection.connected || !connection.authenticated) &&
-              !connecting && (
-                <div className="connection-banner">
-                  <span>
-                    {connection.error ?? 'Codex에 로그인해 작업을 시작하세요.'}
-                  </span>
-                  <button
-                    onClick={() =>
-                      void (
-                        connection.connected
-                          ? window.desktop.loginCodex()
-                          : reconnect()
-                      ).catch((cause) => setError(errorText(cause)))
-                    }
-                  >
-                    {connection.connected ? '로그인' : '다시 연결'}
-                  </button>
-                  {connection.connected && (
-                    <button onClick={() => void reconnect()}>연결 확인</button>
-                  )}
-                </div>
-              )}
-          </div>
-        </section>
-        {showChanges && (
-          <aside className="panel changes-panel" aria-label="변경 사항">
-            <div className="changes-heading">
-              <h2>
-                <GitCompareArrows size={15} />
-                변경 사항
-                <span className="count">{repository.totalChanges}</span>
-              </h2>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="변경 사항 새로고침"
-                disabled={!state.workspace || loading}
-                onClick={() => setRefresh((value) => value + 1)}
-              >
-                <RefreshCw className={loading ? 'spinning' : ''} />
-              </Button>
-            </div>
-            <div className="changes-summary">
-              <GitBranch size={13} />
-              <span>{tree?.branch ?? '작업 공간'}</span>
-              <span className="muted">Working tree</span>
-            </div>
-            {repository.changes.length > 0 && (
-              <label className="file-search">
-                <Search size={13} />
-                <input
-                  aria-label="변경 파일 검색"
-                  placeholder="파일 검색…"
-                  value={fileQuery}
-                  onChange={(event) => setFileQuery(event.target.value)}
-                />
-              </label>
-            )}
-            <div
-              className={`changes-content ${selectedFile ? 'with-preview' : ''}`}
-            >
-              {loading ? (
-                <div className="panel-empty">
-                  <LoaderCircle size={20} className="spinning" />
-                  <p>변경 사항 확인 중</p>
-                </div>
-              ) : repository.changes.length === 0 ? (
-                <div className="panel-empty">
-                  {state.workspace ? (
-                    <Check size={25} strokeWidth={1.4} />
-                  ) : (
-                    <GitCompareArrows size={25} strokeWidth={1.4} />
-                  )}
-                  <strong>
-                    {!state.workspace
-                      ? '아직 열린 프로젝트가 없습니다'
-                      : repository.isGitRepository
-                        ? '모든 변경 사항이 반영되었습니다'
-                        : 'Git 저장소가 아닙니다'}
-                  </strong>
-                  <p>
-                    {!state.workspace
-                      ? '프로젝트의 변경 사항이 여기에 표시됩니다.'
-                      : repository.isGitRepository
-                        ? '작업 중인 변경 파일이 여기에 표시됩니다.'
-                        : 'Codex 작업은 그대로 사용할 수 있습니다.'}
-                  </p>
-                </div>
-              ) : (
-                repository.changes
-                  .filter((file) =>
-                    file.path.toLowerCase().includes(fileQuery.toLowerCase()),
-                  )
-                  .map((file) => (
-                    <button
-                      key={file.path}
-                      title={file.path}
-                      aria-label={file.path}
-                      className={`file-row ${selectedFile === file.path ? 'selected' : ''}`}
-                      onClick={() => setSelectedFile(file.path)}
-                    >
-                      <FileCode2 size={14} />
-                      <span>
-                        {file.path.split('/').at(-1)}
-                        <small>
-                          {file.path.includes('/')
-                            ? file.path.slice(0, file.path.lastIndexOf('/'))
-                            : ''}
-                        </small>
-                      </span>
-                      <span
-                        className={`file-status ${file.status.includes('D') ? 'deleted' : file.status.includes('?') || file.status.includes('A') ? 'added' : ''}`}
-                      >
-                        {file.status.trim() === '??' ? 'U' : file.status.trim()}
-                      </span>
+                {error && (
+                  <div className="error-message" role="alert">
+                    <span>{error}</span>
+                    <button aria-label="오류 닫기" onClick={() => setError('')}>
+                      <X size={14} />
                     </button>
-                  ))
-              )}
-              {repository.totalChanges > 200 && (
-                <p className="file-limit">
-                  200 / {repository.totalChanges}개 표시
-                </p>
-              )}
-            </div>
-            {selectedFile && (
-              <section className="diff-preview" aria-label="파일 변경 내용">
-                <div className="diff-heading">
-                  <span title={selectedFile}>{selectedFile}</span>
-                  <button
-                    aria-label="변경 내용 닫기"
-                    onClick={() => setSelectedFile('')}
-                  >
-                    <X size={14} />
-                  </button>
-                </div>
-                {diffLoading ? (
-                  <div className="panel-empty">
-                    <LoaderCircle size={18} className="spinning" />
                   </div>
-                ) : (
-                  <pre>
-                    {diff.split('\n').map((line, index) => (
-                      <div
-                        key={index}
-                        className={
-                          line.startsWith('+') && !line.startsWith('+++')
-                            ? 'diff-add'
-                            : line.startsWith('-') && !line.startsWith('---')
-                              ? 'diff-remove'
-                              : line.startsWith('@@')
-                                ? 'diff-hunk'
-                                : ''
+                )}
+                <div className="composer-area">
+                  <div className="composer">
+                    <textarea
+                      ref={composer}
+                      aria-label="Codex에게 메시지"
+                      placeholder={
+                        project
+                          ? 'Codex에게 메시지 보내기…'
+                          : '어떤 작업을 하고 싶으신가요?'
+                      }
+                      value={current?.draft ?? ''}
+                      onChange={(event) => updateDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (
+                          event.key === 'Enter' &&
+                          !event.shiftKey &&
+                          !event.nativeEvent.isComposing &&
+                          event.nativeEvent.keyCode !== 229
+                        ) {
+                          event.preventDefault()
+                          void send()
+                        }
+                      }}
+                      rows={1}
+                    />
+                    <div className="composer-toolbar">
+                      <Code2 size={15} />
+                      <select
+                        aria-label="모델"
+                        value={model}
+                        disabled={
+                          connecting || !connection.models.length || active
+                        }
+                        onChange={(event) =>
+                          updateSettings(
+                            event.target.value,
+                            connection.models.find(
+                              (item) => item.id === event.target.value,
+                            )?.defaultEffort ?? '',
+                          )
                         }
                       >
-                        <span className="line-number">{index + 1}</span>
-                        {line || ' '}
+                        {!connection.models.length && (
+                          <option value="">Codex</option>
+                        )}
+                        {connection.models.map((item) => (
+                          <option value={item.id} key={item.id}>
+                            {item.name}
+                          </option>
+                        ))}
+                      </select>
+                      {selectedModel?.efforts.length ? (
+                        <select
+                          aria-label="추론 수준"
+                          value={effort}
+                          disabled={active}
+                          onChange={(event) =>
+                            updateSettings(model, event.target.value)
+                          }
+                        >
+                          {selectedModel.efforts.map((item) => (
+                            <option value={item} key={item}>
+                              {item}
+                            </option>
+                          ))}
+                        </select>
+                      ) : null}
+                      <span className="toolbar-spacer" />
+                      {active ? (
+                        <Button
+                          aria-label="작업 중단"
+                          title="작업 중단"
+                          size="icon-sm"
+                          variant="secondary"
+                          onClick={() =>
+                            void window.desktop
+                              .interruptSession(agent.id)
+                              .catch((cause) => setError(errorText(cause)))
+                          }
+                        >
+                          <Square size={13} fill="currentColor" />
+                        </Button>
+                      ) : (
+                        <Button
+                          aria-label="메시지 보내기"
+                          title="메시지 보내기"
+                          size="icon-sm"
+                          disabled={
+                            !ready ||
+                            !state.workspace ||
+                            !current?.draft.trim() ||
+                            !connection.connected ||
+                            !connection.authenticated ||
+                            submitting
+                          }
+                          onClick={() => void send()}
+                        >
+                          <ArrowUp />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="composer-meta">
+                    <span title={state.workspace}>
+                      <GitBranch size={12} />
+                      {tree?.branch ?? project?.name ?? '프로젝트 선택'}
+                    </span>
+                    <span>Enter 전송 · Shift Enter 줄바꿈</span>
+                  </div>
+                  {(!connection.connected || !connection.authenticated) &&
+                    !connecting && (
+                      <div className="connection-banner">
+                        <span>
+                          {connection.error ??
+                            'Codex에 로그인해 작업을 시작하세요.'}
+                        </span>
+                        <button
+                          onClick={() =>
+                            void (
+                              connection.connected
+                                ? window.desktop.loginCodex()
+                                : reconnect()
+                            ).catch((cause) => setError(errorText(cause)))
+                          }
+                        >
+                          {connection.connected ? '로그인' : '다시 연결'}
+                        </button>
+                        {connection.connected && (
+                          <button onClick={() => void reconnect()}>
+                            연결 확인
+                          </button>
+                        )}
                       </div>
-                    ))}
-                  </pre>
+                    )}
+                </div>
+              </div>
+            </section>
+          }
+          changes={
+            showChanges ? (
+              <aside className="panel changes-panel" aria-label="변경 사항">
+                <div className="changes-heading">
+                  <h2>
+                    <GitCompareArrows size={15} />
+                    변경 사항
+                    <span className="count">{repository.totalChanges}</span>
+                  </h2>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="변경 사항 새로고침"
+                    disabled={!state.workspace || loading}
+                    onClick={() => setRefresh((value) => value + 1)}
+                  >
+                    <RefreshCw className={loading ? 'spinning' : ''} />
+                  </Button>
+                </div>
+                <div className="changes-summary">
+                  <GitBranch size={13} />
+                  <span>{tree?.branch ?? '작업 공간'}</span>
+                  <span className="muted">Working tree</span>
+                </div>
+                {repository.changes.length > 0 && (
+                  <label className="file-search">
+                    <Search size={13} />
+                    <input
+                      aria-label="변경 파일 검색"
+                      placeholder="파일 검색…"
+                      value={fileQuery}
+                      onChange={(event) => setFileQuery(event.target.value)}
+                    />
+                  </label>
                 )}
-              </section>
-            )}
-            <footer className="changes-footer">
-              <span
-                className={`connection-dot ${connection.connected && connection.authenticated ? 'online' : ''}`}
-              />
-              <span>
-                {connecting
-                  ? 'Codex 연결 중…'
-                  : connection.connected && connection.authenticated
-                    ? 'Codex 연결됨'
-                    : 'Codex 연결 확인 필요'}
-              </span>
-              <button
-                aria-label="Codex 연결 새로고침"
-                disabled={connecting}
-                onClick={() => void reconnect()}
-              >
-                <RefreshCw size={12} />
-              </button>
-            </footer>
-          </aside>
-        )}
+                <div
+                  className={`changes-content ${selectedFile ? 'with-preview' : ''}`}
+                >
+                  {loading ? (
+                    <div className="panel-empty">
+                      <LoaderCircle size={20} className="spinning" />
+                      <p>변경 사항 확인 중</p>
+                    </div>
+                  ) : repository.changes.length === 0 ? (
+                    <div className="panel-empty">
+                      {state.workspace ? (
+                        <Check size={25} strokeWidth={1.4} />
+                      ) : (
+                        <GitCompareArrows size={25} strokeWidth={1.4} />
+                      )}
+                      <strong>
+                        {!state.workspace
+                          ? '아직 열린 프로젝트가 없습니다'
+                          : repository.isGitRepository
+                            ? '모든 변경 사항이 반영되었습니다'
+                            : 'Git 저장소가 아닙니다'}
+                      </strong>
+                      <p>
+                        {!state.workspace
+                          ? '프로젝트의 변경 사항이 여기에 표시됩니다.'
+                          : repository.isGitRepository
+                            ? '작업 중인 변경 파일이 여기에 표시됩니다.'
+                            : 'Codex 작업은 그대로 사용할 수 있습니다.'}
+                      </p>
+                    </div>
+                  ) : (
+                    repository.changes
+                      .filter((file) =>
+                        file.path
+                          .toLowerCase()
+                          .includes(fileQuery.toLowerCase()),
+                      )
+                      .map((file) => (
+                        <button
+                          key={file.path}
+                          title={file.path}
+                          aria-label={file.path}
+                          className={`file-row ${selectedFile === file.path ? 'selected' : ''}`}
+                          onClick={() => setSelectedFile(file.path)}
+                        >
+                          <FileCode2 size={14} />
+                          <span>
+                            {file.path.split('/').at(-1)}
+                            <small>
+                              {file.path.includes('/')
+                                ? file.path.slice(0, file.path.lastIndexOf('/'))
+                                : ''}
+                            </small>
+                          </span>
+                          <span
+                            className={`file-status ${file.status.includes('D') ? 'deleted' : file.status.includes('?') || file.status.includes('A') ? 'added' : ''}`}
+                          >
+                            {file.status.trim() === '??'
+                              ? 'U'
+                              : file.status.trim()}
+                          </span>
+                        </button>
+                      ))
+                  )}
+                  {repository.totalChanges > 200 && (
+                    <p className="file-limit">
+                      200 / {repository.totalChanges}개 표시
+                    </p>
+                  )}
+                </div>
+                {selectedFile && (
+                  <section className="diff-preview" aria-label="파일 변경 내용">
+                    <div className="diff-heading">
+                      <span title={selectedFile}>{selectedFile}</span>
+                      <button
+                        aria-label="변경 내용 닫기"
+                        onClick={() => setSelectedFile('')}
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                    {diffLoading ? (
+                      <div className="panel-empty">
+                        <LoaderCircle size={18} className="spinning" />
+                      </div>
+                    ) : (
+                      <pre>
+                        {diff.split('\n').map((line, index) => (
+                          <div
+                            key={index}
+                            className={
+                              line.startsWith('+') && !line.startsWith('+++')
+                                ? 'diff-add'
+                                : line.startsWith('-') &&
+                                    !line.startsWith('---')
+                                  ? 'diff-remove'
+                                  : line.startsWith('@@')
+                                    ? 'diff-hunk'
+                                    : ''
+                            }
+                          >
+                            <span className="line-number">{index + 1}</span>
+                            {line || ' '}
+                          </div>
+                        ))}
+                      </pre>
+                    )}
+                  </section>
+                )}
+                <footer className="changes-footer">
+                  <span
+                    className={`connection-dot ${connection.connected && connection.authenticated ? 'online' : ''}`}
+                  />
+                  <span>
+                    {connecting
+                      ? 'Codex 연결 중…'
+                      : connection.connected && connection.authenticated
+                        ? 'Codex 연결됨'
+                        : 'Codex 연결 확인 필요'}
+                  </span>
+                  <button
+                    aria-label="Codex 연결 새로고침"
+                    disabled={connecting}
+                    onClick={() => void reconnect()}
+                  >
+                    <RefreshCw size={12} />
+                  </button>
+                </footer>
+              </aside>
+            ) : undefined
+          }
+        />
       </main>
       {opening && (
         <ProjectDialog
