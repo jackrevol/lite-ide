@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
@@ -442,4 +442,253 @@ test('직접 입력 불가·종료된 에이전트의 제어를 제한하고 재
     sessions.find((item) => item.threadId === 'active-child')!.parentSessionId,
     'parent',
   )
+})
+
+test('CLI 세션과 순서가 섞인 자식 계층을 읽기 전용으로 발견하고 다른 Worktree는 제외한다', async (t) => {
+  const { service, calls } = await setup(t)
+  const workspace = (await service.all())[0].workspace
+  const root = {
+    id: 'cli-thread', cwd: workspace, source: 'cli', name: 'CLI 작업',
+    updatedAt: 100, status: { type: 'notLoaded' },
+    turns: [{ id: 'cli-turn', status: 'inProgress', items: [
+      { id: 'cli-prompt', type: 'userMessage', content: [{ type: 'text', text: '분석해 주세요.' }] },
+      { id: 'cli-reply', type: 'agentMessage', text: '분석 중입니다.' },
+      { id: 'cli-command', type: 'commandExecution', command: 'npm test', aggregatedOutput: '검증 출력', status: 'inProgress' },
+    ] }],
+  }
+  const child = {
+    id: 'cli-child', cwd: join(workspace, '..', 'child-worktree'), parentThreadId: root.id,
+    agentNickname: '조사 담당', agentRole: 'worker', updatedAt: 101,
+    canAcceptDirectInput: true, status: { type: 'notLoaded' },
+    turns: [{ id: 'child-turn', status: 'completed', items: [
+      { id: 'child-answer', type: 'agentMessage', text: '조사 완료' },
+    ] }],
+  }
+  const nested = {
+    id: 'cli-nested', cwd: workspace,
+    source: { subAgent: { thread_spawn: { parent_thread_id: child.id } } },
+    status: { type: 'notLoaded' }, turns: [],
+  }
+  const threads = new Map([root, child, nested].map((item) => [item.id, item]))
+  service.client.request = async <T>(method: string, params: Record<string, unknown>) => {
+    calls.push({ method, params })
+    if (method === 'thread/list') return { data: params.ancestorThreadId
+      ? [nested, child, { id: 'unrelated-child', parentThreadId: 'other-root', cwd: workspace }]
+      : [root, { ...root, id: 'other-worktree', cwd: join(workspace, '..', 'other') }], nextCursor: null } as T
+    if (method === 'thread/read') return { thread: threads.get(String(params.threadId)) } as T
+    throw new Error(`Unexpected method: ${method}`)
+  }
+  await service.observeWorkspace(workspace)
+  await service.observeWorkspace(workspace)
+  const sessions = await service.all()
+  assert.equal(sessions.length, 4)
+  const observed = sessions.find((item) => item.threadId === root.id)!
+  assert.equal(observed.id, 'cli-cli-thread')
+  assert.equal(observed.status, 'running')
+  assert.equal(observed.updatedAt, 100_000)
+  assert.deepEqual(observed.messages.map((item) => item.text), ['분석해 주세요.', '분석 중입니다.', 'npm test'])
+  assert.equal(observed.messages[2].detail, '검증 출력')
+  const observedChild = sessions.find((item) => item.threadId === child.id)!
+  assert.equal(observedChild.parentSessionId, observed.id)
+  assert.equal(observedChild.nickname, '조사 담당')
+  assert.equal(observedChild.workspace, child.cwd)
+  assert.equal(observedChild.status, 'completed')
+  assert.equal(observedChild.messages[0].text, '조사 완료')
+  assert.equal(sessions.find((item) => item.threadId === nested.id)!.parentSessionId, observedChild.id)
+  assert.ok(sessions.filter((item) => item.id !== 'parent').every((item) => item.canAcceptDirectInput === false))
+  assert.ok(calls.every((call) => call.method !== 'thread/resume'))
+  assert.ok(calls.filter((call) => call.method === 'thread/read').every((call) => call.params.includeTurns === true))
+  await service.inspectSubagent(observed.id)
+  await assert.rejects(service.sendSubagentMessage(observedChild.id, '추가 지시'), /직접 지시/)
+  await assert.rejects(service.send({ sessionId: observed.id, workspace, text: '직접 시작' }), /Codex 터미널/)
+  await assert.rejects(service.interrupt(observedChild.id), /Codex 터미널/)
+})
+
+test('CLI 관측은 동시 조회를 합치고 페이지를 끝까지 읽으며 실패를 실행 실패로 바꾸지 않는다', async (t) => {
+  const { service, calls } = await setup(t)
+  const workspace = (await service.all())[0].workspace
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  const root = {
+    id: 'paged-cli', cwd: workspace, source: 'cli',
+    status: { type: 'notLoaded' },
+    turns: [{ id: 'turn', status: 'inProgress', items: [] }],
+  }
+  let fail = false
+  service.client.request = async <T>(method: string, params: Record<string, unknown>) => {
+    calls.push({ method, params })
+    if (fail) throw new Error('관측 연결 실패')
+    await gate
+    if (method === 'thread/read') return { thread: root } as T
+    if (params.ancestorThreadId) return { data: [] } as T
+    return (params.cursor ? { data: [root] } : { data: [], nextCursor: 'second-page' }) as T
+  }
+  const first = service.observeWorkspace(workspace)
+  const second = service.observeWorkspace(workspace)
+  release()
+  await Promise.all([first, second])
+  assert.equal(calls.filter((call) => call.method === 'thread/list' && !call.params.ancestorThreadId).length, 2)
+  const observed = (await service.all()).find((item) => item.threadId === root.id)!
+  assert.equal(observed.status, 'running')
+  fail = true
+  await assert.rejects(service.observeWorkspace(workspace), /관측 연결 실패/)
+  assert.equal(observed.status, 'running')
+  assert.equal(observed.observationError, '관측 연결 실패')
+  service.client.onDisconnect('관측 서버 종료')
+  assert.equal(observed.status, 'running')
+  assert.equal(observed.observationError, '관측 서버 종료')
+  fail = false
+  await service.observeWorkspace(workspace)
+  assert.equal(observed.observationError, undefined)
+})
+
+test('저장한 CLI 계층은 재시작 후에도 resume하지 않고 read로 조회한다', async (t) => {
+  const { service, file } = await setup(t)
+  const workspace = (await service.all())[0].workspace
+  const root = { id: 'stored-cli', cwd: workspace, source: 'cli', turns: [] }
+  service.client.request = async <T>(method: string, params: Record<string, unknown>) => {
+    if (method === 'thread/read') return { thread: root } as T
+    return { data: params.ancestorThreadId ? [] : [root] } as T
+  }
+  await service.observeWorkspace(workspace)
+  await service.close()
+  const restored = new AgentService(file, () => {})
+  t.after(() => restored.close())
+  restored.client.start = async () => {}
+  restored.client.stop = () => {}
+  restored.client.request = async <T>(method: string) => {
+    assert.equal(method, 'thread/read')
+    return { thread: root } as T
+  }
+  await restored.inspectSubagent('cli-stored-cli')
+  assert.equal((await restored.all()).find((item) => item.threadId === root.id)!.canAcceptDirectInput, false)
+})
+
+test('CLI 원본 rollout으로 진행 상태를 복구하고 부분 기록은 다음 조회까지 보존한다', async (t) => {
+  const { service } = await setup(t)
+  const workspace = (await service.all())[0].workspace
+  const path = join(workspace, 'rollout.jsonl')
+  const event = (type: string) => JSON.stringify({
+    timestamp: '2026-11-06T15:00:00Z',
+    type: 'event_msg', payload: { type, turn_id: 'live-cli-turn', text: '한글 기록' },
+  })
+  const completion = event('task_complete')
+  await writeFile(path, `${event('task_started')}\ninvalid-json\n${completion.slice(0, -5)}`, 'utf8')
+  const root = {
+    id: 'live-cli', cwd: workspace, source: 'cli', path,
+    status: { type: 'notLoaded' },
+    turns: [{ id: 'live-cli-turn', status: 'interrupted', items: [] }],
+  }
+  service.client.request = async <T>(method: string, params: Record<string, unknown>) =>
+    (method === 'thread/read' ? { thread: root }
+      : { data: params.ancestorThreadId ? [] : [root] }) as T
+  await service.observeWorkspace(workspace)
+  const observed = (await service.all()).find((item) => item.threadId === root.id)!
+  assert.equal(observed.status, 'running')
+  assert.equal(observed.turnId, 'live-cli-turn')
+  await appendFile(path, completion.slice(-5), 'utf8')
+  await service.observeWorkspace(workspace)
+  assert.equal(observed.status, 'running')
+  await appendFile(path, '\n', 'utf8')
+  await service.observeWorkspace(workspace)
+  assert.equal(observed.status, 'completed')
+  await appendFile(path, `${event('task_started')}\n${event('turn_aborted')}\n`, 'utf8')
+  await service.observeWorkspace(workspace)
+  assert.equal(observed.status, 'interrupted')
+  // 로그가 회전하거나 잘려도 이전 파일의 상태를 재사용하지 않습니다.
+  await writeFile(path, `${event('task_started')}\n`, 'utf8')
+  await service.observeWorkspace(workspace)
+  assert.equal(observed.status, 'running')
+})
+
+test('CLI 관측의 활성 상태와 조회 중 작업은 Worktree 삭제를 차단하지 않는다', async (t) => {
+  const { service } = await setup(t)
+  const workspace = (await service.all())[0].workspace
+  const root = {
+    id: 'external-running', cwd: workspace, source: 'cli',
+    updatedAt: Date.now() / 1000 - 10,
+    turns: [{ id: 'turn', status: 'inProgress', items: [] }],
+  }
+  service.client.request = async <T>(method: string, params: Record<string, unknown>) =>
+    (method === 'thread/read' ? { thread: root }
+      : { data: params.ancestorThreadId ? [] : [root] }) as T
+  await service.observeWorkspace(workspace)
+  const observed = (await service.all()).find((item) => item.threadId === root.id)!
+  await service.terminalExited(workspace)
+  assert.equal(observed.status, 'running')
+  assert.match(observed.observationError!, /현재 실행 여부/)
+  await service.inspectSubagent(observed.id)
+  assert.match(observed.observationError!, /현재 실행 여부/)
+  root.updatedAt = Date.now() / 1000 + 1
+  await service.inspectSubagent(observed.id)
+  assert.equal(observed.status, 'running')
+  assert.equal(observed.observationError, undefined)
+
+  let release!: () => void
+  let entered!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  const started = new Promise<void>((resolve) => { entered = resolve })
+  service.client.request = async <T>() => {
+    entered()
+    await gate
+    return { thread: root } as T
+  }
+  const inspection = service.inspectSubagent(observed.id)
+  await started
+  let removed = false
+  await service.removeWorkspace(workspace, async () => { removed = true })
+  assert.equal(removed, true)
+  assert.equal(observed.status, 'running')
+  release()
+  await inspection
+  assert.deepEqual(await service.all(), [])
+})
+
+test('삭제와 경합한 CLI 목록 조회는 삭제 완료 후 세션을 다시 생성하지 않는다', async (t) => {
+  const { service } = await setup(t)
+  const workspace = (await service.all())[0].workspace
+  let release!: () => void
+  let entered!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  const started = new Promise<void>((resolve) => { entered = resolve })
+  service.client.request = async <T>(method: string) => {
+    assert.equal(method, 'thread/list')
+    entered()
+    await gate
+    return { data: [{ id: 'late-cli', cwd: workspace, source: 'cli' }] } as T
+  }
+  const observation = service.observeWorkspace(workspace)
+  await started
+  await service.removeWorkspace(workspace, async () => {})
+  release()
+  await observation
+  assert.deepEqual(await service.all(), [])
+})
+
+test('CLI 자식 조회 도중 삭제되면 남은 자식 목록을 다시 연결하지 않는다', async (t) => {
+  const { service } = await setup(t)
+  const workspace = (await service.all())[0].workspace
+  const root = { id: 'deleting-cli', cwd: workspace, source: 'cli', turns: [] }
+  const children = ['child-a', 'child-b'].map((id) => ({
+    id, cwd: workspace, parentThreadId: root.id, turns: [],
+  }))
+  let release!: () => void
+  let entered!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  const started = new Promise<void>((resolve) => { entered = resolve })
+  service.client.request = async <T>(method: string, params: Record<string, unknown>) => {
+    if (method === 'thread/list')
+      return { data: params.ancestorThreadId ? children : [root] } as T
+    if (params.threadId === root.id) return { thread: root } as T
+    assert.equal(params.threadId, 'child-b')
+    entered()
+    await gate
+    return { thread: children[1] } as T
+  }
+  const observation = service.observeWorkspace(workspace)
+  await started
+  await service.removeWorkspace(workspace, async () => {})
+  release()
+  await observation
+  assert.deepEqual(await service.all(), [])
 })

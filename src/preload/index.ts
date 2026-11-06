@@ -14,6 +14,8 @@ const api: DesktopApi = {
     ipcRenderer.invoke('terminal:resize', id, cols, rows),
   closeTerminal: (id) => ipcRenderer.invoke('terminal:close', id),
   terminalSnapshot: (id) => ipcRenderer.invoke('terminal:snapshot', id),
+  inspectProcesses: (workspace) => ipcRenderer.invoke('process:inspect', workspace),
+  stopProcess: (input) => ipcRenderer.invoke('process:stop', input),
   onTerminal: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, event: TerminalEvent) =>
       listener(event)
@@ -65,7 +67,7 @@ const api: DesktopApi = {
       ipcRenderer.removeListener('codex:usage-changed', receive)
     }
   },
-  listSessions: () => ipcRenderer.invoke('codex:sessions'),
+  listSessions: (workspace) => ipcRenderer.invoke('codex:sessions', workspace),
   sendMessage: (input) => ipcRenderer.invoke('codex:send', input),
   interruptSession: (id) => ipcRenderer.invoke('codex:interrupt', id),
   inspectSubagent: (id) => ipcRenderer.invoke('codex:subagent-inspect', id),

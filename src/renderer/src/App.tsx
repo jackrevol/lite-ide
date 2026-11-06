@@ -29,6 +29,9 @@ import { SidebarActionMenu } from './components/SidebarActionMenu'
 import { WorkspacePanels } from './components/WorkspacePanels'
 import { TaskTabs } from './components/TaskTabs'
 import { TaskTerminal } from './components/TaskTerminal'
+import { SessionTab } from './components/SessionTab'
+import { ProcessPanel } from './components/ProcessPanel'
+import { workspaceSessions } from './lib/workspace-sessions'
 import { AppUpdateButton } from './components/AppUpdateButton'
 import { NewTaskDialog } from './components/NewTaskDialog'
 import { SettingsDialog, projectSettingsKey } from './components/SettingsDialog'
@@ -39,6 +42,7 @@ import {
   type WorkspaceTask,
 } from './lib/workspace-state'
 import type {
+  AgentSession,
   CodexStatus,
   Project,
   ProjectDefaults,
@@ -118,9 +122,53 @@ export function App() {
   const taskDialog = useRef<HTMLDialogElement>(null)
   const current = state.tasks.find((task) => task.id === state.taskId)
   const project = projects.find((item) => item.path === state.project)
-  const projectTasks = state.tasks.filter(
-    (task) => task.project === state.project,
-  )
+  const [sessions, setSessions] = useState<Record<string, AgentSession>>({})
+  const [sessionError, setSessionError] = useState('')
+  const [selectedTabs, setSelectedTabs] = useState<Record<string, string>>({})
+  const [sessionDrafts, setSessionDrafts] = useState<Record<string, string>>({})
+  const visibleSessions = workspaceSessions(Object.values(sessions), current?.path ?? '', window.desktop.platform)
+  const selectedSession = visibleSessions.find((session) => `session-${session.id}` === selectedTabs[current?.id ?? ''])
+  const selectedTab = selectedSession ? `session-${selectedSession.id}` : current?.id
+
+  useEffect(() => window.desktop.onSession((session) => {
+    setSessions((previous) => ({ ...previous, [session.id]: session }))
+  }), [])
+  useEffect(() => window.desktop.onTerminal((event) => {
+    if (event.type !== 'exit') return
+    setTerminals((previous) => {
+      const terminal = previous[event.taskId]
+      if (!terminal || terminal.generation !== event.generation) return previous
+      return { ...previous, [event.taskId]: { ...terminal, running: false, exitCode: event.exitCode } }
+    })
+  }), [])
+  useEffect(() => {
+    if (!ready || !current) return
+    let disposed = false
+    let pending = false
+    setSessionError('')
+    const inspect = async () => {
+      if (pending) return
+      pending = true
+      try {
+        const found = await window.desktop.listSessions(current.path)
+        if (!disposed) {
+          setSessions((previous) => {
+            const next = { ...previous }
+            for (const session of found) {
+              if (!next[session.id] || next[session.id].updatedAt <= session.updatedAt) next[session.id] = session
+            }
+            return next
+          })
+          setSessionError('')
+        }
+      } catch (cause) {
+        if (!disposed) setSessionError(errorText(cause))
+      } finally { pending = false }
+    }
+    void inspect()
+    const timer = setInterval(() => { if (!document.hidden) void inspect() }, 4000)
+    return () => { disposed = true; clearInterval(timer) }
+  }, [ready, current?.path])
 
   const reconnect = useCallback(async () => {
     setConnecting(true)
@@ -171,6 +219,7 @@ export function App() {
         )
         if (disposed) return
         setProjects(opened)
+        setSessions((previous) => ({ ...Object.fromEntries(legacy.map((session) => [session.id, session])), ...previous }))
         setRepositories(Object.fromEntries(snapshots))
         setState((previous) => {
           const tasks = previous.tasks
@@ -665,15 +714,22 @@ export function App() {
               aria-label="작업 터미널 영역"
             >
               <TaskTabs
-                tasks={projectTasks.map((task) => ({
-                  id: task.id,
-                  title: task.name,
-                  active: !!terminals[task.id]?.running,
-                }))}
-                selected={current?.id}
+                tasks={current ? [{
+                  id: current.id,
+                  title: current.name,
+                  active: !!terminals[current.id]?.running,
+                  kind: 'terminal' as const,
+                  detail: `${current.path} · 터미널`,
+                }, ...visibleSessions.map((session) => ({
+                  id: `session-${session.id}`,
+                  title: `${session.parentSessionId ? '서브 · ' : '세션 · '}${session.nickname || session.title}`,
+                  active: session.status === 'running' || session.status === 'waiting',
+                  kind: session.parentSessionId ? 'subagent' as const : 'session' as const,
+                  detail: [session.title, session.task, session.role, session.model].filter(Boolean).join('\n'),
+                }))] : []}
+                selected={selectedTab}
                 onSelect={(id) => {
-                  const task = state.tasks.find((task) => task.id === id)
-                  if (task) selectTask(task)
+                  if (current) setSelectedTabs((previous) => ({ ...previous, [current.id]: id }))
                 }}
                 onAdd={() => void addTask()}
               />
@@ -681,14 +737,14 @@ export function App() {
                 id="agent-task-content"
                 className="agent-task-content"
                 role="tabpanel"
-                aria-labelledby={current ? `task-tab-${current.id}` : undefined}
+                aria-labelledby={selectedTab ? `task-tab-${selectedTab}` : undefined}
               >
                 <div className="agent-heading terminal-heading">
                   <div className="heading-title">
                     <Terminal size={15} />
-                    <h1>{current?.name ?? '작업 터미널'}</h1>
+                    <h1>{selectedSession?.title ?? current?.name ?? '작업 터미널'}</h1>
                   </div>
-                  {current && (
+                  {current && !selectedSession && (
                     <div className="terminal-controls">
                       <button
                         aria-label="Codex 터미널"
@@ -747,7 +803,10 @@ export function App() {
                     </button>
                   </div>
                 )}
+                {sessionError && <div className="session-observation-error" role="status">세션 관찰 실패: {sessionError}</div>}
                 {current && ready ? (
+                  <>
+                  <div className="terminal-slot" hidden={!!selectedSession}>
                   <TaskTerminal
                     key={current.id}
                     task={current}
@@ -769,6 +828,16 @@ export function App() {
                       }))
                     }
                   />
+                  </div>
+                  {selectedSession && <SessionTab key={selectedSession.id} session={selectedSession}
+                    draft={sessionDrafts[selectedSession.id] ?? ''}
+                    setDraft={(value) => setSessionDrafts((previous) => ({
+                      ...previous,
+                      [selectedSession.id]: typeof value === 'function' ? value(previous[selectedSession.id] ?? '') : value,
+                    }))}
+                  />}
+                  <ProcessPanel key={current.path} workspace={current.path} />
+                  </>
                 ) : (
                   <div className="welcome">
                     <div className="welcome-icon">

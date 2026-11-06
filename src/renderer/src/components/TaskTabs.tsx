@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { Code2, Plus } from 'lucide-react'
+import { Bot, Code2, Plus, Terminal } from 'lucide-react'
 
 export function TaskTabs({
   tasks,
@@ -7,7 +7,7 @@ export function TaskTabs({
   onSelect,
   onAdd,
 }: {
-  tasks: { id: string; title: string; active: boolean }[]
+  tasks: { id: string; title: string; active: boolean; kind?: 'terminal' | 'session' | 'subagent'; detail?: string }[]
   selected?: string
   onSelect: (id: string) => void
   onAdd: () => void
@@ -37,7 +37,7 @@ export function TaskTabs({
             tabIndex={
               selected === task.id || (!selected && index === 0) ? 0 : -1
             }
-            title={task.title}
+            title={task.detail || task.title}
             onClick={() => onSelect(task.id)}
             onKeyDown={(event) => {
               const next =
@@ -58,10 +58,10 @@ export function TaskTabs({
                 [next]?.focus()
             }}
           >
-            <Code2 size={13} />
+            {task.kind === 'subagent' ? <Bot size={13} /> : task.kind === 'terminal' ? <Terminal size={13} /> : <Code2 size={13} />}
             <span>{task.title}</span>
             {task.active && (
-              <span className="tab-running-dot" aria-label="터미널 실행 중" />
+              <span className="tab-running-dot" aria-label="실행 중" />
             )}
           </button>
         ))}

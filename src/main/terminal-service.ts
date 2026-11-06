@@ -3,10 +3,12 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { findCodex } from './codex-client.ts'
 import { pathKey } from './git.ts'
+import { ProcessService, type TerminalProcessRoot } from './process-service.ts'
 import type {
   TerminalEvent,
   TerminalOpen,
   TerminalSnapshot,
+  StopProcessInput,
 } from '../shared/types.ts'
 
 const outputLimit = 2_000_000
@@ -29,6 +31,7 @@ export class TerminalService {
   private emit: (event: TerminalEvent) => void
   private spawn: PtyFactory
   private codex: () => Promise<string>
+  private processes = new ProcessService()
 
   constructor(
     file: string,
@@ -190,6 +193,8 @@ export class TerminalService {
       env,
     })
     terminal.process = child
+    terminal.pid = child.pid
+    terminal.startedAt = Date.now()
     this.terminals.set(input.taskId, terminal)
     const data = child.onData((chunk) => {
       terminal.output = (terminal.output + chunk).slice(-outputLimit)
@@ -206,6 +211,7 @@ export class TerminalService {
         terminal.running = false
         terminal.exitCode = exitCode
         terminal.process = undefined
+        this.processes.forget(terminal.generation)
         this.emit({
           taskId: input.taskId,
           generation: terminal.generation,
@@ -218,6 +224,15 @@ export class TerminalService {
         resolve()
       })
     })
+    if (Number.isSafeInteger(child.pid) && child.pid > 0) {
+      await this.processes.register({
+        taskId: terminal.taskId,
+        generation: terminal.generation,
+        workspace: terminal.workspace,
+        pid: child.pid,
+      }).catch(() => {})
+      if (!terminal.running) this.processes.forget(terminal.generation)
+    }
     if (input.kind === 'codex') {
       this.resumed.add(pathKey(input.workspace))
       this.persistResume()
@@ -257,6 +272,10 @@ export class TerminalService {
   async stop(id: string) {
     const terminal = this.terminals.get(id)
     if (!terminal?.process) return
+    const root = this.processRoots().find((root) => root.generation === terminal.generation)
+    if (root)
+      await this.processes.stopDescendants(root, () => this.processRoots()).catch(() => {})
+    if (!terminal.process) return
     terminal.process.kill()
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
@@ -277,6 +296,29 @@ export class TerminalService {
     } finally {
       if (timer) clearTimeout(timer)
     }
+  }
+
+  private processRoots(workspace?: string): TerminalProcessRoot[] {
+    return [...this.terminals.values()].flatMap((terminal) =>
+      terminal.running && terminal.process && Number.isSafeInteger(terminal.pid) && terminal.pid! > 0 &&
+      (!workspace || pathKey(terminal.workspace) === pathKey(workspace))
+        ? [{ taskId: terminal.taskId, generation: terminal.generation, workspace: terminal.workspace, pid: terminal.pid! }]
+        : [],
+    )
+  }
+
+  inspectProcesses(workspace: string) {
+    return this.processes.inspect(workspace, this.processRoots(workspace))
+  }
+
+  async stopProcess(input: StopProcessInput) {
+    await this.processes.stop(() => this.processRoots(input.workspace), input, async () => {
+      const terminal = this.terminals.get(input.taskId)
+      if (terminal?.generation !== input.generation)
+        throw new Error('터미널이 변경되었습니다. 목록을 새로 고쳐 주세요.')
+      await this.stop(input.taskId)
+    })
+    return this.inspectProcesses(input.workspace)
   }
 
   async removeWorkspace<T>(

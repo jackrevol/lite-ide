@@ -313,6 +313,29 @@ try {
         )
       : [2, 5, 6].map((modifier) => `\x1b[13;${modifier}u`)
     assert.deepEqual(keys, [...sequences, '\r'].map((data) => ({ id: first.id, data })))
+    // IME 확정과 Enter가 같은 이벤트 루프에서 발생해도 한글을 먼저 한 번만 전송합니다.
+    for (const [modifiers, expected] of [
+      [{ shiftKey: true }, sequences[0]],
+      [{ ctrlKey: true }, sequences[1]],
+      [{}, '\r'],
+    ]) {
+      await app.evaluate(() => { globalThis.terminalKeyWrites = [] })
+      await page.getByLabel('작업 터미널 입력').evaluate(async (input, modifiers) => {
+        input.value = ''
+        input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' }))
+        input.dispatchEvent(new CompositionEvent('compositionupdate', { bubbles: true, data: '한글' }))
+        input.value = '한글'
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '한글' }))
+        input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', code: 'Enter', keyCode: 13, which: 13, ...modifiers }))
+        input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13, which: 13, ...modifiers }))
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }, modifiers)
+      const writes = await app.evaluate(() => globalThis.terminalKeyWrites)
+      assert.deepEqual(writes.filter((entry) => entry.data), [
+        { id: first.id, data: '한글' }, { id: first.id, data: expected },
+      ], '한글 확정 후 Enter 순서 및 마지막 글자 중복 방지')
+    }
   } finally {
     await app.evaluate(({ ipcMain }) => {
       ipcMain.removeHandler('terminal:write')
@@ -345,6 +368,14 @@ try {
   await page.keyboard.press('Control+c')
   await waitOutput(first.id, 'INTERRUPTED')
   assert.equal((await snapshot(first.id)).running, true)
+  await page.keyboard.press('Control+f')
+  await page.getByLabel('터미널 검색어').fill(unique)
+  await page.waitForFunction(() => document.querySelector('.terminal-search-count')?.textContent.includes('1 / 1'))
+  await page.getByLabel('터미널 검색어').press('Escape')
+  const oldCols = (await snapshot(first.id)).cols
+  await page.getByRole('button', { name: '터미널 글자 확대', exact: true }).click()
+  await until(async () => (await snapshot(first.id)).cols < oldCols, '터미널 확대에 맞춰 PTY 크기 갱신')
+  await page.getByRole('button', { name: /글자 크기 .*기본값으로 복원/ }).click()
   // 출력이 진행되는 동안 새로 붙어도 스냅샷과 이벤트를 중복 렌더링하지 않습니다.
   await page.reload()
   await readyTerminal()
@@ -388,15 +419,44 @@ try {
   }, project), 'refs/heads/settings-base')
   await windowWrite(first.id, 'BACKGROUND_ONCE\r')
   await waitOutput(first.id, 'BACKGROUND_ONCE')
-  await page
-    .getByRole('tablist', { name: '작업 탭' })
-    .getByRole('tab')
-    .nth(0)
-    .click()
+  const workTabs = page.getByRole('tablist', { name: '작업 탭' })
+  assert.equal(await workTabs.getByRole('tab').count(), 1)
+  assert.equal(await workTabs.getByRole('tab', { name: new RegExp(first.name) }).count(), 0)
+  // 다른 Worktree로의 이동은 사이드바에서 수행하며 탭에는 현재 작업만 남습니다.
+  await page.locator('.task-row').and(page.getByTitle(first.path, { exact: true })).click()
   await readyTerminal()
   await waitScreen('BACKGROUND_ONCE')
   assert.equal((await terminalText()).split('BACKGROUND_ONCE').length - 1, 1)
   assert.equal((await snapshot(first.id)).generation, firstGeneration)
+  await app.evaluate(({ BrowserWindow }, { workspace, other }) => {
+    const web = BrowserWindow.getAllWindows()[0].webContents
+    const session = { workspace, title: '관찰 세션', id: 'ui-session', status: 'running', messages: [{ id: 'message', kind: 'assistant', text: '실제 세션 본문 표시' }], requests: [], updatedAt: Date.now(), canAcceptDirectInput: false }
+    web.send('codex:session', session)
+    web.send('codex:session', { ...session, id: 'ui-child', title: '검증 서브에이전트', parentSessionId: session.id, task: '서브에이전트 작업 설명', messages: [{ id: 'child-message', kind: 'assistant', text: '서브에이전트 실행 결과' }] })
+    web.send('codex:session', { ...session, id: 'ui-other', title: '다른 워크트리 세션', workspace: other })
+  }, { workspace: first.path, other: second.path })
+  await workTabs.getByRole('tab', { name: /검증 서브에이전트/ }).click()
+  await page.getByText('서브에이전트 실행 결과', { exact: true }).waitFor()
+  assert.equal(await page.getByText('서브에이전트 작업 설명', { exact: true }).count(), 1)
+  assert.equal(await workTabs.getByRole('tab', { name: /다른 워크트리 세션/ }).count(), 0)
+  assert.equal(await page.getByLabel('세션 추가 지시').count(), 0)
+  await workTabs.getByRole('tab', { name: /관찰 세션/ }).click()
+  await page.getByText('실제 세션 본문 표시', { exact: true }).waitFor()
+  await workTabs.getByRole('tab', { name: new RegExp(first.name) }).click()
+  assert.equal((await snapshot(first.id)).generation, firstGeneration)
+  await command('/child')
+  await waitOutput(first.id, 'CHILD_PID:')
+  const childPid = Number((await snapshot(first.id)).output.match(/CHILD_PID:(\d+)/)[1])
+  await page.getByRole('button', { name: '프로세스', exact: true }).click()
+  await page.getByRole('button', { name: `프로세스 ${childPid} 종료`, exact: true }).waitFor()
+  const processes = await page.evaluate((path) => window.desktop.inspectProcesses(path), first.path)
+  assert.ok(processes.processes.some((process) => process.root && process.taskId === first.id))
+  assert.ok(processes.processes.every((process) => process.taskId === first.id))
+  await page.getByRole('button', { name: `프로세스 ${childPid} 종료`, exact: true }).click()
+  await page.getByRole('button', { name: '프로세스 종료 확인', exact: true }).click()
+  await waitOutput(first.id, `CHILD_EXIT:${childPid}`)
+  assert.equal((await snapshot(first.id)).running, true)
+  await page.locator('.process-panel-heading > button').first().click()
   await taskAction(first, '이름 변경')
   const rename = page.getByRole('dialog', {
     name: '작업 이름 변경',

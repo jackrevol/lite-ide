@@ -2193,3 +2193,69 @@ dialog::backdrop {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+.terminal-slot, .session-tab-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.terminal-slot[hidden] { display: none; }
+.session-tab-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.session-tab-task {
+  max-height: 90px;
+  overflow: auto;
+  padding: 10px 14px;
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.session-tab-note, .session-observation-error, .session-tab-empty {
+  padding: 10px 14px;
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.session-tab-empty { flex: 1; }
+.session-tab-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid var(--border);
+}
+.session-tab-composer textarea {
+  flex: 1;
+  min-width: 0;
+  padding: 8px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.process-panel { flex-shrink: 0; border-top: 1px solid var(--border); }
+.process-panel-heading { display: flex; justify-content: space-between; padding: 4px 10px; }
+.process-panel-heading > button:first-child { display: flex; align-items: center; gap: 7px; font-size: 11px; }
+.process-panel-heading > button:first-child span { color: var(--muted-foreground); }
+.process-panel-body { max-height: 230px; overflow: auto; padding: 0 10px 8px; }
+.process-scope, .process-empty { font-size: 10px; color: var(--muted-foreground); margin: 5px 0 8px; }
+.process-table-scroll { overflow: auto; }
+.process-table { border-collapse: collapse; width: 100%; table-layout: fixed; font-size: 10px; }
+.process-table th { text-align: left; color: var(--muted-foreground); font-weight: 500; }
+.process-table th, .process-table td { padding: 5px; border-bottom: 1px solid var(--border); }
+.process-table th:first-child { width: 86px; }
+.process-table th:nth-child(3) { width: 68px; }
+.process-table th:last-child { width: 62px; }
+.process-table td small { display: block; color: var(--muted-foreground); font-size: 9px; }
+.process-table code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
+.process-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 0; font-size: 11px; }

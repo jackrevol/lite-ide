@@ -1,4 +1,5 @@
 import { writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
 process.stdin.setRawMode(true)
 process.stdin.setEncoding('utf8')
 process.stdout.write(
@@ -9,7 +10,11 @@ let input = '',
 const prompt = () => process.stdout.write('codex> ')
 function run(command) {
   if (command === '/exit') process.exit(0)
-  if (command === '/help')
+  if (command === '/child') {
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { windowsHide: true, stdio: 'ignore' })
+    process.stdout.write(`CHILD_PID:${child.pid}\r\n`)
+    child.on('exit', () => process.stdout.write(`CHILD_EXIT:${child.pid}\r\n`))
+  } else if (command === '/help')
     process.stdout.write(
       'Commands: /help /model /status /slow /exit · ! shell\r\n',
     )

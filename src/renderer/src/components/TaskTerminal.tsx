@@ -1,6 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import {
+  ArrowDown,
+  ChevronDown,
+  ChevronUp,
+  ClipboardPaste,
+  Copy,
+  Eraser,
+  Minus,
+  Plus,
+  Search,
+  X,
+} from 'lucide-react'
+import './TaskTerminal.css'
 import '@xterm/xterm/css/xterm.css'
 import type { TerminalEvent, TerminalSnapshot } from '../../../shared/types'
 import type { WorkspaceTask } from '../lib/workspace-state'
@@ -19,6 +32,83 @@ export function TaskTerminal({
 }) {
   const host = useRef<HTMLDivElement>(null)
   const terminal = useRef<Terminal | null>(null)
+  const resizeTerminal = useRef<() => void>(() => {})
+  const searchInput = useRef<HTMLInputElement>(null)
+  const searchQuery = useRef('')
+  const searchIndex = useRef(-1)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [searchResult, setSearchResult] = useState({ index: 0, count: 0 })
+  const [fontSize, setFontSize] = useState(13)
+  const fontSizeRef = useRef(fontSize)
+  fontSizeRef.current = fontSize
+  const [connected, setConnected] = useState(false)
+  const [hasSelection, setHasSelection] = useState(false)
+  const [atBottom, setAtBottom] = useState(true)
+  const [message, setMessage] = useState('')
+  const messageTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const notify = (text: string) => {
+    setMessage(text)
+    clearTimeout(messageTimer.current)
+    messageTimer.current = setTimeout(() => setMessage(''), 3500)
+  }
+  const search = (value: string, direction: number) => {
+    const term = terminal.current
+    if (!term) return
+    const matches = terminalMatches(term, value)
+    let index = -1
+    if (matches.length) {
+      index = searchIndex.current < 0
+        ? direction < 0 ? matches.length - 1 : 0
+        : (searchIndex.current + direction + matches.length) % matches.length
+    }
+    searchIndex.current = index
+    setSearchResult({ index: index + 1, count: matches.length })
+    if (index >= 0) {
+      const match = matches[index]
+      term.select(match.column, match.row, match.length)
+      term.scrollToLine(Math.max(0, match.row - 2))
+    } else term.clearSelection()
+  }
+  const openSearch = () => {
+    setSearchOpen(true)
+    requestAnimationFrame(() => {
+      searchInput.current?.focus()
+      searchInput.current?.select()
+    })
+  }
+  const closeSearch = () => {
+    setSearchOpen(false)
+    setQuery('')
+    searchQuery.current = ''
+    searchIndex.current = -1
+    setSearchResult({ index: 0, count: 0 })
+    terminal.current?.clearSelection()
+    terminal.current?.focus()
+  }
+  const copySelection = async () => {
+    const text = terminal.current?.getSelection()
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      notify('선택한 내용을 복사했습니다.')
+    } catch (cause) {
+      notify(`복사하지 못했습니다: ${String(cause)}`)
+    }
+  }
+  const pasteClipboard = async () => {
+    const term = terminal.current
+    if (!term || !connected) return
+    try {
+      const text = await navigator.clipboard.readText()
+      if (terminal.current === term) {
+        term.paste(text)
+        term.focus()
+      }
+    } catch (cause) {
+      notify(`붙여넣지 못했습니다: ${String(cause)}`)
+    }
+  }
   const callbacks = useRef({ onStatus, onDraftUsed })
   callbacks.current = { onStatus, onDraftUsed }
   const [attempt, setAttempt] = useState(0)
@@ -30,16 +120,33 @@ export function TaskTerminal({
   }, [theme])
 
   useEffect(() => {
+    if (terminal.current) {
+      terminal.current.options.fontSize = fontSize
+      resizeTerminal.current()
+    }
+  }, [fontSize])
+
+  useEffect(() => () => clearTimeout(messageTimer.current), [])
+
+  useEffect(() => {
     if (!host.current) return
     let disposed = false
     let ready: TerminalSnapshot | undefined
     let pending: TerminalEvent[] = []
     let resizeTimer: ReturnType<typeof setTimeout> | undefined
+    let searchTimer: ReturnType<typeof setTimeout> | undefined
+    let modifiedEnter: string | undefined
     setError('')
     setExited(null)
+    setConnected(false)
+    setHasSelection(false)
+    setAtBottom(true)
+    setMessage('')
+    searchIndex.current = -1
+    setSearchResult({ index: 0, count: 0 })
     const term = new Terminal({
       fontFamily: '"Cascadia Code", "SFMono-Regular", Consolas, monospace',
-      fontSize: 13,
+      fontSize: fontSizeRef.current,
       lineHeight: 1.35,
       cursorBlink: true,
       scrollback: 10000,
@@ -61,7 +168,29 @@ export function TaskTerminal({
       for (const chunk of data.match(/[\s\S]{1,16384}/gu) ?? [])
         void window.desktop.writeTerminal(task.id, chunk).catch(report)
     }
-    const input = term.onData(write)
+    const input = term.onData((data) => {
+      // xterm이 한글 조합을 먼저 확정한 뒤 내보내는 Enter만 수정 키 시퀀스로 바꿉니다.
+      if (data === '\r' && modifiedEnter) {
+        const sequence = modifiedEnter
+        modifiedEnter = undefined
+        write(sequence)
+      } else write(data)
+    })
+    const selection = term.onSelectionChange(() => setHasSelection(term.hasSelection()))
+    const scroll = term.onScroll(() => {
+      const buffer = term.buffer.active
+      setAtBottom(buffer.viewportY >= buffer.baseY)
+    })
+    const parsed = term.onWriteParsed(() => {
+      if (!searchQuery.current) return
+      clearTimeout(searchTimer)
+      searchTimer = setTimeout(() => {
+        if (disposed || !searchQuery.current) return
+        const count = terminalMatches(term, searchQuery.current).length
+        searchIndex.current = Math.min(searchIndex.current, count - 1)
+        setSearchResult({ index: searchIndex.current + 1, count })
+      }, 150)
+    })
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown') return true
       if (
@@ -73,19 +202,26 @@ export function TaskTerminal({
         !event.isComposing &&
         event.keyCode !== 229
       ) {
-        // xterm의 기본 Enter 변환에서 사라지는 수정 키를 Codex에 전달합니다.
+        // false로 종료하면 xterm의 IME 확정을 건너뛰어 마지막 한글이 줄바꿈 뒤에 붙습니다.
+        // xterm의 조합 확정·키 처리 경로를 유지하고 onData에서 Enter만 치환합니다.
         event.preventDefault()
         if (window.desktop.platform === 'win32') {
-          // ConPTY가 수정 키를 유지하도록 Win32 키 누름·해제 이벤트를 보냅니다.
           const modifiers = (event.shiftKey ? 16 : 0) + (event.ctrlKey ? 8 : 0)
-          write(`\x1b[13;28;13;1;${modifiers};1_\x1b[13;28;13;0;${modifiers};1_`)
+          modifiedEnter = `\x1b[13;28;13;1;${modifiers};1_\x1b[13;28;13;0;${modifiers};1_`
         } else {
           const modifier = 1 + (event.shiftKey ? 1 : 0) + (event.ctrlKey ? 4 : 0)
-          write(`\x1b[13;${modifier}u`)
+          modifiedEnter = `\x1b[13;${modifier}u`
         }
-        return false
+        // 입력을 처리하지 않는 상태에서 다음 Enter에 수정 키가 남지 않게 합니다.
+        queueMicrotask(() => { modifiedEnter = undefined })
+        return true
       }
       if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+        if (event.key.toLowerCase() === 'f') {
+          event.preventDefault()
+          openSearch()
+          return false
+        }
         if (
           [',', 'k', 'n'].includes(event.key.toLowerCase()) ||
           (event.shiftKey && event.key.toLowerCase() === 'b')
@@ -127,6 +263,7 @@ export function TaskTerminal({
           .resizeTerminal(task.id, term.cols, term.rows)
           .catch(report)
     }
+    resizeTerminal.current = resize
     const observer = new ResizeObserver(() => {
       if (resizeTimer) clearTimeout(resizeTimer)
       resizeTimer = setTimeout(resize, 30)
@@ -147,6 +284,7 @@ export function TaskTerminal({
       if (event.type === 'data') term.write(event.data)
       else {
         ready.running = false
+        setConnected(false)
         ready.exitCode = event.exitCode
         setExited(event.exitCode)
         callbacks.current.onStatus({ ...ready })
@@ -171,6 +309,7 @@ export function TaskTerminal({
       .then((snapshot) => {
         if (disposed) return
         ready = { ...snapshot }
+        setConnected(snapshot.running)
         term.resize(snapshot.cols, snapshot.rows)
         term.write(snapshot.output, resize)
         for (const event of pending) receive(event)
@@ -186,6 +325,11 @@ export function TaskTerminal({
       host.current?.removeAttribute('data-terminal-ready')
       observer.disconnect()
       if (resizeTimer) clearTimeout(resizeTimer)
+      if (searchTimer) clearTimeout(searchTimer)
+      selection.dispose()
+      scroll.dispose()
+      parsed.dispose()
+      resizeTerminal.current = () => {}
       unsubscribe()
       input.dispose()
       term.dispose()
@@ -195,6 +339,51 @@ export function TaskTerminal({
 
   return (
     <div className="task-terminal">
+      <div className="terminal-toolbar" role="toolbar" aria-label="터미널 도구">
+        <span className="terminal-session-state" data-state={error ? 'error' : connected ? 'running' : exited !== null ? 'exited' : 'connecting'} role="status">
+          <i aria-hidden="true" />
+          {error ? '연결 오류' : connected ? '실행 중' : exited !== null ? '종료됨' : '연결 중'}
+        </span>
+        <div className="terminal-toolbar-actions">
+          <Button variant="ghost" size="icon-xs" title="터미널 검색 (Ctrl/Cmd+F)" aria-label="터미널 검색" aria-pressed={searchOpen} onClick={openSearch}><Search /></Button>
+          <Button variant="ghost" size="icon-xs" title="선택 내용 복사" aria-label="선택 내용 복사" disabled={!hasSelection} onClick={() => void copySelection()}><Copy /></Button>
+          <Button variant="ghost" size="icon-xs" title="클립보드 붙여넣기" aria-label="클립보드 붙여넣기" disabled={!connected} onClick={() => void pasteClipboard()}><ClipboardPaste /></Button>
+          <Button variant="ghost" size="icon-xs" title="화면 지우기 (현재 화면에만 적용)" aria-label="터미널 화면 지우기" onClick={() => {
+            terminal.current?.clear()
+            searchIndex.current = -1
+            setSearchResult({ index: 0, count: 0 })
+            notify('화면을 지웠습니다. 다시 연결하면 출력 기록이 복원됩니다.')
+            terminal.current?.focus()
+          }}><Eraser /></Button>
+          <Button variant="ghost" size="icon-xs" title="맨 아래로 이동" aria-label="터미널 맨 아래로 이동" disabled={atBottom} onClick={() => { terminal.current?.scrollToBottom(); terminal.current?.focus() }}><ArrowDown /></Button>
+          <span className="terminal-toolbar-divider" />
+          <Button variant="ghost" size="icon-xs" title="글자 축소" aria-label="터미널 글자 축소" disabled={fontSize <= 10} onClick={() => setFontSize((size) => Math.max(10, size - 1))}><Minus /></Button>
+          <button className="terminal-font-size" title="기본 글자 크기 (13px)로 복원" aria-label={`글자 크기 ${fontSize}px, 기본값으로 복원`} onClick={() => setFontSize(13)}>{fontSize}</button>
+          <Button variant="ghost" size="icon-xs" title="글자 확대" aria-label="터미널 글자 확대" disabled={fontSize >= 22} onClick={() => setFontSize((size) => Math.min(22, size + 1))}><Plus /></Button>
+        </div>
+      </div>
+      {searchOpen && (
+        <div className="terminal-search" role="search" aria-label="터미널 출력 검색">
+          <Search size={14} aria-hidden="true" />
+          <input ref={searchInput} aria-label="터미널 검색어" placeholder="출력 검색" value={query} onChange={(event) => {
+            const value = event.target.value
+            setQuery(value)
+            searchQuery.current = value
+            searchIndex.current = -1
+            search(value, 1)
+          }} onKeyDown={(event) => {
+            if (event.nativeEvent.isComposing || event.keyCode === 229) return
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              search(query, event.shiftKey ? -1 : 1)
+            } else if (event.key === 'Escape') closeSearch()
+          }} />
+          <span className="terminal-search-count" role="status">{query ? `${searchResult.index} / ${searchResult.count}` : '검색어 입력'}</span>
+          <Button variant="ghost" size="icon-xs" title="이전 결과 (Shift+Enter)" aria-label="이전 검색 결과" disabled={!query} onClick={() => search(query, -1)}><ChevronUp /></Button>
+          <Button variant="ghost" size="icon-xs" title="다음 결과 (Enter)" aria-label="다음 검색 결과" disabled={!query} onClick={() => search(query, 1)}><ChevronDown /></Button>
+          <Button variant="ghost" size="icon-xs" title="검색 닫기 (Esc)" aria-label="터미널 검색 닫기" onClick={closeSearch}><X /></Button>
+        </div>
+      )}
       {task.draft && (
         <div className="terminal-notice">
           <span>이전 화면에서 작성 중이던 입력이 보관되어 있습니다.</span>
@@ -223,6 +412,7 @@ export function TaskTerminal({
           </Button>
         </div>
       )}
+      {message && <div className="terminal-action-message" role="status">{message}</div>}
       <div className="terminal-footer">
         <span>
           {task.terminalKind === 'codex'
@@ -271,4 +461,49 @@ function palette(theme: string) {
         cyan: '#267785',
         white: '#f4f4f5',
       }
+}
+
+
+// 줄바꿈으로 감싼 출력도 이어서 찾고, 한글·이모지의 셀 너비로 선택 범위를 계산합니다.
+function terminalMatches(term: Terminal, query: string) {
+  const matches: { column: number; row: number; length: number }[] = []
+  if (!query) return matches
+  const expression = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')
+  const buffer = term.buffer.active
+  let text = ''
+  let positions: { start: number; end: number }[] = []
+  const collect = () => {
+    expression.lastIndex = 0
+    for (const match of text.matchAll(expression)) {
+      const start = positions[match.index]?.start
+      const end = positions[match.index + match[0].length - 1]?.end
+      if (start !== undefined && end !== undefined)
+        matches.push({ column: start % term.cols, row: Math.floor(start / term.cols), length: end - start })
+    }
+    text = ''
+    positions = []
+  }
+  for (let row = 0; row < buffer.length; row++) {
+    const line = buffer.getLine(row)
+    if (!line) continue
+    if (!line.isWrapped) collect()
+    const trimmedLength = line.translateToString(true).length
+    let lineText = ''
+    for (let column = 0; column < line.length; column++) {
+      const cell = line.getCell(column)
+      if (!cell || cell.getWidth() === 0) continue
+      const chars = cell.getChars() || ' '
+      const start = row * term.cols + column
+      const end = start + cell.getWidth()
+      lineText += chars
+      for (let index = 0; index < chars.length; index++) positions.push({ start, end })
+    }
+    if (!buffer.getLine(row + 1)?.isWrapped) {
+      positions.length -= lineText.length - trimmedLength
+      lineText = lineText.slice(0, trimmedLength)
+    }
+    text += lineText
+  }
+  collect()
+  return matches
 }
