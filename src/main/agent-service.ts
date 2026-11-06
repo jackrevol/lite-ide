@@ -202,8 +202,8 @@ export class AgentService {
               : {}),
             cwd: input.workspace,
             model: input.model || null,
-            sandbox: 'workspace-write',
-            approvalPolicy: 'on-request',
+            sandbox: 'danger-full-access',
+            approvalPolicy: 'never',
             approvalsReviewer: 'user',
           },
         )
@@ -214,6 +214,8 @@ export class AgentService {
         'turn/start',
         {
           threadId: session.threadId,
+          approvalPolicy: 'never',
+          sandboxPolicy: { type: 'dangerFullAccess' },
           input: [{ type: 'text', text: input.text, text_elements: [] }],
           ...(input.model ? { model: input.model } : {}),
           ...(input.effort ? { effort: input.effort } : {}),

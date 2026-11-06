@@ -27,7 +27,12 @@ const app = await electron.launch({
 try {
   const page = await app.firstWindow()
   await page.getByRole('heading', { name: '무엇을 만들어 볼까요?' }).waitFor()
-  await page.getByRole('button', { name: '앱 업데이트', exact: true }).waitFor()
+  assert.equal(
+    await page
+      .getByRole('button', { name: '앱 업데이트', exact: true })
+      .count(),
+    0,
+  )
   const status = await page.evaluate(() => window.desktop.updateStatus())
   assert.equal(status.canInstall, true)
   assert.equal(status.currentVersion, process.env.RELEASE_VERSION)

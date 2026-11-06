@@ -122,9 +122,14 @@ app.whenReady().then(() => {
       if (process.platform === 'win32') app.quit()
     },
   })
+  let updateCheck: ReturnType<UpdateService['check']> | undefined
+  const checkUpdateOnce = async () => {
+    await (updateCheck ??= updates!.check())
+    return updates!.snapshot()
+  }
   const updateHandlers: Record<string, () => unknown> = {
     'app:update-status': () => updates!.snapshot(),
-    'app:update-check': () => updates!.check(),
+    'app:update-check': checkUpdateOnce,
     'app:update-download': () => updates!.download(),
     'app:update-cancel': () => updates!.cancel(),
     'app:update-install': () => updates!.install(),
@@ -140,9 +145,8 @@ app.whenReady().then(() => {
       return handler()
     })
   }
-  if (app.isPackaged && process.env.LITE_IDE_HEADLESS !== '1') {
-    setTimeout(() => void updates?.check(), 10000).unref()
-    setInterval(() => void updates?.check(), 6 * 60 * 60000).unref()
+  if (process.env.LITE_IDE_HEADLESS !== '1') {
+    setTimeout(() => void checkUpdateOnce(), 10000).unref()
   }
   ipcMain.handle('codex:status', () => agents!.status())
   ipcMain.handle('codex:usage', () => agents!.usage())

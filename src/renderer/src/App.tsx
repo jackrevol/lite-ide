@@ -28,6 +28,8 @@ import { Conversation } from './components/Conversation'
 import { CodexUsagePanel } from './components/CodexUsagePanel'
 import { ProjectDialog } from './components/ProjectDialog'
 import { AppUpdateButton } from './components/AppUpdateButton'
+import { NewTaskDialog } from './components/NewTaskDialog'
+import type { TaskMode } from './lib/workspace-state'
 import { createSession, loadWorkspace, storageKey } from './lib/workspace-state'
 import type {
   AgentSession,
@@ -90,6 +92,7 @@ export function App() {
   const [branch, setBranch] = useState('')
   const [creatingTree, setCreatingTree] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [newTaskOpen, setNewTaskOpen] = useState(false)
   const searchDialog = useRef<HTMLDialogElement>(null)
   const renameDialog = useRef<HTMLDialogElement>(null)
   const deleteDialog = useRef<HTMLDialogElement>(null)
@@ -308,17 +311,29 @@ export function App() {
   }, [selectedFile, state.workspace, refresh])
 
   const addSession = useCallback(() => {
-    const session = createSession((state.sessions[key]?.length ?? 0) + 1)
+    setNewTaskOpen(true)
+  }, [])
+  async function createTask(mode: TaskMode, branch: string) {
+    if (mode === 'worktree' && (!project || !repository.isGitRepository))
+      throw new Error('Worktree를 만들 Git 프로젝트를 먼저 열어 주세요.')
+    const workspace =
+      mode === 'worktree'
+        ? (await window.desktop.createWorktree(project!.path, branch)).path
+        : (project?.path ?? '')
+    const target = workspace || 'welcome'
+    const session = createSession((state.sessions[target]?.length ?? 0) + 1)
     setState((previous) => ({
       ...previous,
+      workspace,
+      newTaskMode: mode,
       sessions: {
         ...previous.sessions,
-        [key]: [...(previous.sessions[key] ?? []), session],
+        [target]: [...(previous.sessions[target] ?? []), session],
       },
-      selected: { ...previous.selected, [key]: session.id },
+      selected: { ...previous.selected, [target]: session.id },
     }))
-    composer.current?.focus()
-  }, [key, state.sessions])
+    setRefresh((value) => value + 1)
+  }
   useEffect(() => {
     function shortcut(event: KeyboardEvent) {
       if (!(event.ctrlKey || event.metaKey) || event.isComposing) return
@@ -1181,6 +1196,17 @@ export function App() {
           </Button>
         </div>
       </dialog>
+      {newTaskOpen && (
+        <NewTaskDialog
+          mode={state.newTaskMode}
+          canCreateWorktree={Boolean(project && repository.isGitRepository)}
+          onCreate={createTask}
+          onClose={() => {
+            setNewTaskOpen(false)
+            composer.current?.focus()
+          }}
+        />
+      )}
       <dialog
         ref={treeDialog}
         className="form-dialog"

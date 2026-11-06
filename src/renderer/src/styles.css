@@ -1455,3 +1455,47 @@ dialog::backdrop {
   font-size: 11px;
   color: var(--muted-foreground);
 }
+.task-mode-options {
+  display: grid;
+  gap: 10px;
+  border: 0;
+  padding: 0;
+  margin: 18px 0;
+}
+.task-mode-options label {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.task-mode-options label:has(input:checked) {
+  border-color: var(--foreground);
+  background: var(--secondary);
+}
+.task-mode-options label:has(input:disabled) {
+  opacity: 0.5;
+  cursor: default;
+}
+.task-mode-options input[type='radio'] {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--foreground);
+}
+.task-mode-options strong,
+.task-mode-options small {
+  display: block;
+}
+.task-mode-options small {
+  color: var(--muted-foreground);
+  margin-top: 4px;
+  font-size: 11px;
+}
+.task-branch {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}

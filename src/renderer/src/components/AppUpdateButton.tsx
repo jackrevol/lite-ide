@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Download, LoaderCircle, RefreshCw } from 'lucide-react'
+import { Download, LoaderCircle } from 'lucide-react'
 import type { AppUpdateState } from '../../../shared/types'
 import { Button } from './ui/button'
 
@@ -13,9 +13,11 @@ export function AppUpdateButton() {
   const pending = ['checking', 'downloading', 'installing'].includes(
     state.status,
   )
-  const available = ['available', 'downloading', 'downloaded'].includes(
-    state.status,
-  )
+  const available =
+    Boolean(state.version) &&
+    ['available', 'downloading', 'downloaded', 'installing', 'error'].includes(
+      state.status,
+    )
   useEffect(() => {
     let disposed = false
     const unsubscribe = window.desktop.onUpdate((next) => {
@@ -50,6 +52,7 @@ export function AppUpdateButton() {
     installing: '설치 파일을 열고 있습니다.',
     error: '업데이트를 완료하지 못했습니다.',
   }
+  if (!available) return null
   return (
     <>
       <button
@@ -126,20 +129,12 @@ export function AppUpdateButton() {
                 ? 'DMG 열기'
                 : '종료하고 설치'}
             </Button>
-          ) : state.status === 'available' ? (
+          ) : state.status === 'available' || state.status === 'error' ? (
             <Button onClick={() => void action(window.desktop.downloadUpdate)}>
               <Download size={14} />
-              다운로드
+              {state.status === 'error' ? '다운로드 다시 시도' : '다운로드'}
             </Button>
-          ) : (
-            <Button
-              disabled={pending}
-              onClick={() => void action(window.desktop.checkUpdate)}
-            >
-              <RefreshCw size={14} />
-              업데이트 확인
-            </Button>
-          )}
+          ) : null}
         </div>
       </dialog>
     </>
