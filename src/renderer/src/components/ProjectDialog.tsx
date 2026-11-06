@@ -19,6 +19,18 @@ export function ProjectDialog({
   const [choosing, setChoosing] = useState(false)
   useEffect(() => {
     dialog.current?.showModal()
+    let disposed = false
+    void window.desktop
+      .defaultCloneDirectory()
+      .then((directory) => {
+        if (!disposed) setParent((previous) => previous || directory)
+      })
+      .catch((cause) => {
+        if (!disposed) setError(String(cause))
+      })
+    return () => {
+      disposed = true
+    }
   }, [])
 
   async function chooseDirectory() {
@@ -108,11 +120,14 @@ export function ProjectDialog({
         <button
           type="button"
           className="clone-directory"
+          aria-label="저장 위치 변경"
+          title="저장 위치 변경"
           disabled={busy || choosing}
           onClick={() => void chooseDirectory()}
         >
           <FolderOpen size={15} />
           <span>{parent || '저장할 폴더 선택'}</span>
+          <span className="clone-directory-change">변경</span>
         </button>
         <p className="clone-help">
           HTTPS · SSH 지원. 비공개 저장소는 설정된 Git 인증을 사용합니다.

@@ -129,6 +129,15 @@ try {
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   await page.getByRole('heading', { name: '무엇을 만들어 볼까요?' }).waitFor()
+  await page.waitForFunction(() => {
+    const icons = [
+      ...document.querySelectorAll('.brand-mark img, .welcome-icon img'),
+    ]
+    return (
+      icons.length === 2 &&
+      icons.every((icon) => icon.complete && icon.naturalWidth === 256)
+    )
+  })
   await checkTitlebar(page, app)
   const usage = page.getByRole('region', { name: 'Codex 사용량 한도' })
   await usage.getByText('75% 남음', { exact: true }).waitFor()
@@ -358,13 +367,51 @@ try {
     .first()
     .click()
   await page.getByRole('textbox', { name: '저장소 URL' }).fill(cloneUrl)
+  const defaultDirectory = join(fixture, 'user-data', 'Projects')
+  await page
+    .getByRole('button', { name: '저장 위치 변경' })
+    .getByText(defaultDirectory, { exact: true })
+    .waitFor()
+  assert.equal(await stat(defaultDirectory).catch(() => null), null)
+  await app.evaluate(({ dialog }) => {
+    dialog.showOpenDialog = async () => {
+      throw new Error('기본 경로 복제는 폴더 선택이 필요하지 않습니다.')
+    }
+  })
+  await page.getByRole('button', { name: '복제하고 열기' }).click()
+  await page
+    .getByRole('dialog', { name: 'Git 저장소에서 시작' })
+    .waitFor({ state: 'detached' })
+  assert.equal(
+    (
+      await readFile(join(defaultDirectory, 'project', 'hello.txt'), 'utf8')
+    ).replaceAll('\r\n', '\n'),
+    'Hello from Lite IDE\n',
+  )
+  await page
+    .getByRole('button', { name: '프로젝트 열기', exact: true })
+    .first()
+    .click()
+  await page.getByRole('textbox', { name: '저장소 URL' }).fill(cloneUrl)
+  await page
+    .getByRole('button', { name: '저장 위치 변경' })
+    .getByText(defaultDirectory, { exact: true })
+    .waitFor()
+  await app.evaluate(({ dialog }) => {
+    dialog.showOpenDialog = async () => ({ canceled: true, filePaths: [] })
+  })
+  await page.getByRole('button', { name: '저장 위치 변경' }).click()
+  await page
+    .getByRole('button', { name: '저장 위치 변경' })
+    .getByText(defaultDirectory, { exact: true })
+    .waitFor()
   await app.evaluate(({ dialog }, directory) => {
     dialog.showOpenDialog = async () => ({
       canceled: false,
       filePaths: [directory],
     })
   }, fixture)
-  await page.getByRole('button', { name: '저장할 폴더 선택' }).click()
+  await page.getByRole('button', { name: '저장 위치 변경' }).click()
   await page
     .getByRole('textbox', { name: '프로젝트 폴더 이름' })
     .fill('한글 project')

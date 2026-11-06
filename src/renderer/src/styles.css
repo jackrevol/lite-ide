@@ -164,10 +164,14 @@
   place-items: center;
   width: 24px;
   height: 24px;
-  background: var(--selected);
-  border: 1px solid var(--border);
-  border-radius: 7px;
   margin-right: 2px;
+}
+.brand-mark img,
+.welcome-icon img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 .breadcrumb {
   min-width: 0;
@@ -568,13 +572,10 @@
   overflow-y: auto;
 }
 .welcome-icon {
-  width: 52px;
-  height: 52px;
+  width: 72px;
+  height: 72px;
   display: grid;
   place-items: center;
-  border-radius: 15px;
-  border: 1px solid var(--border);
-  background: linear-gradient(140deg, var(--selected), var(--background));
   margin-bottom: 22px;
   color: var(--muted-foreground);
 }
@@ -1376,6 +1377,12 @@ dialog::backdrop {
   overflow-wrap: anywhere;
   min-width: 0;
   font-size: 12px;
+}
+.clone-directory .clone-directory-change {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
 }
 .project-dialog .clone-help {
   font-size: 11px;

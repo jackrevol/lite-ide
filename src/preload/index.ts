@@ -7,6 +7,8 @@ const api: DesktopApi = {
   listProjects: () => ipcRenderer.invoke('project:list'),
   openProject: () => ipcRenderer.invoke('project:open'),
   chooseCloneDirectory: () => ipcRenderer.invoke('project:clone-directory'),
+  defaultCloneDirectory: () =>
+    ipcRenderer.invoke('project:clone-default-directory'),
   cloneProject: (url, parent, name) =>
     ipcRenderer.invoke('project:clone', url, parent, name),
   inspectRepository: (path) => ipcRenderer.invoke('repository:inspect', path),

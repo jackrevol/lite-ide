@@ -14,6 +14,7 @@
     "test": "node --experimental-strip-types --test src/main/git.test.ts src/main/codex-client.test.ts",
     "test:ui": "node scripts/check-ui.mjs",
     "test:codex": "node scripts/check-codex.mjs",
+    "build:icons": "electron scripts/build-icons.cjs",
     "package:win": "npm run build && electron-builder --win",
     "package:mac": "npm run build && electron-builder --mac"
   },
@@ -50,17 +51,21 @@
     },
     "files": [
       "out/**/*",
+      "resources/icon.png",
+      "resources/icon.ico",
       "package.json",
       "LICENSE",
       "LICENSE.coss-ui"
     ],
     "mac": {
+      "icon": "resources/icon.icns",
       "target": [
         "dmg"
       ],
       "category": "public.app-category.developer-tools"
     },
     "win": {
+      "icon": "resources/icon.ico",
       "target": [
         "nsis"
       ]

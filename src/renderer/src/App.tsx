@@ -490,7 +490,11 @@ export function App() {
         <div className="titlebar-content">
           <div className="brand">
             <span className="brand-mark">
-              <Code2 size={17} />
+              <img
+                src="./app-icon.png"
+                alt="시베리안고양이"
+                draggable={false}
+              />
             </span>
             <span>Lite IDE</span>
           </div>
@@ -736,7 +740,11 @@ export function App() {
           ) : (
             <div className="welcome">
               <div className="welcome-icon">
-                <Code2 size={26} strokeWidth={1.4} />
+                <img
+                  src="./app-icon.png"
+                  alt="시베리안고양이"
+                  draggable={false}
+                />
               </div>
               <h2>무엇을 만들어 볼까요?</h2>
               <p>

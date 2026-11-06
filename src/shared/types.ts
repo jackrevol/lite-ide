@@ -26,6 +26,7 @@ export interface DesktopApi {
   listProjects(): Promise<Project[]>
   openProject(): Promise<Project | null>
   chooseCloneDirectory(): Promise<string | null>
+  defaultCloneDirectory(): Promise<string>
   cloneProject(url: string, parent: string, name: string): Promise<Project>
   inspectRepository(projectPath: string): Promise<RepositorySnapshot>
   readDiff(projectPath: string, filePath: string): Promise<string>

@@ -41,6 +41,8 @@ if (process.env.LITE_IDE_HEADLESS === '1' && process.env.LITE_IDE_TEST_DATA)
   app.setPath('userData', process.env.LITE_IDE_TEST_DATA)
 
 app.whenReady().then(() => {
+  if (process.platform === 'darwin')
+    app.dock?.setIcon(join(app.getAppPath(), 'resources', 'icon.png'))
   nativeTheme.themeSource = windowTheme
   ipcMain.handle('window:theme', (event, theme: unknown) => {
     if (
@@ -166,10 +168,16 @@ app.whenReady().then(() => {
     const directory = resolve(result.filePaths[0])
     return registerProject(directory)
   })
+  const defaultCloneDirectory = join(
+    app.getPath(process.env.LITE_IDE_HEADLESS === '1' ? 'userData' : 'home'),
+    'Projects',
+  )
+  ipcMain.handle('project:clone-default-directory', () => defaultCloneDirectory)
   ipcMain.handle('project:clone-directory', async () => {
     if (!window) return null
     const result = await dialog.showOpenDialog(window, {
       title: '저장소를 복제할 상위 폴더 선택',
+      defaultPath: defaultCloneDirectory,
       properties: ['openDirectory', 'createDirectory'],
     })
     if (result.canceled || !result.filePaths[0]) return null
@@ -181,12 +189,17 @@ app.whenReady().then(() => {
     'project:clone',
     async (_event, url: string, parent: string, name: string) => {
       validateCloneInput(url, name)
-      if (typeof parent !== 'string' || !cloneDirectories.has(parent))
+      if (
+        typeof parent !== 'string' ||
+        (parent !== defaultCloneDirectory && !cloneDirectories.has(parent))
+      )
         throw new Error('저장 위치를 먼저 선택해 주세요.')
       if (cloning) throw new Error('이미 저장소를 복제하고 있습니다.')
       cloning = true
       try {
         await restoredProjects
+        if (parent === defaultCloneDirectory)
+          await mkdir(parent, { recursive: true })
         const directory = await cloneRepository(url, parent, name)
         return await registerProject(directory)
       } finally {
@@ -242,6 +255,11 @@ function createWindow(): void {
     minWidth: 960,
     minHeight: 600,
     title: 'Lite IDE',
+    icon: join(
+      app.getAppPath(),
+      'resources',
+      process.platform === 'win32' ? 'icon.ico' : 'icon.png',
+    ),
     titleBarStyle: 'hidden',
     // 네이티브 창 버튼과 앱 상단을 같은 줄에 배치합니다.
     titleBarOverlay: {
