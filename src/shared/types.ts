@@ -22,6 +22,15 @@ export interface RepositorySnapshot {
 
 export interface DesktopApi {
   platform: string
+  getSettings(): Promise<AppSettings>
+  updateProjectSettings(
+    projectPath: string,
+    defaults: ProjectDefaults,
+  ): Promise<AppSettings>
+  resetProjectSettings(projectPath: string): Promise<AppSettings>
+  getAppInfo(): Promise<AppInfo>
+  copyAppInfo(): Promise<void>
+  listBranches(projectPath: string): Promise<string[]>
   updateStatus(): Promise<AppUpdateState>
   checkUpdate(): Promise<AppUpdateState>
   downloadUpdate(): Promise<AppUpdateState>
@@ -53,11 +62,38 @@ export interface DesktopApi {
   deleteSession(sessionId: string): Promise<void>
   loginCodex(): Promise<void>
   openLink(url: string): Promise<void>
-  createWorktree(projectPath: string, branch: string): Promise<Worktree>
+  createWorktree(
+    projectPath: string,
+    branch: string,
+    baseRef?: string,
+  ): Promise<Worktree>
   deleteWorktree(
     projectPath: string,
     worktreePath: string,
   ): Promise<{ warning?: string }>
+}
+
+export interface ProjectDefaults {
+  baseRef: string
+  model: string
+  effort: string
+}
+export interface AppSettings {
+  schemaVersion: 1
+  projects: Record<string, ProjectDefaults>
+}
+export interface AppInfo {
+  name: string
+  version: string
+  buildTime: string | null
+  repositoryUrl: string
+  commit: string | null
+  dirty: boolean | null
+  platform: string
+  arch: string
+  electronVersion: string
+  nodeVersion: string
+  packaged: boolean
 }
 
 export interface AppUpdateState {

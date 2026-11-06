@@ -152,22 +152,60 @@ export async function readDiff(
 export async function createWorktree(
   directory: string,
   branch: string,
+  baseRef = 'HEAD',
 ): Promise<Worktree> {
   if (typeof branch !== 'string' || !branch.trim() || branch.length > 100)
     throw new Error('브랜치 이름을 입력해 주세요.')
   await git(directory, ['check-ref-format', '--branch', branch])
+  const base = await resolveBaseRef(directory, baseRef)
   const name = branch.replace(/[^a-zA-Z0-9._-]/g, '-')
   const path = join(
     dirname(directory),
     `${basename(directory)}-worktrees`,
     `${name}-${crypto.randomUUID().slice(0, 8)}`,
   )
-  await git(directory, ['worktree', 'add', '-b', branch, path])
+  await git(directory, ['worktree', 'add', '-b', branch, path, base])
   // Git이 정규화한 경로를 사용해 Windows의 짧은 경로·드라이브 표기 차이를 없앱니다.
   const snapshot = await inspectRepository(directory)
   const created = snapshot.worktrees.find((tree) => tree.branch === branch)
   if (!created) throw new Error('생성한 Worktree 경로를 확인하지 못했습니다.')
   return created
+}
+
+export async function listBranches(directory: string): Promise<string[]> {
+  const output = await git(directory, [
+    'for-each-ref',
+    '--format=%(refname)%00%(symref)',
+    'refs/heads/',
+    'refs/remotes/',
+  ])
+  return output
+    .split(/\r?\n/)
+    .filter((line) => line.endsWith('\0'))
+    .map((line) => line.slice(0, -1))
+    .filter((ref) => /^refs\/(heads|remotes)\/.+/.test(ref))
+}
+
+export async function resolveBaseRef(
+  directory: string,
+  baseRef: string,
+): Promise<string> {
+  if (
+    typeof baseRef !== 'string' ||
+    (baseRef !== 'HEAD' && !(await listBranches(directory)).includes(baseRef))
+  )
+    throw new Error('사용 가능한 기준 브랜치를 선택해 주세요.')
+  const commit = (
+    await git(directory, [
+      'rev-parse',
+      '--verify',
+      '--end-of-options',
+      `${baseRef}^{commit}`,
+    ])
+  ).trim()
+  if (!/^[a-f0-9]{40,64}$/.test(commit))
+    throw new Error('기준 브랜치의 commit을 확인하지 못했습니다.')
+  return commit
 }
 
 export const pathKey = (path: string) => {

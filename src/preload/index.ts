@@ -3,6 +3,14 @@ import type { AgentSession, AppUpdateState, DesktopApi } from '../shared/types'
 
 const api: DesktopApi = {
   platform: process.platform,
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  updateProjectSettings: (path, defaults) =>
+    ipcRenderer.invoke('settings:project-update', path, defaults),
+  resetProjectSettings: (path) =>
+    ipcRenderer.invoke('settings:project-reset', path),
+  getAppInfo: () => ipcRenderer.invoke('app:info'),
+  copyAppInfo: () => ipcRenderer.invoke('app:info-copy'),
+  listBranches: (path) => ipcRenderer.invoke('repository:branches', path),
   updateStatus: () => ipcRenderer.invoke('app:update-status'),
   checkUpdate: () => ipcRenderer.invoke('app:update-check'),
   downloadUpdate: () => ipcRenderer.invoke('app:update-download'),
@@ -46,8 +54,8 @@ const api: DesktopApi = {
   deleteSession: (id) => ipcRenderer.invoke('codex:delete', id),
   loginCodex: () => ipcRenderer.invoke('codex:login'),
   openLink: (url) => ipcRenderer.invoke('link:open', url),
-  createWorktree: (path, branch) =>
-    ipcRenderer.invoke('worktree:create', path, branch),
+  createWorktree: (path, branch, baseRef) =>
+    ipcRenderer.invoke('worktree:create', path, branch, baseRef),
   deleteWorktree: (project, path) =>
     ipcRenderer.invoke('worktree:delete', project, path),
   onSession: (listener) => {

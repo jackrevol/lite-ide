@@ -9,6 +9,8 @@ export function NewTaskDialog({
   connection,
   initialModel,
   initialEffort,
+  initialBaseRef,
+  branches,
   onCreate,
   onClose,
 }: {
@@ -17,6 +19,8 @@ export function NewTaskDialog({
   connection: CodexStatus
   initialModel: string
   initialEffort: string
+  initialBaseRef: string
+  branches: string[]
   onCreate: (workspace: string, session: Session) => Promise<void>
   onClose: () => void
 }) {
@@ -31,23 +35,29 @@ export function NewTaskDialog({
   )
   const [model, setModel] = useState(initialModel)
   const [effort, setEffort] = useState(initialEffort)
+  const [baseRef, setBaseRef] = useState(initialBaseRef)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const created = useRef<{ workspace: string; session: Session } | null>(null)
   const submitting = useRef(false)
   const selectedModel = connection.models.find((item) => item.id === model)
+  const invalidModel = !!model && !selectedModel
+  const invalidEffort =
+    !!effort && !!selectedModel && !selectedModel.efforts.includes(effort)
   useEffect(() => {
     dialog.current?.showModal()
   }, [])
   useEffect(() => {
     if (created.current) return
+    if (model && !connection.models.some((item) => item.id === model)) return
     const selected =
       connection.models.find((item) => item.id === model) ??
       connection.models.find((item) => item.isDefault) ??
       connection.models[0]
     if (!selected) return
     if (selected.id !== model) setModel(selected.id)
-    if (!selected.efforts.includes(effort)) setEffort(selected.defaultEffort)
+    if (!effort && selected.efforts.includes(selected.defaultEffort))
+      setEffort(selected.defaultEffort)
   }, [connection.models, model, effort])
   async function submit() {
     if (submitting.current) return
@@ -58,8 +68,13 @@ export function NewTaskDialog({
       if (!created.current) {
         const target =
           mode === 'new'
-            ? (await window.desktop.createWorktree(project.path, branch.trim()))
-                .path
+            ? (
+                await window.desktop.createWorktree(
+                  project.path,
+                  branch.trim(),
+                  baseRef,
+                )
+              ).path
             : workspace
         created.current = {
           workspace: target,
@@ -117,16 +132,36 @@ export function NewTaskDialog({
             </select>
           </label>
           {mode === 'new' ? (
-            <label>
-              새 브랜치 이름
-              <input
-                aria-label="새 브랜치 이름"
-                value={branch}
-                onChange={(event) => setBranch(event.target.value)}
-                required
-                maxLength={100}
-              />
-            </label>
+            <>
+              <label>
+                기준 브랜치
+                <select
+                  aria-label="이번 작업 기준 브랜치"
+                  value={baseRef}
+                  onChange={(event) => setBaseRef(event.target.value)}
+                >
+                  <option value="HEAD">현재 HEAD (기본)</option>
+                  {baseRef !== 'HEAD' && !branches.includes(baseRef) && (
+                    <option value={baseRef}>{baseRef} (현재 확인 불가)</option>
+                  )}
+                  {branches.map((ref) => (
+                    <option value={ref} key={ref}>
+                      {ref.replace(/^refs\/(heads|remotes)\//, '')}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                새 브랜치 이름
+                <input
+                  aria-label="새 브랜치 이름"
+                  value={branch}
+                  onChange={(event) => setBranch(event.target.value)}
+                  required
+                  maxLength={100}
+                />
+              </label>
+            </>
           ) : (
             <label>
               기존 작업 공간
@@ -190,6 +225,9 @@ export function NewTaskDialog({
                 {!connection.models.length && (
                   <option value="">연결 후 선택</option>
                 )}
+                {invalidModel && (
+                  <option value={model}>{model} (현재 사용 불가)</option>
+                )}
                 {connection.models.map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.name}
@@ -202,11 +240,17 @@ export function NewTaskDialog({
               <select
                 aria-label="새 작업 추론 수준"
                 value={effort}
-                disabled={!selectedModel?.efforts.length}
+                disabled={
+                  !selectedModel ||
+                  (!selectedModel.efforts.length && !invalidEffort)
+                }
                 onChange={(event) => setEffort(event.target.value)}
               >
                 {!selectedModel?.efforts.length && (
                   <option value="">기본값</option>
+                )}
+                {invalidEffort && (
+                  <option value={effort}>{effort} (현재 사용 불가)</option>
                 )}
                 {selectedModel?.efforts.map((item) => (
                   <option key={item} value={item}>
@@ -218,6 +262,12 @@ export function NewTaskDialog({
           </div>
         </fieldset>
         {error && <p role="alert">{error}</p>}
+        {(invalidModel || invalidEffort) && (
+          <p role="alert">
+            프로젝트 기본 모델 또는 추론 수준을 현재 사용할 수 없습니다. 연결을
+            확인하거나 이번 작업에 사용할 값을 선택해 주세요.
+          </p>
+        )}
         {prompt.trim() &&
           (!connection.connected || !connection.authenticated) && (
             <p>Codex 연결과 로그인을 완료한 후 요청을 시작할 수 있습니다.</p>
@@ -235,6 +285,8 @@ export function NewTaskDialog({
             type="submit"
             disabled={
               pending ||
+              invalidModel ||
+              invalidEffort ||
               (mode === 'new' && (!branch.trim() || !worktrees.length)) ||
               (!!prompt.trim() &&
                 (!connection.connected || !connection.authenticated))

@@ -1375,6 +1375,110 @@ dialog::backdrop {
   grid-template-columns: 1fr 1fr;
   gap: 12px;
 }
+.settings-dialog {
+  width: 680px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  overflow: hidden;
+}
+.settings-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+.settings-heading,
+.settings-tabs {
+  flex-shrink: 0;
+}
+.settings-load-error {
+  padding: 12px 24px;
+}
+.settings-load-error p {
+  margin-bottom: 8px;
+  overflow-wrap: anywhere;
+}
+.settings-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 24px 8px;
+}
+.settings-heading h2 {
+  margin: 0;
+}
+.settings-tabs {
+  display: flex;
+  gap: 20px;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--border);
+}
+.settings-tabs button {
+  padding: 12px 0;
+  color: var(--muted-foreground);
+  border-bottom: 2px solid transparent;
+  font-size: 12px;
+}
+.settings-tabs button[aria-selected='true'] {
+  color: var(--foreground);
+  border-color: var(--foreground);
+}
+.settings-content {
+  min-height: 0;
+  flex: 1;
+  padding: 20px 24px 24px;
+  max-height: calc(100dvh - 160px);
+  overflow-y: auto;
+}
+.settings-content h3 {
+  font-size: 13px;
+  margin: 0 0 12px;
+}
+.settings-content h3:not(:first-child) {
+  margin-top: 24px;
+}
+.settings-content fieldset {
+  display: grid;
+  gap: 14px;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.settings-content label {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.settings-content select {
+  width: 100%;
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--input);
+  border-radius: 6px;
+  padding: 9px 10px;
+  font: inherit;
+  min-width: 0;
+}
+.app-info {
+  margin: 0;
+  font-size: 12px;
+}
+.app-info > div {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  gap: 16px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+}
+.app-info dt {
+  color: var(--muted-foreground);
+}
+.app-info dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
 .dialog-actions {
   display: flex;
   justify-content: flex-end;

@@ -1,5 +1,6 @@
 import {
   app,
+  clipboard,
   BrowserWindow,
   dialog,
   ipcMain,
@@ -23,11 +24,19 @@ import {
   readDiff,
   removeWorktree,
   pathKey,
+  listBranches,
+  resolveBaseRef,
 } from './git'
+import { SettingsService, validateDefaults } from './settings-service'
+import { appInfo } from './app-info'
 import { AgentService } from './agent-service'
 import { cloneRepository, validateCloneInput } from './clone'
 import { UpdateService } from './update-service'
-import type { RequestAnswer, SendMessage } from '../shared/types'
+import type {
+  RequestAnswer,
+  SendMessage,
+  ProjectDefaults,
+} from '../shared/types'
 
 const projects = new Set<string>()
 const workspaces = new Set<string>()
@@ -66,6 +75,16 @@ if (process.env.LITE_IDE_HEADLESS === '1' && process.env.LITE_IDE_TEST_DATA)
   app.setPath('userData', process.env.LITE_IDE_TEST_DATA)
 
 app.whenReady().then(() => {
+  const settings = new SettingsService(
+    join(app.getPath('userData'), 'settings.json'),
+  )
+  ipcMain.handle('settings:get', () => settings.get())
+  ipcMain.handle('app:info', () => appInfo(app.isPackaged, app.getVersion()))
+  ipcMain.handle('app:info-copy', () => {
+    clipboard.writeText(
+      JSON.stringify(appInfo(app.isPackaged, app.getVersion()), null, 2),
+    )
+  })
   if (process.platform === 'darwin')
     app.dock?.setIcon(join(iconDirectory, 'icon.png'))
   nativeTheme.themeSource = windowTheme
@@ -197,9 +216,9 @@ app.whenReady().then(() => {
   })
   ipcMain.handle(
     'worktree:create',
-    async (_event, path: string, branch: string) => {
+    async (_event, path: string, branch: string, baseRef?: string) => {
       const directory = requireWorkspace(path)
-      const tree = await createWorktree(directory, branch)
+      const tree = await createWorktree(directory, branch, baseRef)
       const worktreePath = resolve(tree.path)
       workspaces.add(worktreePath)
       return { ...tree, path: worktreePath }
@@ -253,6 +272,29 @@ app.whenReady().then(() => {
       /* 처음 실행하거나 저장 파일이 손상된 경우 빈 목록으로 시작합니다. */
     }
   })()
+  async function requireProject(path: string) {
+    await restoredProjects
+    const directory = requireWorkspace(path)
+    if (!projects.has(directory))
+      throw new Error('등록된 프로젝트를 선택해 주세요.')
+    return directory
+  }
+  ipcMain.handle('repository:branches', async (_event, path: string) =>
+    listBranches(await requireProject(path)),
+  )
+  ipcMain.handle(
+    'settings:project-update',
+    async (_event, path: string, value: ProjectDefaults) => {
+      const directory = await requireProject(path)
+      const defaults = validateDefaults(value)
+      if (defaults.baseRef !== 'HEAD')
+        await resolveBaseRef(directory, defaults.baseRef)
+      return settings.update(directory, defaults)
+    },
+  )
+  ipcMain.handle('settings:project-reset', async (_event, path: string) =>
+    settings.update(await requireProject(path), null),
+  )
   ipcMain.handle('project:list', async () => {
     await restoredProjects
     return [...projects].map((path) => ({ path, name: basename(path) }))

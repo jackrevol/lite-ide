@@ -18,6 +18,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Settings,
   Square,
   Sun,
   Trash2,
@@ -29,6 +30,7 @@ import { CodexUsagePanel } from './components/CodexUsagePanel'
 import { ProjectDialog } from './components/ProjectDialog'
 import { AppUpdateButton } from './components/AppUpdateButton'
 import { NewTaskDialog } from './components/NewTaskDialog'
+import { SettingsDialog, projectSettingsKey } from './components/SettingsDialog'
 import {
   createSession,
   loadWorkspace,
@@ -41,6 +43,7 @@ import type {
   Project,
   RepositorySnapshot,
   Worktree,
+  ProjectDefaults,
 } from '../../shared/types'
 
 const emptyRepository: RepositorySnapshot = {
@@ -102,6 +105,14 @@ export function App() {
   const [collapsed, setCollapsed] = useState<string[]>([])
   const [rename, setRename] = useState('')
   const [newTaskProject, setNewTaskProject] = useState<Project | null>(null)
+  const [showSettings, setShowSettings] = useState(false)
+  const [newTaskDefaults, setNewTaskDefaults] = useState<ProjectDefaults>({
+    baseRef: 'HEAD',
+    model: '',
+    effort: '',
+  })
+  const [newTaskBranches, setNewTaskBranches] = useState<string[]>([])
+  const openingTask = useRef(false)
   const [sessionTarget, setSessionTarget] = useState<{
     workspace: string
     sessionId: string
@@ -363,27 +374,47 @@ export function App() {
     }
   }, [selectedFile, state.workspace, refresh])
 
+  const openNewTask = useCallback(async (target: Project) => {
+    if (openingTask.current) return
+    openingTask.current = true
+    try {
+      const [snapshot, settings, branches] = await Promise.all([
+        window.desktop.inspectRepository(target.path),
+        window.desktop.getSettings(),
+        window.desktop.listBranches(target.path).catch(() => []),
+      ])
+      setRepositories((previous) => ({
+        ...previous,
+        [target.path]: snapshot,
+      }))
+      setNewTaskDefaults(
+        settings.projects[projectSettingsKey(target.path)] ?? {
+          baseRef: 'HEAD',
+          model: '',
+          effort: '',
+        },
+      )
+      setNewTaskBranches(branches)
+      setNewTaskProject(target)
+    } catch (cause) {
+      setError(errorText(cause))
+    } finally {
+      openingTask.current = false
+    }
+  }, [])
   const addSession = useCallback(async () => {
     const target =
       projects.find((item) => item.path === state.project) ?? projects[0]
-    if (target) {
-      try {
-        if (!repositories[target.path]) {
-          const snapshot = await window.desktop.inspectRepository(target.path)
-          setRepositories((previous) => ({
-            ...previous,
-            [target.path]: snapshot,
-          }))
-        }
-        setNewTaskProject(target)
-      } catch (cause) {
-        setError(errorText(cause))
-      }
-    } else setOpening(true)
-  }, [projects, state.project, repositories])
+    if (target) await openNewTask(target)
+    else setOpening(true)
+  }, [projects, state.project, openNewTask])
   useEffect(() => {
     function shortcut(event: KeyboardEvent) {
       if (!(event.ctrlKey || event.metaKey) || event.isComposing) return
+      if (event.key === ',' && !document.querySelector('dialog[open]')) {
+        event.preventDefault()
+        setShowSettings(true)
+      }
       if (event.key.toLowerCase() === 'k') {
         event.preventDefault()
         setSearch('')
@@ -788,7 +819,7 @@ export function App() {
                       aria-label={`${item.name} 새 작업`}
                       title="새 작업 (Ctrl N)"
                       disabled={!repositories[item.path]}
-                      onClick={() => setNewTaskProject(item)}
+                      onClick={() => void openNewTask(item)}
                     >
                       <Plus size={15} />
                     </button>
@@ -921,6 +952,13 @@ export function App() {
           <footer className="sidebar-footer">
             <CodexUsagePanel connection={connection} connecting={connecting} />
             <div className="sidebar-bottom">
+              <button
+                aria-label="설정"
+                title="설정 (Ctrl ,)"
+                onClick={() => setShowSettings(true)}
+              >
+                <Settings size={16} />
+              </button>
               <button
                 title="프로젝트 열기"
                 onClick={() => void openProject()}
@@ -1323,10 +1361,29 @@ export function App() {
           project={newTaskProject}
           worktrees={repositories[newTaskProject.path]?.worktrees ?? []}
           connection={connection}
-          initialModel={model}
-          initialEffort={effort}
+          initialModel={
+            newTaskDefaults.model ||
+            (
+              connection.models.find((item) => item.isDefault) ??
+              connection.models[0]
+            )?.id ||
+            ''
+          }
+          initialEffort={newTaskDefaults.effort}
+          initialBaseRef={newTaskDefaults.baseRef}
+          branches={newTaskBranches}
           onCreate={createTask}
           onClose={() => setNewTaskProject(null)}
+        />
+      )}
+      {showSettings && (
+        <SettingsDialog
+          projects={projects}
+          currentProject={state.project}
+          connection={connection}
+          theme={theme}
+          onTheme={setTheme}
+          onClose={() => setShowSettings(false)}
         />
       )}
       <dialog

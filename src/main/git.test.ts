@@ -5,10 +5,18 @@ import {
   parseWorktrees,
   createWorktree,
   removeWorktree,
+  listBranches,
 } from './git.ts'
 import { validateCloneInput } from './clone.ts'
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, writeFile, stat, rm, realpath } from 'node:fs/promises'
+import {
+  mkdtemp,
+  writeFile,
+  readFile,
+  stat,
+  rm,
+  realpath,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -19,6 +27,77 @@ test('Git 복제는 HTTPS와 SSH 주소 및 안전한 폴더 이름을 허용한
     'ssh://git@example.com/owner/repo.git',
   ]) {
     assert.doesNotThrow(() => validateCloneInput(url, '한글 project'))
+  }
+})
+
+test('새 Worktree는 선택한 로컬·원격 기준 commit에서 시작하고 잘못된 ref를 거부한다', async () => {
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), 'lite-ide-base-ref-')),
+  )
+  const git = (...args: string[]) =>
+    execFileSync('git', ['-C', root, ...args], {
+      encoding: 'utf8',
+      windowsHide: true,
+    })
+  const commit = () =>
+    git(
+      '-c',
+      'user.name=Test',
+      '-c',
+      'user.email=test@example.invalid',
+      'commit',
+      '-am',
+      'fixture',
+    )
+  try {
+    git('init', '--initial-branch=main')
+    await writeFile(join(root, 'file.txt'), 'base\n', 'utf8')
+    git('add', '.')
+    commit()
+    const base = git('rev-parse', 'HEAD').trim()
+    git('branch', 'base')
+    git('update-ref', 'refs/remotes/origin/base', base)
+    git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/base')
+    git('tag', 'v1')
+    await writeFile(join(root, 'file.txt'), 'newer\n', 'utf8')
+    commit()
+    const head = git('rev-parse', 'HEAD').trim()
+    await writeFile(join(root, 'file.txt'), 'unsaved\n', 'utf8')
+    const refs = await listBranches(root)
+    assert.ok(refs.includes('refs/heads/base'))
+    assert.ok(refs.includes('refs/remotes/origin/base'))
+    assert.equal(refs.includes('refs/remotes/origin/HEAD'), false)
+    for (const [index, ref] of [
+      'refs/heads/base',
+      'refs/remotes/origin/base',
+    ].entries()) {
+      const tree = await createWorktree(root, `feature/base-${index}`, ref)
+      assert.equal(
+        execFileSync('git', ['-C', tree.path, 'rev-parse', 'HEAD'], {
+          encoding: 'utf8',
+          windowsHide: true,
+        }).trim(),
+        base,
+      )
+      await removeWorktree(root, tree.path)
+    }
+    for (const ref of [
+      '--detach',
+      'missing',
+      'refs/heads/missing',
+      'refs/tags/v1',
+      'HEAD~1',
+      base,
+    ])
+      await assert.rejects(
+        createWorktree(root, 'feature/rejected', ref),
+        /기준 브랜치/,
+      )
+    assert.equal(git('branch', '--list', 'feature/rejected').trim(), '')
+    assert.equal(git('rev-parse', 'HEAD').trim(), head)
+    assert.equal(await readFile(join(root, 'file.txt'), 'utf8'), 'unsaved\n')
+  } finally {
+    await rm(root, { recursive: true, force: true })
   }
 })
 

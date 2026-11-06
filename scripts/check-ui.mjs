@@ -31,6 +31,19 @@ git(
   '-m',
   'fixture',
 )
+const settingsBaseCommit = git('rev-parse', 'HEAD').toString().trim()
+git('branch', 'settings-base')
+await writeFile(join(project, 'newer.txt'), '현재 main에만 있는 파일\n', 'utf8')
+git('add', 'newer.txt')
+git(
+  '-c',
+  'user.name=UI Test',
+  '-c',
+  'user.email=test@example.invalid',
+  'commit',
+  '-m',
+  'newer fixture',
+)
 await writeFile(
   join(project, 'hello.txt'),
   'Hello from Lite IDE\nChanged line\n',
@@ -184,14 +197,64 @@ try {
       hash: createHash('sha256').update(updateContent).digest('hex'),
     },
   )
+  await page.keyboard.press('Control+,')
+  const settingsDialog = page.getByRole('dialog', { name: '설정', exact: true })
+  await settingsDialog
+    .getByRole('button', { name: '업데이트 확인', exact: true })
+    .click()
+  await settingsDialog
+    .getByText('새 버전을 다운로드할 수 있습니다.', { exact: true })
+    .waitFor()
+  await settingsDialog
+    .getByRole('tab', { name: '프로그램 정보', exact: true })
+    .click()
+  const initialInfo = await page.evaluate(() => window.desktop.getAppInfo())
+  assert.equal(initialInfo.name, 'Lite IDE')
+  assert.equal(
+    initialInfo.version,
+    JSON.parse(await readFile('package.json', 'utf8')).version,
+  )
+  assert.match(initialInfo.buildTime, /^\d{4}-\d{2}-\d{2}T.*Z$/)
+  assert.equal(
+    initialInfo.repositoryUrl,
+    'https://github.com/jackrevol/lite-ide',
+  )
+  assert.match(initialInfo.commit, /^[a-f0-9]{40}$/)
+  assert.equal(initialInfo.packaged, false)
+  await settingsDialog
+    .getByText(`${initialInfo.buildTime} (UTC)`, { exact: true })
+    .waitFor()
+  await settingsDialog
+    .getByRole('button', { name: '정보 복사', exact: true })
+    .click()
+  assert.equal(
+    await app.evaluate(
+      ({ clipboard }) => JSON.parse(clipboard.readText()).buildTime,
+    ),
+    initialInfo.buildTime,
+  )
+  await app.evaluate(({ shell }) => {
+    globalThis.liteIdeOpenedUrl = ''
+    shell.openExternal = async (url) => {
+      globalThis.liteIdeOpenedUrl = url
+    }
+  })
+  await settingsDialog
+    .getByRole('button', { name: 'GitHub 열기', exact: true })
+    .click()
+  assert.equal(
+    await app.evaluate(() => globalThis.liteIdeOpenedUrl),
+    initialInfo.repositoryUrl,
+  )
+  await settingsDialog
+    .getByRole('button', { name: '닫기', exact: true })
+    .click()
+  await settingsDialog.waitFor({ state: 'detached' })
   await page.getByRole('button', { name: '앱 업데이트', exact: true }).click()
   const updateDialog = page.getByRole('dialog', {
     name: '앱 업데이트',
     exact: true,
   })
-  await updateDialog
-    .getByRole('button', { name: '업데이트 확인', exact: true })
-    .click()
   await updateDialog
     .getByText('새 버전을 다운로드할 수 있습니다.', { exact: true })
     .waitFor()
@@ -859,11 +922,233 @@ try {
     .locator('.workspace-row')
     .filter({ hasText: 'feature/project-target' })
     .waitFor({ state: 'detached' })
+  const existingSessions = await page.evaluate(
+    (directory) =>
+      JSON.parse(localStorage.getItem('lite-ide.workspace.v1')).sessions[
+        directory
+      ],
+    project,
+  )
+  await page.getByRole('button', { name: '설정', exact: true }).click()
+  const projectSettings = page.getByRole('dialog', {
+    name: '설정',
+    exact: true,
+  })
+  await projectSettings
+    .getByRole('tab', { name: '프로젝트', exact: true })
+    .click()
+  await projectSettings
+    .getByRole('combobox', { name: '설정 프로젝트', exact: true })
+    .selectOption(project)
+  await projectSettings
+    .getByRole('combobox', { name: '기본 기준 브랜치', exact: true })
+    .selectOption('refs/heads/settings-base')
+  await projectSettings
+    .getByRole('combobox', { name: '기본 모델', exact: true })
+    .selectOption('fixture-model-alt')
+  await projectSettings
+    .getByRole('combobox', { name: '기본 추론 수준', exact: true })
+    .selectOption('high')
+  await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setSize(960, 600),
+  )
+  await projectSettings
+    .getByRole('button', { name: '저장', exact: true })
+    .scrollIntoViewIfNeeded()
+  await page.screenshot({ path: 'artifacts/workspace-settings-project.png' })
+  await projectSettings
+    .getByRole('button', { name: '저장', exact: true })
+    .click()
+  await projectSettings
+    .getByText('프로젝트 기본값을 저장했습니다. 다음 새 작업부터 적용됩니다.', {
+      exact: true,
+    })
+    .waitFor()
+  const secondProject = join(fixture, '복제한 project')
+  await projectSettings
+    .getByRole('combobox', { name: '설정 프로젝트', exact: true })
+    .selectOption(secondProject)
+  await projectSettings
+    .getByRole('combobox', { name: '기본 모델', exact: true })
+    .selectOption('fixture-model')
+  await projectSettings
+    .getByRole('combobox', { name: '기본 추론 수준', exact: true })
+    .selectOption('medium')
+  await projectSettings
+    .getByRole('button', { name: '저장', exact: true })
+    .click()
+  await projectSettings
+    .getByText('프로젝트 기본값을 저장했습니다. 다음 새 작업부터 적용됩니다.', {
+      exact: true,
+    })
+    .waitFor()
+  await projectSettings
+    .getByRole('combobox', { name: '설정 프로젝트', exact: true })
+    .selectOption(project)
+  assert.equal(
+    await projectSettings
+      .getByRole('combobox', { name: '기본 기준 브랜치', exact: true })
+      .inputValue(),
+    'refs/heads/settings-base',
+  )
+  assert.equal(
+    await projectSettings
+      .getByRole('combobox', { name: '기본 모델', exact: true })
+      .inputValue(),
+    'fixture-model-alt',
+  )
+  assert.equal(
+    await projectSettings
+      .getByRole('combobox', { name: '기본 추론 수준', exact: true })
+      .inputValue(),
+    'high',
+  )
+  await projectSettings
+    .getByRole('tab', { name: '프로그램 정보', exact: true })
+    .click()
+  await page.screenshot({ path: 'artifacts/workspace-settings-about.png' })
+  await projectSettings
+    .getByRole('button', { name: '닫기', exact: true })
+    .click()
+  await projectSettings.waitFor({ state: 'detached' })
+  assert.deepEqual(
+    await page.evaluate(
+      (directory) =>
+        JSON.parse(localStorage.getItem('lite-ide.workspace.v1')).sessions[
+          directory
+        ],
+      project,
+    ),
+    existingSessions,
+  )
+  await page
+    .getByRole('button', { name: '한글 project 새 작업', exact: true })
+    .click()
+  const configuredTask = page.getByRole('dialog', {
+    name: '새 작업',
+    exact: true,
+  })
+  assert.equal(
+    await configuredTask
+      .getByRole('combobox', { name: '이번 작업 기준 브랜치', exact: true })
+      .inputValue(),
+    'refs/heads/settings-base',
+  )
+  assert.equal(
+    await configuredTask
+      .getByRole('combobox', { name: '새 작업 모델', exact: true })
+      .inputValue(),
+    'fixture-model-alt',
+  )
+  assert.equal(
+    await configuredTask
+      .getByRole('combobox', { name: '새 작업 추론 수준', exact: true })
+      .inputValue(),
+    'high',
+  )
+  await configuredTask
+    .getByRole('textbox', { name: '새 브랜치 이름', exact: true })
+    .fill('feature/settings-test')
+  await configuredTask
+    .getByRole('textbox', { name: '새 작업 이름', exact: true })
+    .fill('설정 적용 작업')
+  await configuredTask
+    .getByRole('textbox', { name: '첫 요청', exact: true })
+    .fill('모델 전달 확인')
+  await configuredTask
+    .getByRole('button', { name: '만들고 시작', exact: true })
+    .click()
+  await configuredTask.waitFor({ state: 'detached' })
+  await page.locator('.status-label.completed').waitFor()
+  assert.match(
+    await page.locator('.markdown').innerText(),
+    /model=fixture-model-alt; effort=high/,
+  )
+  const configuredSession = await page.evaluate(async () =>
+    (await window.desktop.listSessions()).find(
+      (session) => session.title === '설정 적용 작업',
+    ),
+  )
+  assert.equal(
+    execFileSync(
+      'git',
+      ['-C', configuredSession.workspace, 'rev-parse', 'HEAD'],
+      { windowsHide: true },
+    )
+      .toString()
+      .trim(),
+    settingsBaseCommit,
+  )
+  assert.equal(
+    await stat(join(configuredSession.workspace, 'newer.txt')).catch(
+      () => null,
+    ),
+    null,
+  )
+  assert.match(
+    await readFile(join(project, 'hello.txt'), 'utf8'),
+    /Changed line/,
+  )
+  await page
+    .getByRole('button', {
+      name: 'feature/settings-test Worktree 삭제',
+      exact: true,
+    })
+    .click()
+  await page
+    .getByRole('dialog', { name: 'Worktree 삭제', exact: true })
+    .getByRole('button', { name: '삭제', exact: true })
+    .click()
+  await page
+    .locator('.workspace-row')
+    .filter({ hasText: 'feature/settings-test' })
+    .waitFor({ state: 'detached' })
+  await page.getByRole('button', { name: '설정', exact: true }).click()
+  await projectSettings
+    .getByRole('tab', { name: '프로젝트', exact: true })
+    .click()
+  await projectSettings
+    .getByRole('combobox', { name: '설정 프로젝트', exact: true })
+    .selectOption(secondProject)
+  await projectSettings
+    .getByRole('button', { name: '프로젝트 기본값 초기화', exact: true })
+    .click()
+  await projectSettings
+    .getByText('이 프로젝트의 기본값을 초기화했습니다.', { exact: true })
+    .waitFor()
+  assert.equal(
+    await projectSettings
+      .getByRole('combobox', { name: '기본 모델', exact: true })
+      .inputValue(),
+    '',
+  )
+  await projectSettings
+    .getByRole('button', { name: '닫기', exact: true })
+    .click()
+  await projectSettings.waitFor({ state: 'detached' })
+  const persistedSettings = await page.evaluate(() =>
+    window.desktop.getSettings(),
+  )
+  const keyFor = (path) =>
+    process.platform === 'win32' ? path.toLowerCase() : path
+  assert.equal(
+    persistedSettings.projects[keyFor(project)].model,
+    'fixture-model-alt',
+  )
+  assert.equal(persistedSettings.projects[keyFor(secondProject)], undefined)
   await page.screenshot({ path: 'artifacts/workspace-usage.png' })
   for (const scenario of ['error', 'empty', 'partial', 'zero']) {
     await app.close()
     app = await launch(scenario)
     page = await app.firstWindow()
+    assert.deepEqual(
+      await page.evaluate(() => window.desktop.getSettings()),
+      persistedSettings,
+    )
+    assert.equal(
+      (await page.evaluate(() => window.desktop.getAppInfo())).buildTime,
+      initialInfo.buildTime,
+    )
     const panel = page.getByRole('region', { name: 'Codex 사용량 한도' })
     const expected = {
       error: '한도를 불러오지 못했습니다.',
