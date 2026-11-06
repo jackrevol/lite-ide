@@ -11,6 +11,12 @@ export interface Worktree {
 export type TerminalKind = 'codex' | 'shell'
 export interface DeleteTaskOptions {
   discardChanges?: boolean
+  localOnly?: boolean
+}
+export interface WorktreeDeletionPreview {
+  localOnly: boolean
+  branch: string | null
+  totalChanges: number
 }
 export interface TerminalOpen {
   taskId: string
@@ -94,6 +100,10 @@ export interface DesktopApi {
   defaultCloneDirectory(): Promise<string>
   cloneProject(url: string, parent: string, name: string): Promise<Project>
   inspectRepository(projectPath: string): Promise<RepositorySnapshot>
+  inspectWorktreeDeletion(
+    projectPath: string,
+    target: string,
+  ): Promise<WorktreeDeletionPreview>
   readDiff(projectPath: string, filePath: string): Promise<string>
   codexStatus(): Promise<CodexStatus>
   codexUsage(): Promise<CodexUsage>

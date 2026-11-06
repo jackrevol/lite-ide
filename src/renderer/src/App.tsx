@@ -44,6 +44,7 @@ import type {
   ProjectDefaults,
   RepositorySnapshot,
   TerminalSnapshot,
+  WorktreeDeletionPreview,
 } from '../../shared/types'
 
 const emptyRepository: RepositorySnapshot = {
@@ -105,6 +106,8 @@ export function App() {
   const [name, setName] = useState('')
   const [managing, setManaging] = useState(false)
   const [deletionChanges, setDeletionChanges] = useState<number | null>(null)
+  const [deletionPreview, setDeletionPreview] =
+    useState<WorktreeDeletionPreview | null>(null)
   const [managementError, setManagementError] = useState('')
   const [terminals, setTerminals] = useState<Record<string, TerminalSnapshot>>(
     {},
@@ -172,14 +175,14 @@ export function App() {
         setState((previous) => {
           const tasks = previous.tasks
             .filter((task) =>
-              snapshots
-                .find(([path]) => samePath(path, task.project))?.[1]
-                .worktrees.some(
-                  (tree, index) => index > 0 && samePath(tree.path, task.path),
-                ),
+              opened.some((item) => samePath(item.path, task.project)),
             )
             .map((task) => ({
               ...task,
+              branch: snapshots
+                .find(([path]) => samePath(path, task.project))?.[1]
+                .worktrees.find((tree) => samePath(tree.path, task.path))?.branch
+                ?? task.branch,
               threadId:
                 task.threadId ??
                 legacy.find(
@@ -226,10 +229,23 @@ export function App() {
       .then((snapshot) => {
         if (disposed) return
         setRepository(current ? snapshot : emptyRepository)
+        if (snapshot.isGitRepository)
+          setState((previous) => {
+            let changed = false
+            const tasks = previous.tasks.map((task) => {
+              const tree = snapshot.worktrees.find((tree) => samePath(tree.path, task.path))
+              if (!tree || task.branch === tree.branch) return task
+              changed = true
+              return { ...task, branch: tree.branch }
+            })
+            return changed ? { ...previous, tasks } : previous
+          })
         if (project)
           setRepositories((previous) => ({
             ...previous,
-            [project.path]: snapshot,
+            // 손상된 작업 경로의 빈 결과로 프로젝트 Worktree 목록을 덮어쓰지 않습니다.
+            [project.path]: snapshot.isGitRepository
+              ? snapshot : previous[project.path] ?? emptyRepository,
           }))
       })
       .catch((cause) => {
@@ -400,13 +416,16 @@ export function App() {
     setName(task.name)
     setManagementError('')
     setDeletionChanges(null)
+    setDeletionPreview(null)
     taskDialog.current?.showModal()
     if (action === 'delete')
       void window.desktop
-        .inspectRepository(task.path)
-        .then((snapshot) => {
-          if (request === managementRequest.current)
-            setDeletionChanges(snapshot.totalChanges)
+        .inspectWorktreeDeletion(task.project, task.path)
+        .then((preview) => {
+          if (request === managementRequest.current) {
+            setDeletionChanges(preview.totalChanges)
+            setDeletionPreview(preview)
+          }
         })
         .catch((cause) => {
           if (request === managementRequest.current)
@@ -435,7 +454,7 @@ export function App() {
         const result = await window.desktop.deleteWorktree(
           target.task.project,
           target.task.path,
-          { discardChanges: true },
+          { discardChanges: true, localOnly: deletionPreview?.localOnly === true },
         )
         if (result.warning) setError(result.warning)
         setState((previous) => ({
@@ -879,7 +898,7 @@ export function App() {
                           ? '전용 Worktree의 변경 사항이 여기에 표시됩니다.'
                           : repository.isGitRepository
                             ? '작업 중인 변경 파일이 여기에 표시됩니다.'
-                            : 'Codex 작업은 그대로 사용할 수 있습니다.'}
+                            : 'Worktree 연결을 확인하거나 작업 삭제에서 로컬 기록을 정리해 주세요.'}
                       </p>
                     </div>
                   ) : (
@@ -1093,19 +1112,30 @@ export function App() {
           ) : (
             <>
               <p>
-                {target?.task.name}의 터미널을 종료하고 작업 폴더, 연결된 로컬
-                브랜치와 앱의 작업 기록을 함께 삭제합니다. 저장하지 않은 변경
-                사항과 추적하지 않는 파일도 함께 삭제되며 복구할 수 없습니다.
-                Codex 원본 세션과 원격 브랜치는 유지됩니다.
+                {deletionPreview?.localOnly ? (
+                  'Git 연결이 끊어진 작업입니다. 터미널을 종료하고 앱의 로컬 작업 기록과 초안만 정리합니다. 남아 있는 폴더, 로컬 브랜치와 Codex 원본 세션은 보존됩니다.'
+                ) : (
+                  <>
+                    {target?.task.name}의 터미널을 종료하고 작업 폴더, 연결된 로컬
+                    브랜치와 앱의 작업 기록을 함께 삭제합니다. 저장하지 않은 변경
+                    사항과 추적하지 않는 파일도 함께 삭제되며 복구할 수 없습니다.
+                    Codex 원본 세션과 원격 브랜치는 유지됩니다.
+                  </>
+                )}
               </p>
               <p className="target-path">{target?.task.path}</p>
               <p role="status">
                 {deletionChanges === null
                   ? '변경 사항 확인 중…'
-                  : deletionChanges > 0
-                    ? `변경 파일 ${deletionChanges}개를 포함해 삭제합니다.`
-                    : '현재 변경 파일이 없습니다.'}
+                  : deletionPreview?.localOnly
+                    ? '폴더와 브랜치는 삭제하지 않습니다.'
+                    : deletionChanges > 0
+                      ? `변경 파일 ${deletionChanges}개를 포함해 삭제합니다.`
+                      : '현재 변경 파일이 없습니다.'}
               </p>
+              {deletionPreview && !deletionPreview.localOnly && (
+                <p>현재 연결된 로컬 브랜치: {deletionPreview.branch ?? 'Detached HEAD (브랜치 삭제 없음)'}</p>
+              )}
             </>
           )}
           {managementError && <p role="alert">{managementError}</p>}
@@ -1131,9 +1161,11 @@ export function App() {
                 ? '처리 중…'
                 : target?.action === 'rename'
                   ? '저장'
-                  : deletionChanges
-                    ? '변경 사항 포함 삭제'
-                    : '삭제'}
+                  : deletionPreview?.localOnly
+                    ? '로컬 기록 정리'
+                    : deletionChanges
+                      ? '변경 사항 포함 삭제'
+                      : '삭제'}
             </Button>
           </div>
         </form>

@@ -26,7 +26,7 @@ const app = await electron.launch({
 })
 try {
   const page = await app.firstWindow()
-  await page.getByRole('heading', { name: '무엇을 만들어 볼까요?' }).waitFor()
+  await page.getByRole('heading', { name: '작업 터미널을 시작하세요' }).waitFor()
   assert.equal(
     await page
       .getByRole('button', { name: '앱 업데이트', exact: true })

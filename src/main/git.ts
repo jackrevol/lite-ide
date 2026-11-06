@@ -14,15 +14,20 @@ import type {
   ChangedFile,
   RepositorySnapshot,
   Worktree,
+  WorktreeDeletionPreview,
 } from '../shared/types.ts'
 
 const execute = promisify(execFile)
 
-async function git(directory: string, args: string[]): Promise<string> {
+async function git(
+  directory: string,
+  args: string[],
+  timeout = 15_000,
+): Promise<string> {
   const { stdout } = await execute('git', ['-C', directory, ...args], {
     encoding: 'utf8',
     windowsHide: true,
-    timeout: 15_000,
+    timeout,
     maxBuffer: 16 * 1024 * 1024,
     env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
   })
@@ -65,7 +70,10 @@ export async function inspectRepository(
   directory: string,
 ): Promise<RepositorySnapshot> {
   try {
-    await git(directory, ['rev-parse', '--show-toplevel'])
+    const top = await git(directory, ['rev-parse', '--show-toplevel'])
+    // .git이 사라진 하위 폴더를 상위 저장소의 작업 공간으로 오인하지 않습니다.
+    if (pathKey(await realpath(top.trim())) !== pathKey(await realpath(directory)))
+      throw new Error('Git 저장소 루트가 아닙니다.')
   } catch {
     return {
       isGitRepository: false,
@@ -174,10 +182,23 @@ export async function createWorktree(
 }
 
 export async function requireLinkedWorktree(directory: string): Promise<void> {
-  const [gitDirectory, commonDirectory] = await Promise.all([
-    git(directory, ['rev-parse', '--absolute-git-dir']),
-    git(directory, ['rev-parse', '--path-format=absolute', '--git-common-dir']),
-  ])
+  let directories: [string, string]
+  try {
+    const top = await git(directory, ['rev-parse', '--show-toplevel'])
+    if (
+      pathKey(await realpath(top.trim())) !== pathKey(await realpath(directory))
+    )
+      throw new Error('Worktree 루트가 아닙니다.')
+    directories = await Promise.all([
+      git(directory, ['rev-parse', '--absolute-git-dir']),
+      git(directory, ['rev-parse', '--path-format=absolute', '--git-common-dir']),
+    ])
+  } catch {
+    throw new Error(
+      'Worktree 폴더가 없거나 Git 연결이 끊어졌습니다. 작업 삭제에서 로컬 기록을 정리한 뒤 새 작업을 만들어 주세요.',
+    )
+  }
+  const [gitDirectory, commonDirectory] = directories
   if (pathKey(gitDirectory.trim()) === pathKey(commonDirectory.trim()))
     throw new Error('새 작업을 만들어 전용 Worktree에서 실행해 주세요.')
 }
@@ -231,13 +252,70 @@ export function workspaceContains(directory: string, path: string) {
   )
 }
 
+export async function resolveWorktreePath(target: string) {
+  if (typeof target !== 'string' || !isAbsolute(target))
+    throw new Error('올바른 Worktree 경로를 선택해 주세요.')
+  return realpath(target).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT') throw error
+    return resolve(target)
+  })
+}
+
+export async function inspectWorktreeDeletion(
+  directory: string,
+  target: string,
+  protectedPaths: string[] = [],
+): Promise<WorktreeDeletionPreview> {
+  const canonicalTarget = await resolveWorktreePath(target)
+  const snapshot = await inspectRepository(directory)
+  if (!snapshot.isGitRepository)
+    throw new Error('프로젝트의 Git 저장소를 확인할 수 없습니다.')
+  if (
+    pathKey(snapshot.worktrees[0].path) === pathKey(canonicalTarget) ||
+    protectedPaths.some((path) => workspaceContains(canonicalTarget, path))
+  )
+    throw new Error(
+      '기본 작업 공간이나 별도로 연 프로젝트는 삭제할 수 없습니다.',
+    )
+  const member = snapshot.worktrees.find(
+    (tree) => pathKey(tree.path) === pathKey(canonicalTarget),
+  )
+  if (!member) return { localOnly: true, branch: null, totalChanges: 0 }
+  try {
+    await requireLinkedWorktree(canonicalTarget)
+  } catch {
+    return { localOnly: true, branch: null, totalChanges: 0 }
+  }
+  const status = await git(canonicalTarget, [
+    'status', '--porcelain=v1', '-z', '--untracked-files=all',
+  ])
+  return {
+    localOnly: false,
+    branch: member.branch === 'Detached HEAD' ? null : member.branch,
+    totalChanges: parseStatus(status).length,
+  }
+}
+
 export async function removeWorktree(
   directory: string,
   target: string,
   protectedPaths: string[] = [],
   discardChanges = false,
+  localOnly = false,
 ): Promise<{ warning?: string }> {
-  const canonicalTarget = await realpath(target)
+  const canonicalTarget = await resolveWorktreePath(target)
+  const preview = await inspectWorktreeDeletion(
+    directory, canonicalTarget, protectedPaths,
+  )
+  if (localOnly) {
+    if (!preview.localOnly)
+      throw new Error(
+        'Worktree가 다시 연결되었습니다. 삭제 내용을 다시 확인해 주세요.',
+      )
+    return {
+      warning: 'Git 연결이 끊어진 작업의 로컬 기록만 정리했습니다. 남아 있는 폴더와 로컬 브랜치는 보존했습니다.',
+    }
+  }
   const snapshot = await inspectRepository(directory)
   const member = snapshot.worktrees.find(
     (tree) => pathKey(tree.path) === pathKey(canonicalTarget),
@@ -251,6 +329,7 @@ export async function removeWorktree(
     throw new Error(
       '기본 작업 공간이나 별도로 연 프로젝트는 삭제할 수 없습니다.',
     )
+  await requireLinkedWorktree(canonicalTarget)
   const status = await git(canonicalTarget, [
     'status',
     '--porcelain=v1',
@@ -285,21 +364,35 @@ export async function removeWorktree(
       `로컬 브랜치 ${branch}를 다른 Worktree에서도 사용하고 있어 삭제할 수 없습니다.`,
     )
   // Git 자체가 잠금·서브모듈 등 추가 보호 조건을 검사합니다.
-  await git(directory, [
-    'worktree',
-    'remove',
-    ...(discardChanges ? ['--force'] : []),
-    '--',
-    canonicalTarget,
-  ])
+  let warning: string | undefined
+  try {
+    // node_modules가 큰 Windows Worktree 삭제를 일반 조회 제한 시간으로 중단하지 않습니다.
+    await git(
+      directory,
+      ['worktree', 'remove', ...(discardChanges ? ['--force'] : []), '--', canonicalTarget],
+      10 * 60_000,
+    )
+  } catch (error) {
+    const after = await inspectRepository(directory)
+    if (
+      !after.isGitRepository ||
+      after.worktrees.some((tree) => pathKey(tree.path) === pathKey(canonicalTarget))
+    )
+      throw error
+    // Git 등록이 이미 해제된 부분 실패는 재시도 불가 상태로 남기지 않습니다.
+    warning = `Git 등록은 해제되었지만 폴더 삭제 중 오류가 발생했습니다. 남아 있는 폴더를 확인해 주세요. ${error instanceof Error ? error.message : String(error)}`
+  }
   if (branch) {
     try {
       await git(directory, ['branch', '-D', '--', branch])
     } catch (error) {
       return {
-        warning: `Worktree 폴더는 삭제되었지만 로컬 브랜치 ${branch}를 삭제하지 못했습니다. ${error instanceof Error ? error.message : String(error)}`,
+        warning: [
+          warning,
+          `${warning ? 'Worktree 등록은 해제되었지만' : 'Worktree 폴더는 삭제되었지만'} 로컬 브랜치 ${branch}를 삭제하지 못했습니다. ${error instanceof Error ? error.message : String(error)}`,
+        ].filter(Boolean).join('\n'),
       }
     }
   }
-  return {}
+  return warning ? { warning } : {}
 }

@@ -7,11 +7,14 @@ import {
   removeWorktree,
   listBranches,
   requireLinkedWorktree,
+  inspectWorktreeDeletion,
+  inspectRepository,
 } from './git.ts'
 import { validateCloneInput } from './clone.ts'
 import { execFileSync } from 'node:child_process'
 import {
   mkdtemp,
+  mkdir,
   writeFile,
   readFile,
   stat,
@@ -349,6 +352,49 @@ test('연결된 미병합 로컬 브랜치를 삭제하고 detached·공유 브�
       /feature\/partial/,
     )
     await rm(lock)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('브랜치 변경 후 실제 브랜치를 삭제하고 Git 연결이 끊어진 작업은 파일·브랜치를 보존한다', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'lite-worktree-recovery-')))
+  const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], {
+    encoding: 'utf8', windowsHide: true,
+  })
+  try {
+    git(root, 'init', '--initial-branch=main')
+    await writeFile(join(root, 'file.txt'), 'base', 'utf8')
+    git(root, 'add', '.')
+    git(root, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'base')
+    const tree = join(root, 'switched')
+    git(root, 'worktree', 'add', '-b', 'task/original', tree)
+    git(tree, 'switch', '-c', 'dev')
+    assert.deepEqual(await inspectWorktreeDeletion(root, tree), {
+      localOnly: false, branch: 'dev', totalChanges: 0,
+    })
+    await assert.rejects(removeWorktree(root, tree, [], true, true), /다시 연결/)
+    await removeWorktree(root, tree)
+    assert.equal(git(root, 'branch', '--list', 'dev').trim(), '')
+    assert.match(git(root, 'branch', '--list', 'task/original'), /task\/original/)
+
+    // Git 등록과 .git이 모두 사라진 상태에서도 로컬 기록 정리를 재시도할 수 있습니다.
+    await mkdir(tree)
+    await writeFile(join(tree, 'keep.txt'), '남은 파일', 'utf8')
+    await assert.rejects(requireLinkedWorktree(tree), /Git 연결이 끊어/)
+    assert.equal((await inspectRepository(tree)).isGitRepository, false)
+    assert.deepEqual(await inspectWorktreeDeletion(root, tree), {
+      localOnly: true, branch: null, totalChanges: 0,
+    })
+    await assert.rejects(removeWorktree(root, tree), /등록된 Worktree/)
+    assert.match((await removeWorktree(root, tree, [], false, true)).warning ?? '', /로컬 기록만/)
+    assert.equal(await readFile(join(tree, 'keep.txt'), 'utf8'), '남은 파일')
+    assert.match(git(root, 'branch', '--list', 'task/original'), /task\/original/)
+    await assert.rejects(removeWorktree(root, root, [root], false, true), /기본 작업 공간/)
+    await rm(tree, { recursive: true })
+    await assert.rejects(requireLinkedWorktree(tree), /Git 연결이 끊어/)
+    assert.equal((await inspectWorktreeDeletion(root, tree)).localOnly, true)
+    await removeWorktree(root, tree, [], false, true)
   } finally {
     await rm(root, { recursive: true, force: true })
   }

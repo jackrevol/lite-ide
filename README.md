@@ -11,6 +11,7 @@ macOS·Windows용 Codex 터미널 워크스페이스입니다. 작업 하나가 
 - 드래그·키보드로 조절하고 복원하는 3열 패널, 변경 파일 검색·diff
 - Git 저장소 복제와 로컬 프로젝트 열기, 프로젝트별 기준 브랜치·모델·추론 수준 기본값
 - 작업 삭제 확인 한 번으로 변경 파일·추적하지 않는 파일·폴더·연결 로컬 브랜치를 함께 삭제
+- 브랜치 변경을 실제 Git 정보와 동기화하고, Git 연결이 끊어진 작업은 남은 파일·브랜치를 보존하며 로컬 기록만 정리
 - Codex 사용량, 다크·라이트 테마, 빠른 이동, 통합 타이틀바, GitHub Releases 업데이트
 
 ## 실행
@@ -69,7 +70,9 @@ npm run test:codex -- --live --write
 
 ## 패키징과 범위
 
-`main`에 푸시하면 `.github/workflows/release.yml`이 Windows x64, macOS Apple Silicon(arm64), macOS Intel(x64)에서 테스트·빌드·패키징된 앱의 숨김 실행 검증 후 GitHub Release를 자동으로 공개합니다. 수동 실행도 `main`에서 지원합니다. 세 플랫폼이 모두 성공해야 `.exe`, 두 종류의 `.dmg`, `SHA256SUMS.txt`를 등록합니다. 추가 PAT 없이 Actions의 `GITHUB_TOKEN`을 사용합니다.
+`main`에 푸시하면 `.github/workflows/release.yml`이 Windows x64, macOS Apple Silicon(arm64), macOS Intel(x64)에서 빌드·패키징 후 GitHub Release를 자동으로 공개합니다. Actions에서는 테스트를 실행하지 않으며 위 검증 명령은 로컬에서 실행합니다. 수동 실행도 `main`에서 지원합니다. 세 플랫폼이 모두 성공해야 `.exe`, 두 종류의 `.dmg`, `SHA256SUMS.txt`를 등록합니다. 추가 PAT 없이 Actions의 `GITHUB_TOKEN`을 사용합니다.
+
+macOS 터미널의 `node-pty@1.1.0` 실행 권한 문제는 설치 후와 패키징 후(서명 전)에 `scripts/prepare-pty.cjs`로 보정합니다. 관련 upstream 이슈: https://github.com/microsoft/node-pty/issues/919.
 
 릴리스 버전은 `package.json`의 major·minor와 `기본 patch + GITHUB_RUN_NUMBER`로 생성합니다. 예를 들어 기본 `0.1.0`의 첫 실행은 `0.1.1`이고 태그는 `v0.1.1`입니다. 빌드 중의 버전 변경을 저장소에 다시 커밋하지 않으며, 같은 실행을 재시도해도 버전은 유지됩니다. 이미 공개된 릴리스는 재실행으로 덮어쓰지 않습니다. 현재 설치 파일은 개발자 인증서 서명·Apple 공증 없이 배포됩니다.
 

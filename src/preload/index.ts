@@ -81,6 +81,8 @@ const api: DesktopApi = {
     ipcRenderer.invoke('worktree:create', path, branch, baseRef),
   deleteWorktree: (project, path, options) =>
     ipcRenderer.invoke('worktree:delete', project, path, options),
+  inspectWorktreeDeletion: (project, path) =>
+    ipcRenderer.invoke('worktree:delete-preview', project, path),
   onSession: (listener) => {
     const receive = (
       _event: Electron.IpcRendererEvent,

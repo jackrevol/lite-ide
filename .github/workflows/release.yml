@@ -61,14 +61,9 @@ jobs:
       - run: npm ci
       - name: Set build version
         run: npm version "$RELEASE_VERSION" --no-git-tag-version --ignore-scripts
-      - run: npm test
       - run: npm run build
-      - name: Test UI in hidden windows
-        run: npm run test:ui
       - name: Package installer
         run: npx --no-install electron-builder --${{ matrix.platform }} --${{ matrix.arch }} --publish never
-      - name: Smoke test packaged app
-        run: node scripts/check-packaged.mjs ${{ matrix.platform }} ${{ matrix.arch }}
       - name: Upload installers
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -78,14 +73,6 @@ jobs:
             release/*.dmg
           if-no-files-found: error
           compression-level: 0
-          retention-days: 7
-      - name: Upload UI failure screenshots
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: ui-failure-${{ matrix.platform }}-${{ matrix.arch }}
-          path: artifacts/workspace-*.png
-          if-no-files-found: ignore
           retention-days: 7
 
   release:

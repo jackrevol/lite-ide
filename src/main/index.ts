@@ -27,6 +27,8 @@ import {
   listBranches,
   resolveBaseRef,
   requireLinkedWorktree,
+  inspectWorktreeDeletion,
+  resolveWorktreePath,
 } from './git'
 import { SettingsService, validateDefaults } from './settings-service'
 import { appInfo } from './app-info'
@@ -70,7 +72,7 @@ function requireWorkspace(value: unknown): string {
     !workspaces.has(resolve(value)) ||
     deletedWorkspaces.has(pathKey(value))
   ) {
-    throw new Error('프로젝트를 먼저 열어주세요.')
+    throw new Error('작업 경로를 사용할 수 없습니다. 프로젝트를 열거나 작업 삭제에서 로컬 기록을 정리해 주세요.')
   }
   return resolve(value)
 }
@@ -307,6 +309,13 @@ app.whenReady().then(() => {
     },
   )
   ipcMain.handle(
+    'worktree:delete-preview',
+    async (_event, projectPath: string, target: string) =>
+      inspectWorktreeDeletion(
+        await requireProject(projectPath), target, [...projects],
+      ),
+  )
+  ipcMain.handle(
     'worktree:delete',
     async (
       _event,
@@ -315,17 +324,20 @@ app.whenReady().then(() => {
       options?: DeleteTaskOptions,
     ) => {
       if (
-        options?.discardChanges !== undefined &&
-        typeof options.discardChanges !== 'boolean'
+        (options?.discardChanges !== undefined && typeof options.discardChanges !== 'boolean') ||
+        (options?.localOnly !== undefined && typeof options.localOnly !== 'boolean')
       )
         throw new Error('올바른 삭제 옵션을 선택해 주세요.')
       await restoredProjects
       const directory = requireWorkspace(projectPath)
       if (!projects.has(directory))
         throw new Error('열린 프로젝트를 선택해 주세요.')
-      const workspace = await realpath(requireWorkspace(target))
+      const workspace = await resolveWorktreePath(
+        options?.localOnly === true ? target : requireWorkspace(target),
+      )
       return agents!.removeWorkspace(workspace, async () => {
         if (
+          options?.localOnly !== true &&
           options?.discardChanges !== true &&
           (await inspectRepository(workspace)).totalChanges > 0
         )
@@ -336,6 +348,7 @@ app.whenReady().then(() => {
             workspace,
             [...projects],
             options?.discardChanges === true,
+            options?.localOnly === true,
           )
           deletedWorkspaces.add(pathKey(workspace))
           for (const path of workspaces) {

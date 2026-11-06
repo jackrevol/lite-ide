@@ -88,10 +88,12 @@ async function waitScreen(text) {
   )
 }
 async function quickTask() {
+  const count = (await tasks()).length
   await page
     .getByRole('button', { name: '한글 project 새 작업', exact: true })
     .click()
   await page.getByRole('menuitem', { name: '새 작업', exact: true }).click()
+  await until(async () => (await tasks()).length === count + 1, '새 작업 저장')
   await readyTerminal()
 }
 async function taskAction(task, name) {
@@ -352,6 +354,11 @@ try {
     '버릴 변경 사항\n',
     'utf8',
   )
+  // 저장된 브랜치가 달라져도 삭제 직전에 실제 연결된 브랜치를 사용합니다.
+  const switchedBranch = 'feature/switched-for-delete'
+  execFileSync('git', ['-C', second.path, 'switch', '-c', switchedBranch], {
+    windowsHide: true, encoding: 'utf8',
+  })
   await assert.rejects(
     page.evaluate(
       (task) => window.desktop.deleteWorktree(task.project, task.path),
@@ -361,6 +368,7 @@ try {
   )
   assert.equal((await snapshot(second.id)).running, true)
   await taskAction(second, '작업 삭제')
+  await deleting.getByText(`현재 연결된 로컬 브랜치: ${switchedBranch}`, { exact: true }).waitFor()
   assert.equal(
     await page.getByRole('dialog', { name: '작업 삭제', exact: true }).count(),
     1,
@@ -371,7 +379,8 @@ try {
   await deleting.waitFor({ state: 'hidden' })
   assert.equal((await tasks()).length, 1)
   assert.equal(await stat(second.path).catch(() => null), null)
-  assert.equal(git('branch', '--list', second.branch).trim(), '')
+  assert.equal(git('branch', '--list', switchedBranch).trim(), '')
+  assert.ok(git('branch', '--list', second.branch).trim())
   assert.equal(await snapshot(second.id), null)
   await app.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows()[0].setSize(960, 640),
@@ -413,6 +422,26 @@ try {
   await waitOutput(first.id, 'fixture · resume')
   assert.equal((await tasks()).length, 1)
   assert.equal((await tasks())[0].path, first.path)
+  // Git에서 이미 제거된 작업을 재시작 후에도 보존하고, 파일을 건드리지 않고 정리합니다.
+  await quickTask()
+  const stale = (await tasks()).find((task) => task.id !== first.id)
+  await page.evaluate((id) => window.desktop.closeTerminal(id), stale.id)
+  git('worktree', 'remove', '--force', '--', stale.path)
+  await mkdir(stale.path)
+  await writeFile(join(stale.path, '보존.txt'), '남아 있는 파일', 'utf8')
+  await app.close()
+  app = await launch()
+  page = await app.firstWindow()
+  page.setDefaultTimeout(15000)
+  await page.getByText(/작업 경로를 사용할 수 없습니다/).first().waitFor()
+  assert.equal((await tasks()).length, 2)
+  await taskAction(stale, '작업 삭제')
+  const cleanup = page.getByRole('dialog', { name: '작업 삭제', exact: true })
+  await cleanup.getByRole('button', { name: '로컬 기록 정리', exact: true }).click()
+  await cleanup.waitFor({ state: 'hidden' })
+  assert.equal((await tasks()).length, 1)
+  assert.equal(await readFile(join(stale.path, '보존.txt'), 'utf8'), '남아 있는 파일')
+  assert.ok(git('branch', '--list', stale.branch).trim())
   assert.deepEqual(errors, [])
   assert.equal(
     await app.evaluate(({ BrowserWindow }) =>
