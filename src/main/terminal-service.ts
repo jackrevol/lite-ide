@@ -1,5 +1,5 @@
 import * as pty from 'node-pty'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { findCodex } from './codex-client.ts'
 import { pathKey } from './git.ts'
@@ -13,6 +13,7 @@ import type {
 
 const outputLimit = 2_000_000
 type RunningTerminal = TerminalSnapshot & {
+  input: TerminalOpen
   process?: pty.IPty
   exited?: Promise<void>
 }
@@ -24,6 +25,7 @@ export class TerminalService {
   private openingWorkspaces = new Set<string>()
   private deleting = new Set<string>()
   private resumed = new Set<string>()
+  private threads = new Map<string, string>()
   private loaded: Promise<void>
   private saves = Promise.resolve()
   private closed = false
@@ -31,32 +33,53 @@ export class TerminalService {
   private emit: (event: TerminalEvent) => void
   private spawn: PtyFactory
   private codex: () => Promise<string>
-  private processes = new ProcessService()
+  private processes: ProcessService
+  private resolveThread?: (input: TerminalOpen, resuming: boolean) => Promise<string | undefined>
+  private interruptThread?: (threadId: string) => Promise<void>
 
   constructor(
     file: string,
     emit: (event: TerminalEvent) => void,
     spawn: PtyFactory = pty.spawn,
     codex = findCodex,
+    resolveThread?: (input: TerminalOpen, resuming: boolean) => Promise<string | undefined>,
+    interruptThread?: (threadId: string) => Promise<void>,
+    processes = new ProcessService(),
   ) {
     this.file = file
     this.emit = emit
     this.spawn = spawn
     this.codex = codex
-    this.loaded = readFile(file, 'utf8')
-      .then((data) => {
-        const saved: unknown = JSON.parse(data)
-        if (Array.isArray(saved))
-          for (const path of saved)
-            if (typeof path === 'string') this.resumed.add(path)
-      })
-      .catch(() => {})
+    this.resolveThread = resolveThread
+    this.interruptThread = interruptThread
+    this.processes = processes
+    this.loaded = Promise.all([
+      readFile(file, 'utf8')
+        .then((data) => {
+          const saved: unknown = JSON.parse(data)
+          if (Array.isArray(saved))
+            for (const path of saved)
+              if (typeof path === 'string') this.resumed.add(path)
+        })
+        .catch(() => {}),
+      readFile(file + '.threads.json', 'utf8')
+        .then((data) => {
+          const saved: unknown = JSON.parse(data)
+          if (Array.isArray(saved))
+            for (const entry of saved)
+              if (
+                Array.isArray(entry) && entry.length === 2 &&
+                entry.every((item) => typeof item === 'string')
+              ) this.threads.set(entry[0], entry[1])
+        })
+        .catch(() => {}),
+    ]).then(() => {})
   }
 
   snapshot(id: string): TerminalSnapshot | null {
     const terminal = this.terminals.get(id)
     if (!terminal) return null
-    const { process: _process, exited: _exited, ...snapshot } = terminal
+    const { process: _process, exited: _exited, input: _input, ...snapshot } = terminal
     return snapshot
   }
 
@@ -115,6 +138,8 @@ export class TerminalService {
     let fixture = false
     if (input.kind === 'codex') {
       binary = await this.codex()
+      const key = pathKey(input.workspace)
+      const resuming = this.resumed.has(key) || !!input.threadId
       fixture =
         process.env.LITE_IDE_HEADLESS === '1' &&
         !!process.env.LITE_IDE_TEST_TERMINAL
@@ -128,16 +153,22 @@ export class TerminalService {
             : (input.prompt ?? ''),
         )
       } else {
-        if (input.threadId && !this.resumed.has(pathKey(input.workspace)))
-          args.push('resume', input.threadId)
-        else if (this.resumed.has(pathKey(input.workspace)))
+        let threadId = this.threads.get(key) ?? input.threadId
+        if (!threadId && this.resolveThread)
+          threadId = await this.resolveThread(input, resuming)
+        if (threadId) {
+          this.threads.set(key, threadId)
+          input = { ...input, threadId }
+          // 실행 전에 정확한 ID를 저장해 재시작 시 다른 대화에 연결되지 않게 합니다.
+          await this.persistResume()
+          args.push('resume', threadId)
+        } else if (resuming && !this.resolveThread)
           args.push('resume', '--last')
         args.push(
           '--config',
           'tui.alternate_screen="always"',
           '--config',
           'tui.fullscreen_transcript=true',
-          '--no-daemon',
           '--cd',
           input.workspace,
           '--dangerously-bypass-approvals-and-sandbox',
@@ -148,7 +179,7 @@ export class TerminalService {
             '--config',
             `model_reasoning_effort=${JSON.stringify(input.effort)}`,
           )
-        if (input.prompt && !this.resumed.has(pathKey(input.workspace)))
+        if (input.prompt && !resuming)
           args.push(input.prompt)
       }
     } else {
@@ -163,6 +194,7 @@ export class TerminalService {
     if (this.closed || this.deleting.has(pathKey(input.workspace)))
       throw new Error('작업이 종료되었거나 삭제 중입니다.')
     const terminal: RunningTerminal = {
+      input: { ...input, prompt: undefined },
       taskId: input.taskId,
       generation: crypto.randomUUID(),
       workspace: input.workspace,
@@ -242,14 +274,68 @@ export class TerminalService {
 
   private persistResume() {
     const snapshot = JSON.stringify([...this.resumed])
+    const threads = JSON.stringify([...this.threads])
     this.saves = this.saves
       .catch(() => {})
       .then(async () => {
         await mkdir(dirname(this.file), { recursive: true })
         await writeFile(`${this.file}.tmp`, snapshot, 'utf8')
         await rename(`${this.file}.tmp`, this.file)
+        await writeFile(`${this.file}.threads.json.tmp`, threads, 'utf8')
+        await rename(`${this.file}.threads.json.tmp`, `${this.file}.threads.json`)
       })
     void this.saves.catch(() => {})
+    return this.saves
+  }
+
+  async prepareForUpdate() {
+    await this.loaded
+    await Promise.allSettled([...this.opening.values()])
+    await this.captureThreads()
+    await this.persistResume()
+    const restore = [...this.terminals.values()]
+      .filter((terminal) => terminal.running)
+      .map((terminal) => ({
+        ...terminal.input, cols: terminal.cols, rows: terminal.rows,
+      }))
+    await writeFile(`${this.file}.update.json.tmp`, JSON.stringify(restore), 'utf8')
+    await rename(`${this.file}.update.json.tmp`, `${this.file}.update.json`)
+  }
+
+  private async captureThreads() {
+    if (!this.resolveThread) return
+    for (const terminal of this.terminals.values()) {
+      if (terminal.kind !== 'codex' || !terminal.running) continue
+      const threadId = await this.resolveThread(terminal.input, true)
+      if (threadId) {
+        this.threads.set(pathKey(terminal.workspace), threadId)
+        terminal.input.threadId = threadId
+      }
+    }
+  }
+
+  async cancelUpdateRestore() {
+    await rm(`${this.file}.update.json`, { force: true })
+  }
+
+  async restoreAfterUpdate(validate: (workspace: string) => Promise<void>) {
+    await this.loaded
+    const saved: unknown = await readFile(`${this.file}.update.json`, 'utf8')
+      .then((data) => JSON.parse(data))
+      .catch(() => undefined)
+    if (!Array.isArray(saved)) return
+    const remaining: TerminalOpen[] = []
+    for (const input of saved) {
+      if (!input || typeof input.workspace !== 'string') continue
+      try {
+        await validate(input.workspace)
+        await this.open({ ...input, prompt: undefined })
+      } catch {
+        // 일시적인 연결 실패는 다음 실행에서 다시 복원합니다.
+        remaining.push(input)
+      }
+    }
+    await writeFile(`${this.file}.update.json`, JSON.stringify(remaining), 'utf8')
   }
 
   write(id: string, data: string) {
@@ -269,12 +355,25 @@ export class TerminalService {
     terminal.process.resize(terminal.cols, terminal.rows)
   }
 
-  async stop(id: string) {
+  async stop(id: string, preserveSession = false) {
     const terminal = this.terminals.get(id)
     if (!terminal?.process) return
-    const root = this.processRoots().find((root) => root.generation === terminal.generation)
-    if (root)
-      await this.processes.stopDescendants(root, () => this.processRoots()).catch(() => {})
+    if (!preserveSession && terminal.kind === 'codex' && this.interruptThread) {
+      const threadId = await this.resolveThread?.(terminal.input, true)
+        ?? terminal.input.threadId
+      if (threadId) {
+        this.threads.set(pathKey(terminal.workspace), threadId)
+        terminal.input.threadId = threadId
+        await this.persistResume()
+        await this.interruptThread(threadId)
+      }
+    }
+    // 업데이트·앱 종료에서는 Codex daemon의 실행을 보존하고 PTY 연결만 닫습니다.
+    if (!preserveSession || terminal.kind !== 'codex') {
+      const root = this.processRoots().find((root) => root.generation === terminal.generation)
+      if (root)
+        await this.processes.stopDescendants(root, () => this.processRoots()).catch(() => {})
+    }
     if (!terminal.process) return
     terminal.process.kill()
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -312,6 +411,21 @@ export class TerminalService {
   }
 
   async stopProcess(input: StopProcessInput) {
+    const root = this.processRoots(input.workspace).find((root) =>
+      root.taskId === input.taskId && root.generation === input.generation && root.pid === input.pid,
+    )
+    if (root) {
+      const snapshot = await this.inspectProcesses(input.workspace)
+      const selected = snapshot.processes.some((process) =>
+        process.root && process.generation === input.generation && process.pid === input.pid && process.identity === input.identity,
+      )
+      if (!selected) throw new Error('이 터미널 소유의 실행 중인 프로세스가 아닙니다. 목록을 새로 고쳐 주세요.')
+      if (this.terminals.get(input.taskId)?.generation !== input.generation)
+        throw new Error('터미널이 변경되었습니다. 목록을 새로 고쳐 주세요.')
+      // daemon을 종료하기 전에 Codex에 턴 중단을 전달합니다.
+      await this.stop(input.taskId)
+      return this.inspectProcesses(input.workspace)
+    }
     await this.processes.stop(() => this.processRoots(input.workspace), input, async () => {
       const terminal = this.terminals.get(input.taskId)
       if (terminal?.generation !== input.generation)
@@ -337,6 +451,7 @@ export class TerminalService {
       for (const [id, terminal] of this.terminals)
         if (pathKey(terminal.workspace) === key) this.terminals.delete(id)
       this.resumed.delete(key)
+      this.threads.delete(key)
       this.persistResume()
       return result
     } finally {
@@ -347,8 +462,10 @@ export class TerminalService {
   async close() {
     this.closed = true
     await Promise.allSettled([...this.opening.values()])
+    await this.captureThreads().catch(() => {})
+    this.persistResume()
     await Promise.allSettled(
-      [...this.terminals.keys()].map((id) => this.stop(id)),
+      [...this.terminals.keys()].map((id) => this.stop(id, true)),
     )
     await this.saves.catch(() => {})
   }

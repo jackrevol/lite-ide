@@ -62,7 +62,7 @@ export function UpdatePanel({
     downloading: '설치 파일을 다운로드하고 있습니다.',
     downloaded: '다운로드와 무결성 검증이 완료되었습니다.',
     installing:
-      '설치를 준비하고 있습니다. 앱이 종료된 후 업데이트하고 다시 실행합니다.',
+      '세션 연결 정보를 저장하고 업데이트합니다. 재실행 후 기존 Codex 세션에 자동으로 연결합니다.',
     error: '업데이트를 완료하지 못했습니다.',
   }
   return (
@@ -88,7 +88,7 @@ export function UpdatePanel({
         <p>
           {!state.canInstall
             ? '개발 실행에서는 설치를 실행할 수 없습니다. 설치된 앱에서 이용해 주세요.'
-            : '앱을 종료하고 설치한 뒤 다시 실행합니다.'}
+            : '앱을 종료하고 설치한 뒤 기존 Codex 세션에 자동으로 다시 연결합니다.'}
         </p>
       )}
       <div className="dialog-actions">

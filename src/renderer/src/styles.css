@@ -1676,6 +1676,7 @@ dialog::backdrop {
   min-width: 0;
 }
 .row-action,
+.project-base-branch,
 .project-new-task {
   display: grid;
   place-items: center;
@@ -1686,6 +1687,7 @@ dialog::backdrop {
   color: var(--muted-foreground);
 }
 .row-action:hover,
+.project-base-branch:hover,
 .project-new-task:hover {
   background: var(--accent);
   color: var(--foreground);
@@ -1755,6 +1757,24 @@ dialog::backdrop {
   padding: 0;
   margin: 0;
   min-width: 0;
+}
+.base-branch-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.base-branch-controls label {
+  flex: 1;
+  min-width: 0;
+}
+.base-branch-controls select {
+  width: 100%;
+}
+.base-branch-field p {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted-foreground);
 }
 .new-task-dialog label {
   display: grid;

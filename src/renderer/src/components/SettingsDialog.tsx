@@ -8,6 +8,7 @@ import type {
 } from '../../../shared/types'
 import { Button } from './ui/button'
 import { UpdatePanel } from './UpdatePanel'
+import { BaseBranchSelect, useBranches } from './BaseBranchSelect'
 
 export const projectSettingsKey = (path: string) =>
   window.desktop.platform === 'win32' ? path.toLowerCase() : path
@@ -20,6 +21,7 @@ const emptyDefaults: ProjectDefaults = {
 export function SettingsDialog({
   projects,
   currentProject,
+  initialTab = 'general',
   connection,
   theme,
   onTheme,
@@ -27,21 +29,24 @@ export function SettingsDialog({
 }: {
   projects: Project[]
   currentProject: string
+  initialTab?: 'general' | 'project'
   connection: CodexStatus
   theme: string
   onTheme: (theme: string) => void
   onClose: () => void
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
-  const [tab, setTab] = useState('general')
+  const [tab, setTab] = useState<string>(initialTab)
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [info, setInfo] = useState<AppInfo | null>(null)
   const [project, setProject] = useState(
     currentProject || projects[0]?.path || '',
   )
   const [defaults, setDefaults] = useState<ProjectDefaults>(emptyDefaults)
-  const [branches, setBranches] = useState<string[]>([])
-  const [branchLoading, setBranchLoading] = useState(false)
+  const branchList = useBranches(project)
+  const invalidBaseRef =
+    branchList.loading || !!branchList.error ||
+    (defaults.baseRef !== 'HEAD' && !branchList.branches.includes(defaults.baseRef))
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const [loadError, setLoadError] = useState('')
@@ -86,27 +91,9 @@ export function SettingsDialog({
     setDefaults(
       settings?.projects[projectSettingsKey(project)] ?? emptyDefaults,
     )
-    setBranches([])
-    if (!project) return
-    let disposed = false
-    setBranchLoading(true)
-    void window.desktop
-      .listBranches(project)
-      .then((refs) => {
-        if (!disposed) setBranches(refs)
-      })
-      .catch(() => {
-        /* Git이 아닌 프로젝트는 현재 작업 공간만 사용합니다. */
-      })
-      .finally(() => {
-        if (!disposed) setBranchLoading(false)
-      })
-    return () => {
-      disposed = true
-    }
   }, [project, settings])
   async function save(reset = false) {
-    if (!project || busy.current) return
+    if (!project || busy.current || !settings || (!reset && invalidBaseRef)) return
     busy.current = true
     setPending(true)
     setError('')
@@ -235,33 +222,13 @@ export function SettingsDialog({
                       ))}
                     </select>
                   </label>
-                  <label>
-                    기본 기준 브랜치
-                    <select
-                      aria-label="기본 기준 브랜치"
-                      value={defaults.baseRef}
-                      disabled={branchLoading}
-                      onChange={(event) =>
-                        setDefaults({
-                          ...defaults,
-                          baseRef: event.target.value,
-                        })
-                      }
-                    >
-                      <option value="HEAD">현재 HEAD (기본)</option>
-                      {defaults.baseRef !== 'HEAD' &&
-                        !branches.includes(defaults.baseRef) && (
-                          <option value={defaults.baseRef}>
-                            {defaults.baseRef} (현재 확인 불가)
-                          </option>
-                        )}
-                      {branches.map((ref) => (
-                        <option value={ref} key={ref}>
-                          {ref.replace(/^refs\/(heads|remotes)\//, '')}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                  <BaseBranchSelect
+                    label="기본 기준 브랜치"
+                    ariaLabel="기본 기준 브랜치"
+                    value={defaults.baseRef}
+                    onChange={(baseRef) => setDefaults({ ...defaults, baseRef })}
+                    {...branchList}
+                  />
                   <label>
                     기본 모델
                     <select
@@ -329,7 +296,7 @@ export function SettingsDialog({
                   </Button>
                   <Button
                     type="submit"
-                    disabled={pending || !settings || branchLoading}
+                    disabled={pending || !settings || invalidBaseRef}
                   >
                     {pending ? '저장 중…' : '저장'}
                   </Button>

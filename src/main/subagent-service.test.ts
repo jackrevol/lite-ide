@@ -398,7 +398,7 @@ test('조회 실패는 실행 실패로 바꾸지 않고, 조회 중 수신한 �
   assert.equal(session.observationError, undefined)
 })
 
-test('연결 종료 시 실행 중인 자식과 요청을 정리하고 완료한 부모 상태를 유지한다', async (t) => {
+test('daemon 연결 종료 시 자식을 재구독 가능한 상태로 두고 요청만 정리한다', async (t) => {
   const { service, child } = await setup(t)
   const session = await child()
   service.client.onMessage({
@@ -407,8 +407,9 @@ test('연결 종료 시 실행 중인 자식과 요청을 정리하고 완료한
     params: { threadId: session.threadId },
   })
   service.client.onDisconnect('연결 종료')
-  assert.equal(session.status, 'failed')
-  assert.equal(session.error, '연결 종료')
+  assert.equal(session.status, 'interrupted')
+  assert.equal(session.error, undefined)
+  assert.equal(session.observationError, '연결 종료')
   assert.equal(session.requests.length, 0)
   assert.equal(
     (await service.all()).find((item) => item.id === 'parent')!.status,
@@ -545,7 +546,10 @@ test('CLI 관측은 동시 조회를 합치고 페이지를 끝까지 읽으며 
 test('저장한 CLI 계층은 재시작 후에도 resume하지 않고 read로 조회한다', async (t) => {
   const { service, file } = await setup(t)
   const workspace = (await service.all())[0].workspace
-  const root = { id: 'stored-cli', cwd: workspace, source: 'cli', turns: [] }
+  const root = {
+    id: 'stored-cli', cwd: workspace, source: 'cli',
+    turns: [{ id: 'stored-turn', status: 'inProgress', items: [] }],
+  }
   service.client.request = async <T>(method: string, params: Record<string, unknown>) => {
     if (method === 'thread/read') return { thread: root } as T
     return { data: params.ancestorThreadId ? [] : [root] } as T
@@ -560,8 +564,75 @@ test('저장한 CLI 계층은 재시작 후에도 resume하지 않고 read로 �
     assert.equal(method, 'thread/read')
     return { thread: root } as T
   }
-  await restored.inspectSubagent('cli-stored-cli')
+  await restored.reconnectSessions()
   assert.equal((await restored.all()).find((item) => item.threadId === root.id)!.canAcceptDirectInput, false)
+})
+
+test('daemon의 외부 appServer 관측과 앱 소유 실행을 구분하고 같은 계층의 재연결을 허용한다', async (t) => {
+  const { service, child, calls } = await setup(t)
+  const workspace = (await service.all())[0].workspace
+  const external = {
+    id: 'external-app-server', cwd: workspace, source: 'appServer',
+    canAcceptDirectInput: true,
+    status: { type: 'active', activeFlags: [] },
+    turns: [{ id: 'external-turn', status: 'inProgress', items: [] }],
+  }
+  const request = service.client.request.bind(service.client)
+  service.client.request = async <T>(method: string, params: Record<string, unknown>) => {
+    if (method === 'thread/list') {
+      assert.ok(Array.isArray(params.sourceKinds))
+      if (!params.ancestorThreadId)
+        assert.deepEqual(params.sourceKinds, ['cli', 'appServer'])
+      return { data: params.ancestorThreadId ? [] : [
+        external, { ...external, id: 'parent-thread' },
+      ] } as T
+    }
+    if (method === 'thread/read') return { thread: external } as T
+    return request<T>(method, params)
+  }
+  await service.observeWorkspace(workspace)
+  assert.equal((await service.all()).filter((item) => item.threadId === 'parent-thread').length, 1)
+  assert.equal((await service.all()).find((item) => item.threadId === external.id)!.canAcceptDirectInput, false)
+  assert.equal(await service.hasOwnedRunningSession(workspace), false)
+  const ownedChild = await child()
+  assert.equal(await service.hasOwnedRunningSession(workspace), true)
+  assert.equal(await service.hasOwnedRunningSession(workspace, 'parent-thread'), false)
+  await service.interrupt(ownedChild.id)
+  assert.ok(calls.some((call) => call.method === 'turn/interrupt'))
+  ownedChild.status = 'completed'
+  const startingRoot = (await service.all()).find((item) => item.id === 'parent')!
+  startingRoot.threadId = undefined
+  startingRoot.status = 'running'
+  assert.equal(await service.hasOwnedRunningSession(workspace), true)
+  assert.equal(await service.hasOwnedRunningSession(workspace, ''), true)
+})
+
+test('daemon 재구독은 연결이 없던 동안 생성된 자식을 복원하고 입력을 재전송하지 않는다', async (t) => {
+  const { service, child, threads, calls } = await setup(t)
+  const ownedChild = await child()
+  service.client.onDisconnect('proxy 연결 종료')
+  assert.equal(ownedChild.status, 'interrupted')
+  threads.set('child-thread', {
+    id: 'child-thread', status: { type: 'active', activeFlags: [] },
+    turns: [{ id: 'child-thread-turn', status: 'inProgress', items: [{
+      id: 'offline-spawn', type: 'collabAgentToolCall', tool: 'spawnAgent',
+      receiverThreadIds: ['offline-child'], agentsStates: { 'offline-child': { status: 'running' } },
+    }] }],
+  })
+  threads.set('offline-child', {
+    id: 'offline-child', parentThreadId: 'child-thread',
+    status: { type: 'active', activeFlags: [] }, canAcceptDirectInput: true,
+    turns: [{ id: 'offline-turn', status: 'inProgress', items: [] }],
+  })
+  await service.reconnectSessions()
+  await service.inspectSubagent('subagent-offline-child')
+  const restoredChild = (await service.all()).find((item) => item.threadId === 'offline-child')!
+  assert.equal(ownedChild.status, 'running')
+  assert.equal(ownedChild.observationError, undefined)
+  assert.equal(restoredChild.parentSessionId, ownedChild.id)
+  assert.equal(restoredChild.status, 'running')
+  assert.equal(restoredChild.canAcceptDirectInput, true)
+  assert.ok(calls.every((call) => !['turn/start', 'turn/steer'].includes(call.method)))
 })
 
 test('CLI 원본 rollout으로 진행 상태를 복구하고 부분 기록은 다음 조회까지 보존한다', async (t) => {

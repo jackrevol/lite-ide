@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { CodexStatus, Project, Worktree } from '../../../shared/types'
 import type { WorkspaceTask } from '../lib/workspace-state'
 import { Button } from './ui/button'
+import { BaseBranchSelect, useBranches } from './BaseBranchSelect'
 
 export function NewTaskDialog({
   project,
@@ -10,7 +11,7 @@ export function NewTaskDialog({
   initialModel,
   initialEffort,
   initialBaseRef,
-  branches,
+  onManageBaseBranch,
   onCreate,
   onClose,
 }: {
@@ -20,7 +21,7 @@ export function NewTaskDialog({
   initialModel: string
   initialEffort: string
   initialBaseRef: string
-  branches: string[]
+  onManageBaseBranch: () => void
   onCreate: (task: WorkspaceTask) => Promise<void>
   onClose: () => void
 }) {
@@ -34,6 +35,9 @@ export function NewTaskDialog({
   const [model, setModel] = useState(initialModel)
   const [effort, setEffort] = useState(initialEffort)
   const [baseRef, setBaseRef] = useState(initialBaseRef)
+  const branchList = useBranches(project.path)
+  const invalidBaseRef = branchList.loading || !!branchList.error ||
+    (baseRef !== 'HEAD' && !branchList.branches.includes(baseRef))
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const created = useRef<WorkspaceTask | null>(null)
@@ -58,7 +62,7 @@ export function NewTaskDialog({
       setEffort(selected.defaultEffort)
   }, [connection.models, model, effort])
   async function submit() {
-    if (submitting.current) return
+    if (submitting.current || (!created.current && invalidBaseRef)) return
     submitting.current = true
     setPending(true)
     setError('')
@@ -114,26 +118,22 @@ export function NewTaskDialog({
         <fieldset disabled={pending || !!created.current}>
           <p>
             선택한 기준 브랜치에서 작업 전용 브랜치와 폴더를 생성합니다.
-            기본값은 설정 → 프로젝트에서 변경할 수 있습니다.
           </p>
-          <label>
-            기준 브랜치
-            <select
-              aria-label="이번 작업 기준 브랜치"
-              value={baseRef}
-              onChange={(event) => setBaseRef(event.target.value)}
-            >
-              <option value="HEAD">현재 HEAD (기본)</option>
-              {baseRef !== 'HEAD' && !branches.includes(baseRef) && (
-                <option value={baseRef}>{baseRef} (현재 확인 불가)</option>
-              )}
-              {branches.map((ref) => (
-                <option value={ref} key={ref}>
-                  {ref.replace(/^refs\/(heads|remotes)\//, '')}
-                </option>
-              ))}
-            </select>
-          </label>
+          <BaseBranchSelect
+            label="기준 브랜치"
+            ariaLabel="이번 작업 기준 브랜치"
+            value={baseRef}
+            onChange={setBaseRef}
+            {...branchList}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onManageBaseBranch}
+          >
+            기본 기준 브랜치 관리
+          </Button>
           <label>
             새 브랜치 이름
             <input
@@ -246,7 +246,7 @@ export function NewTaskDialog({
               invalidEffort ||
               !branch.trim() ||
               !worktrees.length ||
-              (baseRef !== 'HEAD' && !branches.includes(baseRef)) ||
+              (!created.current && invalidBaseRef) ||
               (!!prompt.trim() &&
                 (!connection.connected || !connection.authenticated))
             }

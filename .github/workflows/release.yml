@@ -58,12 +58,23 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-      - run: npm ci
+      - name: Cache Electron and packaging tools
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/electron-builder-cache
+          key: electron-builder-v1-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-builder-v1-${{ runner.os }}-${{ matrix.arch }}-
+      - run: npm ci --no-audit --no-fund
       - name: Set build version
         run: npm version "$RELEASE_VERSION" --no-git-tag-version --ignore-scripts
       - run: npm run build
       - name: Package installer
-        run: npx --no-install electron-builder --${{ matrix.platform }} --${{ matrix.arch }} --publish never
+        env:
+          ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder-cache
+        run: >-
+          npx --no-install electron-builder --${{ matrix.platform }} --${{ matrix.arch }} --publish never
+          --config.electronDownload.cache="$ELECTRON_BUILDER_CACHE/electron"
       - name: Upload installers
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

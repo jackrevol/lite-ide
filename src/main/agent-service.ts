@@ -76,8 +76,9 @@ export class AgentService {
             this.publish(session, false)
             continue
           }
-          session.status = 'failed'
-          session.error = reason
+          // 연결만 끊겨도 daemon의 실행은 계속되므로 재구독 가능한 상태로 보존합니다.
+          session.status = 'interrupted'
+          session.observationError = reason
           session.requests = []
           this.publish(session)
         }
@@ -172,6 +173,22 @@ export class AgentService {
   async all() {
     await this.loaded
     return [...this.sessions.values()]
+  }
+
+  async hasOwnedRunningSession(workspace: string, exceptThreadId?: string) {
+    await this.loaded
+    const attached = exceptThreadId ? [...this.sessions.values()].find(
+      (session) => session.threadId === exceptThreadId,
+    ) : undefined
+    const attachedFamily = new Set(attached
+      ? [attached, ...this.descendants(attached.id)].map((session) => session.id)
+      : [])
+    return [...this.sessions.values()].some((session) =>
+      pathKey(session.workspace) === pathKey(workspace) &&
+      !attachedFamily.has(session.id) &&
+      !(session.threadId && this.externalThreads.has(session.threadId)) &&
+      ['running', 'waiting'].includes(session.status),
+    )
   }
 
   private parentThreadId(thread: Record<string, unknown>) {
@@ -297,7 +314,7 @@ export class AgentService {
       await this.client.start()
       const threads = await this.listThreads({
         cwd: workspace,
-        sourceKinds: ['cli'],
+        sourceKinds: ['cli', 'appServer'],
         sortKey: 'updated_at',
       })
       for (const thread of threads) {
@@ -723,6 +740,21 @@ export class AgentService {
       throw new Error('서브에이전트를 찾을 수 없습니다.')
     if (this.deletionBlocked(session.workspace, id))
       throw new Error('삭제 중인 Worktree의 작업은 제어할 수 없습니다.')
+    return this.inspectSession(session)
+  }
+
+  async reconnectSessions() {
+    await this.loaded
+    if (this.closed) return
+    await Promise.allSettled(
+      [...this.sessions.values()]
+        .filter((session) => session.threadId && session.status === 'interrupted')
+        .map((session) => this.inspectSession(session)),
+    )
+  }
+
+  private inspectSession(session: AgentSession): Promise<void> {
+    const id = session.id
     const pending = this.inspections.get(id)
     if (pending) return pending
     const inspection = (async () => {
@@ -791,10 +823,11 @@ export class AgentService {
           session.updatedAt = Math.max(session.updatedAt, rollout.updatedAt)
         if (['running', 'waiting'].includes(session.status))
           session.observationError = this.terminalExitWarning(session)
-        for (const turn of list(thread.turns))
-          for (const item of list(record(turn).items))
-            this.trackSubagents(session, record(item))
       }
+      // 앱 연결이 없는 동안 생성된 자식도 저장된 협업 이벤트에서 복원합니다.
+      for (const turn of list(thread.turns))
+        for (const item of list(record(turn).items))
+          this.trackSubagents(session, record(item))
       this.publish(session, false)
     })()
       .catch((error: unknown) => {
