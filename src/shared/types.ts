@@ -54,6 +54,10 @@ export interface DesktopApi {
   loginCodex(): Promise<void>
   openLink(url: string): Promise<void>
   createWorktree(projectPath: string, branch: string): Promise<Worktree>
+  deleteWorktree(
+    projectPath: string,
+    worktreePath: string,
+  ): Promise<{ warning?: string }>
 }
 
 export interface AppUpdateState {
@@ -74,7 +78,12 @@ export interface AppUpdateState {
 }
 
 export type AgentStatus =
-  'idle' | 'running' | 'waiting' | 'completed' | 'interrupted' | 'failed'
+  | 'idle'
+  | 'running'
+  | 'waiting'
+  | 'completed'
+  | 'interrupted'
+  | 'failed'
 export interface AgentMessage {
   id: string
   kind: 'user' | 'assistant' | 'command' | 'files' | 'reasoning' | 'tool'
@@ -152,6 +161,7 @@ export interface SendMessage {
   text: string
   model?: string
   effort?: string
+  title?: string
 }
 export interface RequestAnswer {
   approved?: boolean

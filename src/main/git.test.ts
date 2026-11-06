@@ -1,7 +1,16 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { parseStatus, parseWorktrees } from './git.ts'
+import {
+  parseStatus,
+  parseWorktrees,
+  createWorktree,
+  removeWorktree,
+} from './git.ts'
 import { validateCloneInput } from './clone.ts'
+import { execFileSync } from 'node:child_process'
+import { mkdtemp, writeFile, stat, rm, realpath } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 test('Git 복제는 HTTPS와 SSH 주소 및 안전한 폴더 이름을 허용한다', () => {
   for (const url of [
@@ -74,4 +83,67 @@ test('구버전 Git의 줄바꿈 형식에서도 한글 경로를 읽는다', ()
     ),
     [{ path: 'C:/Projects/한글 project', branch: 'main' }],
   )
+})
+
+test('Worktree 삭제는 소속·기본 폴더·별도 프로젝트·변경 파일·잠금·무시 파일을 보호하고 브랜치를 보존한다', async () => {
+  const directory = await realpath(
+    await mkdtemp(join(tmpdir(), 'lite-ide-git-delete-')),
+  )
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync('git', ['-C', cwd, ...args], {
+      windowsHide: true,
+      encoding: 'utf8',
+    })
+  const initialize = async (cwd: string) => {
+    git(cwd, 'init', '--initial-branch=main')
+    await writeFile(join(cwd, '.gitignore'), '.env\n', 'utf8')
+    await writeFile(join(cwd, 'hello.txt'), 'hello\n', 'utf8')
+    git(cwd, 'add', '.')
+    git(
+      cwd,
+      '-c',
+      'user.name=Test',
+      '-c',
+      'user.email=test@example.invalid',
+      'commit',
+      '-m',
+      'fixture',
+    )
+  }
+  await initialize(directory)
+  const tree = await createWorktree(directory, 'feature/delete-test')
+  const other = await realpath(
+    await mkdtemp(join(tmpdir(), 'lite-ide-other-git-')),
+  )
+  await initialize(other)
+  try {
+    await assert.rejects(removeWorktree(directory, directory), /기본 작업 공간/)
+    await assert.rejects(removeWorktree(directory, other), /등록된 Worktree/)
+    await assert.rejects(
+      removeWorktree(directory, tree.path, [tree.path]),
+      /별도로 연 프로젝트/,
+    )
+    await writeFile(join(tree.path, 'hello.txt'), 'changed\n', 'utf8')
+    await assert.rejects(removeWorktree(directory, tree.path), /변경 파일/)
+    git(tree.path, 'checkout', '--', 'hello.txt')
+    for (const name of ['untracked.txt', '.env']) {
+      await writeFile(join(tree.path, name), '보존할 데이터\n', 'utf8')
+      await assert.rejects(removeWorktree(directory, tree.path), /변경 파일/)
+      assert.ok(await stat(join(tree.path, name)))
+      await rm(join(tree.path, name))
+    }
+    git(directory, 'worktree', 'lock', tree.path)
+    await assert.rejects(removeWorktree(directory, tree.path))
+    git(directory, 'worktree', 'unlock', tree.path)
+    await removeWorktree(directory, tree.path)
+    assert.equal(await stat(tree.path).catch(() => null), null)
+    assert.match(
+      git(directory, 'branch', '--list', 'feature/delete-test'),
+      /feature\/delete-test/,
+    )
+  } finally {
+    // mkdtemp로 생성한 테스트 전용 폴더만 정리합니다.
+    await rm(directory, { recursive: true, force: true })
+    await rm(other, { recursive: true, force: true })
+  }
 })

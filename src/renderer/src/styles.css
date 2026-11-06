@@ -1299,6 +1299,82 @@ dialog::backdrop {
 .form-dialog input:focus {
   border-color: var(--ring);
 }
+.managed-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.managed-row > .workspace-row,
+.managed-row > .session-row {
+  flex: 1;
+  min-width: 0;
+}
+.row-action,
+.project-new-task {
+  display: grid;
+  place-items: center;
+  flex: 0 0 23px;
+  width: 23px;
+  height: 26px;
+  border-radius: 4px;
+  color: var(--muted-foreground);
+}
+.row-action:hover,
+.project-new-task:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.row-action:disabled {
+  opacity: 0.3;
+}
+.tree-branch {
+  display: block;
+  color: var(--subtle);
+  font-size: 9px;
+}
+.target-path {
+  overflow-wrap: anywhere;
+}
+.new-task-dialog {
+  width: 520px;
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+}
+.new-task-dialog fieldset {
+  display: grid;
+  gap: 12px;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.new-task-dialog label {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  min-width: 0;
+}
+.new-task-dialog select,
+.new-task-dialog textarea {
+  background: var(--background);
+  border: 1px solid var(--input);
+  border-radius: 6px;
+  padding: 9px 10px;
+  width: 100%;
+  color: var(--foreground);
+  font: inherit;
+  min-width: 0;
+}
+.new-task-dialog textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+.task-model-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
 .dialog-actions {
   display: flex;
   justify-content: flex-end;

@@ -169,3 +169,42 @@ export async function createWorktree(
   if (!created) throw new Error('생성한 Worktree 경로를 확인하지 못했습니다.')
   return created
 }
+
+export const pathKey = (path: string) => {
+  const value = resolve(path)
+  return process.platform === 'win32' ? value.toLowerCase() : value
+}
+
+export async function removeWorktree(
+  directory: string,
+  target: string,
+  protectedPaths: string[] = [],
+): Promise<void> {
+  const canonicalTarget = await realpath(target)
+  const snapshot = await inspectRepository(directory)
+  const member = snapshot.worktrees.find(
+    (tree) => pathKey(tree.path) === pathKey(canonicalTarget),
+  )
+  if (!member)
+    throw new Error('이 프로젝트에 등록된 Worktree만 삭제할 수 있습니다.')
+  if (
+    pathKey(snapshot.worktrees[0].path) === pathKey(canonicalTarget) ||
+    protectedPaths.some((path) => pathKey(path) === pathKey(canonicalTarget))
+  )
+    throw new Error(
+      '기본 작업 공간이나 별도로 연 프로젝트는 삭제할 수 없습니다.',
+    )
+  const status = await git(canonicalTarget, [
+    'status',
+    '--porcelain=v1',
+    '-z',
+    '--untracked-files=all',
+    '--ignored',
+  ])
+  if (status)
+    throw new Error(
+      '변경 파일, 추적하지 않는 파일 또는 무시된 파일이 있어 삭제할 수 없습니다.',
+    )
+  // Git 자체가 잠금·서브모듈 등 추가 보호 조건을 검사합니다. 브랜치는 보존합니다.
+  await git(directory, ['worktree', 'remove', '--', canonicalTarget])
+}

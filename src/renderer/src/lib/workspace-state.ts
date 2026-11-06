@@ -1,9 +1,17 @@
-export type Session = { id: string; title: string; draft: string }
+export type Session = {
+  id: string
+  title: string
+  draft: string
+  customTitle?: boolean
+  model?: string
+  effort?: string
+}
 export type WorkspaceState = {
   sessions: Record<string, Session[]>
   selected: Record<string, string>
   project: string
   workspace: string
+  worktreeNames: Record<string, string>
 }
 
 export const storageKey = 'lite-ide.workspace.v1'
@@ -19,6 +27,7 @@ export function loadWorkspace(): WorkspaceState {
     selected: {},
     project: '',
     workspace: '',
+    worktreeNames: {},
   }
   try {
     const data = JSON.parse(localStorage.getItem(storageKey) ?? 'null')
@@ -31,7 +40,10 @@ export function loadWorkspace(): WorkspaceState {
           s &&
           typeof s.id === 'string' &&
           typeof s.title === 'string' &&
-          typeof s.draft === 'string',
+          typeof s.draft === 'string' &&
+          (s.model === undefined || typeof s.model === 'string') &&
+          (s.effort === undefined || typeof s.effort === 'string') &&
+          (s.customTitle === undefined || typeof s.customTitle === 'boolean'),
       )
       if (valid.length) sessions[path] = valid
     }
@@ -39,11 +51,17 @@ export function loadWorkspace(): WorkspaceState {
     for (const [path, id] of Object.entries(data.selected ?? {})) {
       if (path !== '__proto__' && typeof id === 'string') selected[path] = id
     }
+    const worktreeNames: Record<string, string> = {}
+    for (const [path, name] of Object.entries(data.worktreeNames ?? {})) {
+      if (path !== '__proto__' && typeof name === 'string' && name.trim())
+        worktreeNames[path] = name.trim().slice(0, 100)
+    }
     return {
       sessions: { ...fallback.sessions, ...sessions },
       selected,
       project: typeof data.project === 'string' ? data.project : '',
       workspace: typeof data.workspace === 'string' ? data.workspace : '',
+      worktreeNames,
     }
   } catch {
     return fallback

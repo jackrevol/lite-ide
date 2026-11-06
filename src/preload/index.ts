@@ -48,6 +48,8 @@ const api: DesktopApi = {
   openLink: (url) => ipcRenderer.invoke('link:open', url),
   createWorktree: (path, branch) =>
     ipcRenderer.invoke('worktree:create', path, branch),
+  deleteWorktree: (project, path) =>
+    ipcRenderer.invoke('worktree:delete', project, path),
   onSession: (listener) => {
     const receive = (
       _event: Electron.IpcRendererEvent,

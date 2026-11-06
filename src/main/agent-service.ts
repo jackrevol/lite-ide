@@ -1,6 +1,7 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, writeFile, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { CodexClient, type RpcMessage } from './codex-client'
+import { pathKey } from './git.ts'
+import { CodexClient, type RpcMessage } from './codex-client.ts'
 import type {
   AgentMessage,
   AgentSession,
@@ -24,14 +25,22 @@ export class AgentService {
   private saveTimer?: NodeJS.Timeout
   private loadedThreads = new Set<string>()
   private busy = new Set<string>()
+  private deletingWorkspaces = new Set<string>()
+  private removalIntents = new Set<string>()
   private nextRequest = 0
+  private file: string
+  private emit: (session: AgentSession) => void
+  private onUsageChanged: () => void
 
   constructor(
-    private file: string,
-    private emit: (session: AgentSession) => void,
+    file: string,
+    emit: (session: AgentSession) => void,
     onDisconnect: (reason: string) => void = () => {},
-    private onUsageChanged: () => void = () => {},
+    onUsageChanged: () => void = () => {},
   ) {
+    this.file = file
+    this.emit = emit
+    this.onUsageChanged = onUsageChanged
     this.loaded = this.load()
     this.client.onMessage = (message) => this.handle(message)
     this.client.onDisconnect = (reason) => {
@@ -52,12 +61,28 @@ export class AgentService {
   private async load() {
     try {
       const data: unknown = JSON.parse(await readFile(this.file, 'utf8'))
-      for (const entry of list(data)) {
+      this.removalIntents = new Set(
+        list(record(data).removalIntents).filter(
+          (item): item is string => typeof item === 'string',
+        ),
+      )
+      for (const entry of list(
+        Array.isArray(data) ? data : record(data).sessions,
+      )) {
         const session = entry as AgentSession
         if (
           typeof session.id !== 'string' ||
           typeof session.workspace !== 'string' ||
           !Array.isArray(session.messages)
+        )
+          continue
+        if (
+          this.removalIntents.has(pathKey(session.workspace)) &&
+          (await stat(session.workspace).then(
+            () => false,
+            (error: NodeJS.ErrnoException) =>
+              ['ENOENT', 'ENOTDIR'].includes(error.code ?? ''),
+          ))
         )
           continue
         if (session.status === 'running' || session.status === 'waiting')
@@ -71,7 +96,10 @@ export class AgentService {
   }
 
   private persist() {
-    const snapshot = JSON.stringify([...this.sessions.values()])
+    const snapshot = JSON.stringify({
+      sessions: [...this.sessions.values()],
+      removalIntents: [...this.removalIntents],
+    })
     this.saveQueue = this.saveQueue
       .catch(() => {})
       .then(async () => {
@@ -85,6 +113,7 @@ export class AgentService {
         this.emit(session)
       }
     })
+    return this.saveQueue
   }
 
   private publish(session: AgentSession) {
@@ -155,18 +184,21 @@ export class AgentService {
 
   async send(input: SendMessage) {
     await this.loaded
+    if (this.deletingWorkspaces.has(pathKey(input.workspace)))
+      throw new Error('삭제 중인 Worktree에서는 작업을 시작할 수 없습니다.')
     if (
       typeof input.sessionId !== 'string' ||
       !/^[\w-]{1,100}$/.test(input.sessionId) ||
       typeof input.text !== 'string' ||
       !input.text.trim() ||
-      input.text.length > 200_000
+      input.text.length > 200_000 ||
+      (input.title !== undefined && typeof input.title !== 'string')
     )
       throw new Error('올바른 작업 내용을 입력해 주세요.')
     if (this.busy.has(input.sessionId))
       throw new Error('이미 작업을 시작하고 있습니다.')
     const previous = this.sessions.get(input.sessionId)
-    if (previous && previous.workspace !== input.workspace)
+    if (previous && pathKey(previous.workspace) !== pathKey(input.workspace))
       throw new Error('작업의 프로젝트 경로가 일치하지 않습니다.')
     if (previous && ['running', 'waiting'].includes(previous.status))
       throw new Error('진행 중인 작업을 먼저 중단해 주세요.')
@@ -174,7 +206,9 @@ export class AgentService {
     const session: AgentSession = previous ?? {
       id: input.sessionId,
       workspace: input.workspace,
-      title: input.text.trim().split('\n')[0].slice(0, 60),
+      title:
+        input.title?.trim().slice(0, 100) ||
+        input.text.trim().split('\n')[0].slice(0, 60),
       status: 'idle',
       messages: [],
       requests: [],
@@ -253,10 +287,60 @@ export class AgentService {
   async delete(id: string) {
     await this.loaded
     const session = this.sessions.get(id)
-    if (session && ['running', 'waiting'].includes(session.status))
+    if (
+      this.busy.has(id) ||
+      (session && ['running', 'waiting'].includes(session.status))
+    )
       throw new Error('실행 중인 작업은 삭제할 수 없습니다.')
     this.sessions.delete(id)
-    this.persist()
+    await this.persist()
+  }
+
+  async removeWorkspace(workspace: string, remove: () => Promise<void>) {
+    await this.loaded
+    const key = pathKey(workspace)
+    if (this.deletingWorkspaces.has(key))
+      throw new Error('이미 Worktree를 삭제하고 있습니다.')
+    const sessions = [...this.sessions.values()].filter(
+      (item) => pathKey(item.workspace) === key,
+    )
+    if (
+      sessions.some(
+        (item) =>
+          this.busy.has(item.id) ||
+          ['running', 'waiting'].includes(item.status),
+      )
+    )
+      throw new Error('진행 중이거나 시작 중인 작업을 먼저 중단해 주세요.')
+    this.deletingWorkspaces.add(key)
+    try {
+      // 삭제 의도를 먼저 저장하여 폴더 삭제 후 저장 실패 시에도 관련 대화만 정리합니다.
+      this.removalIntents.add(key)
+      try {
+        await this.persist()
+        await remove()
+      } catch (error) {
+        this.removalIntents.delete(key)
+        await this.persist().catch(() => {})
+        throw error
+      }
+      for (const session of sessions) {
+        this.sessions.delete(session.id)
+        if (session.threadId) this.loadedThreads.delete(session.threadId)
+      }
+      this.removalIntents.delete(key)
+      try {
+        await this.persist()
+        return {}
+      } catch {
+        return {
+          warning:
+            'Worktree 삭제는 완료되었지만 대화 기록 파일을 저장하지 못했습니다. 앱을 종료하기 전에 저장 공간과 권한을 확인해 주세요.',
+        }
+      }
+    } finally {
+      this.deletingWorkspaces.delete(key)
+    }
   }
 
   answer(sessionId: string, requestId: string, answer: RequestAnswer) {

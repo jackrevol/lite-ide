@@ -17,7 +17,13 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
-import { createWorktree, inspectRepository, readDiff } from './git'
+import {
+  createWorktree,
+  inspectRepository,
+  readDiff,
+  removeWorktree,
+  pathKey,
+} from './git'
 import { AgentService } from './agent-service'
 import { cloneRepository, validateCloneInput } from './clone'
 import { UpdateService } from './update-service'
@@ -25,6 +31,7 @@ import type { RequestAnswer, SendMessage } from '../shared/types'
 
 const projects = new Set<string>()
 const workspaces = new Set<string>()
+const deletedWorkspaces = new Set<string>()
 const cloneDirectories = new Set<string>()
 let cloning = false
 let window: BrowserWindow | null = null
@@ -43,7 +50,11 @@ function titleBarColors(theme: 'light' | 'dark') {
 }
 
 function requireWorkspace(value: unknown): string {
-  if (typeof value !== 'string' || !workspaces.has(resolve(value))) {
+  if (
+    typeof value !== 'string' ||
+    !workspaces.has(resolve(value)) ||
+    deletedWorkspaces.has(pathKey(value))
+  ) {
     throw new Error('프로젝트를 먼저 열어주세요.')
   }
   return resolve(value)
@@ -194,6 +205,23 @@ app.whenReady().then(() => {
       return { ...tree, path: worktreePath }
     },
   )
+  ipcMain.handle(
+    'worktree:delete',
+    async (_event, projectPath: string, target: string) => {
+      await restoredProjects
+      const directory = requireWorkspace(projectPath)
+      if (!projects.has(directory))
+        throw new Error('열린 프로젝트를 선택해 주세요.')
+      const workspace = await realpath(requireWorkspace(target))
+      return agents!.removeWorkspace(workspace, async () => {
+        await removeWorktree(directory, workspace, [...projects])
+        deletedWorkspaces.add(pathKey(workspace))
+        for (const path of workspaces) {
+          if (pathKey(path) === pathKey(workspace)) workspaces.delete(path)
+        }
+      })
+    },
+  )
   const projectFile = join(app.getPath('userData'), 'projects.json')
   let projectSave = Promise.resolve()
   async function registerProject(directory: string) {
@@ -290,7 +318,8 @@ app.whenReady().then(() => {
     // 사용자가 연 프로젝트에서 확인된 Worktree만 추가 접근을 허용합니다.
     if (projects.has(directory)) {
       for (const worktree of snapshot.worktrees)
-        workspaces.add(resolve(worktree.path))
+        if (!deletedWorkspaces.has(pathKey(worktree.path)))
+          workspaces.add(resolve(worktree.path))
     }
     return snapshot
   })

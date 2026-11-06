@@ -7,6 +7,7 @@ const pending = new Map()
 const timers = new Map()
 let turnNumber = 0
 let usedPercent = 25
+let failedFirstStart = false
 const fixtureNow = Math.floor(Date.now() / 1000)
 const usageSnapshot = () => ({
   limitId: 'codex',
@@ -148,6 +149,16 @@ createInterface({ input: process.stdin }).on('line', (line) => {
               { reasoningEffort: 'high' },
             ],
           },
+          {
+            model: 'fixture-model-alt',
+            displayName: 'Codex Alternate',
+            isDefault: false,
+            defaultReasoningEffort: 'low',
+            supportedReasoningEfforts: [
+              { reasoningEffort: 'low' },
+              { reasoningEffort: 'high' },
+            ],
+          },
         ],
       })
       break
@@ -158,6 +169,14 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       reply({ thread: { id: p.threadId } })
       break
     case 'turn/start': {
+      if (p.input[0].text === '시작 재시도 테스트' && !failedFirstStart) {
+        failedFirstStart = true
+        send({
+          id: message.id,
+          error: { code: -32000, message: '첫 시작 실패 테스트' },
+        })
+        break
+      }
       usedPercent = Math.min(100, usedPercent + 5)
       notify('account/rateLimits/updated', { rateLimits: usageSnapshot() })
       const threadId = p.threadId,
@@ -226,7 +245,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
         finish(
           threadId,
           turnId,
-          `작업을 완료했습니다.\n\n**${text}**\n\n\`\`\`typescript\nconst ready = true\n\`\`\``,
+          `작업을 완료했습니다.\n\n**${text}**\n\n${text === '모델 전달 확인' ? `model=${p.model}; effort=${p.effort}\n\n` : ''}\`\`\`typescript\nconst ready = true\n\`\`\``,
         )
       }
       break
