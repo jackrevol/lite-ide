@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CodexStatus, Project, Worktree } from '../../../shared/types'
-import { createSession, type Session } from '../lib/workspace-state'
+import {
+  createSession,
+  type Session,
+  type TaskMode,
+} from '../lib/workspace-state'
 import { Button } from './ui/button'
 
 export function NewTaskDialog({
@@ -9,6 +13,7 @@ export function NewTaskDialog({
   connection,
   initialModel,
   initialEffort,
+  initialMode,
   initialBaseRef,
   branches,
   onCreate,
@@ -19,13 +24,20 @@ export function NewTaskDialog({
   connection: CodexStatus
   initialModel: string
   initialEffort: string
+  initialMode: TaskMode
   initialBaseRef: string
   branches: string[]
-  onCreate: (workspace: string, session: Session) => Promise<void>
+  onCreate: (
+    workspace: string,
+    session: Session,
+    mode: TaskMode,
+  ) => Promise<void>
   onClose: () => void
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
-  const [mode, setMode] = useState(worktrees.length ? 'new' : 'existing')
+  const [mode, setMode] = useState(
+    worktrees.length && initialMode === 'worktree' ? 'new' : 'existing',
+  )
   const [workspace, setWorkspace] = useState(project.path)
   const [name, setName] = useState('')
   const [prompt, setPrompt] = useState('')
@@ -88,7 +100,11 @@ export function NewTaskDialog({
           },
         }
       }
-      await onCreate(created.current.workspace, created.current.session)
+      await onCreate(
+        created.current.workspace,
+        created.current.session,
+        mode === 'new' ? 'worktree' : 'local',
+      )
       onClose()
     } catch (cause) {
       setError(

@@ -163,13 +163,15 @@ try {
   const updateContent = 'UI update installer fixture'
   await app.evaluate(
     ({ net }, fixture) => {
+      globalThis.updateChecks = 0
       const version = '99.0.0'
       const platform = process.platform === 'win32' ? 'win' : 'mac'
       const name = `Lite-IDE-${version}-${platform}-${process.arch}.${platform === 'win' ? 'exe' : 'dmg'}`
       const root = `https://github.com/jackrevol/lite-ide/releases/download/v${version}/`
       const sums = `${fixture.hash}  ${name}\n`
       net.fetch = async (url) => {
-        if (String(url).endsWith('/releases/latest'))
+        if (String(url).endsWith('/releases/latest')) {
+          globalThis.updateChecks++
           return Response.json({
             tag_name: `v${version}`,
             draft: false,
@@ -187,6 +189,7 @@ try {
               },
             ],
           })
+        }
         return new Response(
           String(url).endsWith('SHA256SUMS.txt') ? sums : fixture.content,
         )
@@ -197,6 +200,12 @@ try {
       hash: createHash('sha256').update(updateContent).digest('hex'),
     },
   )
+  assert.equal(
+    await page
+      .getByRole('button', { name: '앱 업데이트', exact: true })
+      .count(),
+    0,
+  )
   await page.keyboard.press('Control+,')
   const settingsDialog = page.getByRole('dialog', { name: '설정', exact: true })
   await settingsDialog
@@ -205,6 +214,13 @@ try {
   await settingsDialog
     .getByText('새 버전을 다운로드할 수 있습니다.', { exact: true })
     .waitFor()
+  assert.equal(await app.evaluate(() => globalThis.updateChecks), 1)
+  await page.evaluate(() => window.desktop.checkUpdate())
+  assert.equal(await app.evaluate(() => globalThis.updateChecks), 2)
+  assert.equal(
+    (await page.evaluate(() => window.desktop.updateStatus())).status,
+    'available',
+  )
   await settingsDialog
     .getByRole('tab', { name: '프로그램 정보', exact: true })
     .click()
@@ -255,23 +271,29 @@ try {
     name: '앱 업데이트',
     exact: true,
   })
-  await updateDialog
-    .getByText('새 버전을 다운로드할 수 있습니다.', { exact: true })
-    .waitFor()
-  await page.screenshot({ path: 'artifacts/workspace-update.png' })
-  await updateDialog
-    .getByRole('button', { name: '다운로드', exact: true })
-    .click()
+  assert.equal(
+    await updateDialog
+      .getByRole('button', { name: '업데이트 확인', exact: true })
+      .count(),
+    0,
+  )
   await updateDialog
     .getByText('다운로드와 무결성 검증이 완료되었습니다.', { exact: true })
     .waitFor()
+  await page.screenshot({ path: 'artifacts/workspace-update.png' })
+  assert.equal(
+    await updateDialog
+      .getByRole('button', { name: '다운로드', exact: true })
+      .count(),
+    0,
+  )
   assert.equal(
     (await page.evaluate(() => window.desktop.updateStatus())).progress,
     100,
   )
   assert.equal(
     await updateDialog
-      .getByRole('button', { name: /종료하고 설치|DMG 열기/ })
+      .getByRole('button', { name: '업데이트 다시 시도' })
       .isDisabled(),
     true,
   )
@@ -493,6 +515,35 @@ try {
     createdPath,
   )
   await input.fill('Worktree별 입력 보존')
+  const treeState = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem('lite-ide.workspace.v1')),
+  )
+  assert.equal(treeState.newTaskMode, 'worktree')
+  assert.equal(treeState.sessions[treeState.workspace].length, 1)
+  await page.keyboard.press('Control+n')
+  assert.equal(
+    await newTask
+      .getByRole('combobox', { name: '작업 공간 방식' })
+      .inputValue(),
+    'new',
+  )
+  await newTask
+    .getByRole('textbox', { name: '새 브랜치 이름' })
+    .fill('feature/ui-test')
+  await newTask.getByRole('button', { name: '만들기', exact: true }).click()
+  await newTask.getByRole('alert').waitFor()
+  assert.equal(await input.inputValue(), 'Worktree별 입력 보존')
+  await newTask
+    .getByRole('combobox', { name: '작업 공간 방식' })
+    .selectOption('existing')
+  await page.keyboard.press('Escape')
+  assert.equal(
+    await page.evaluate(
+      () =>
+        JSON.parse(localStorage.getItem('lite-ide.workspace.v1')).newTaskMode,
+    ),
+    'worktree',
+  )
   await page
     .locator('.workspace-row')
     .filter({ hasText: /^main$/ })
@@ -572,6 +623,15 @@ try {
   await page
     .getByRole('button', { name: '한글 project 새 작업', exact: true })
     .click()
+  assert.equal(
+    await newTask
+      .getByRole('combobox', { name: '작업 공간 방식' })
+      .inputValue(),
+    'existing',
+  )
+  await newTask
+    .getByRole('combobox', { name: '작업 공간 방식' })
+    .selectOption('new')
   await newTask
     .getByRole('textbox', { name: '새 브랜치 이름' })
     .fill('feature/retry-test')
@@ -774,6 +834,45 @@ try {
     await page.getByRole('textbox', { name: 'Codex에게 메시지' }).inputValue(),
     'Worktree별 입력 보존',
   )
+  await page.keyboard.press('Control+n')
+  const restoredTaskDialog = page.getByRole('dialog', {
+    name: '새 작업',
+    exact: true,
+  })
+  assert.equal(
+    await restoredTaskDialog
+      .getByRole('combobox', { name: '작업 공간 방식' })
+      .inputValue(),
+    'new',
+  )
+  await restoredTaskDialog
+    .getByRole('combobox', { name: '작업 공간 방식' })
+    .selectOption('existing')
+  await restoredTaskDialog
+    .getByRole('button', { name: '만들기', exact: true })
+    .click()
+  await restoredTaskDialog.waitFor({ state: 'detached' })
+  await page
+    .locator('.workspace-row.selected')
+    .filter({ hasText: /^main$/ })
+    .waitFor()
+  assert.equal(
+    await page.getByRole('textbox', { name: 'Codex에게 메시지' }).inputValue(),
+    '',
+  )
+  const localState = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem('lite-ide.workspace.v1')),
+  )
+  assert.equal(localState.newTaskMode, 'local')
+  assert.equal(localState.workspace, localState.project)
+  await page.keyboard.press('Control+n')
+  assert.equal(
+    await restoredTaskDialog
+      .getByRole('combobox', { name: '작업 공간 방식' })
+      .inputValue(),
+    'existing',
+  )
+  await page.keyboard.press('Escape')
   assert.equal(
     await app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].isVisible(),
@@ -881,6 +980,9 @@ try {
     name: '새 작업',
     exact: true,
   })
+  await targetDialog
+    .getByRole('combobox', { name: '작업 공간 방식' })
+    .selectOption('new')
   await targetDialog
     .getByRole('textbox', { name: '새 작업 이름', exact: true })
     .fill('프로젝트 대상 검증')

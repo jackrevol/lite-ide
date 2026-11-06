@@ -1,3 +1,4 @@
+export type TaskMode = 'local' | 'worktree'
 export type Session = {
   id: string
   title: string
@@ -12,6 +13,7 @@ export type WorkspaceState = {
   project: string
   workspace: string
   worktreeNames: Record<string, string>
+  newTaskMode: TaskMode
 }
 
 export const storageKey = 'lite-ide.workspace.v1'
@@ -22,12 +24,13 @@ export const createSession = (number = 1): Session => ({
 })
 
 export function loadWorkspace(): WorkspaceState {
-  const fallback = {
+  const fallback: WorkspaceState = {
     sessions: { welcome: [createSession()] },
     selected: {},
     project: '',
     workspace: '',
     worktreeNames: {},
+    newTaskMode: 'worktree' as TaskMode,
   }
   try {
     const data = JSON.parse(localStorage.getItem(storageKey) ?? 'null')
@@ -62,6 +65,7 @@ export function loadWorkspace(): WorkspaceState {
       project: typeof data.project === 'string' ? data.project : '',
       workspace: typeof data.workspace === 'string' ? data.workspace : '',
       worktreeNames,
+      newTaskMode: data.newTaskMode === 'local' ? 'local' : 'worktree',
     }
   } catch {
     return fallback

@@ -36,6 +36,7 @@ import {
   loadWorkspace,
   storageKey,
   type Session,
+  type TaskMode,
 } from './lib/workspace-state'
 import type {
   AgentSession,
@@ -563,12 +564,17 @@ export function App() {
       setManagementError(errorText(cause))
     }
   }
-  async function createTask(workspace: string, session: Session) {
+  async function createTask(
+    workspace: string,
+    session: Session,
+    mode: TaskMode,
+  ) {
     const target = newTaskProject!
     setState((previous) => ({
       ...previous,
       project: target.path,
       workspace,
+      newTaskMode: mode,
       sessions: {
         ...previous.sessions,
         [workspace]: [
@@ -1370,6 +1376,7 @@ export function App() {
             ''
           }
           initialEffort={newTaskDefaults.effort}
+          initialMode={state.newTaskMode}
           initialBaseRef={newTaskDefaults.baseRef}
           branches={newTaskBranches}
           onCreate={createTask}

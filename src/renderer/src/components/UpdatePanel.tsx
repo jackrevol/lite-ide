@@ -12,9 +12,11 @@ export function useAppUpdate() {
   const pending = ['checking', 'downloading', 'installing'].includes(
     state.status,
   )
-  const available = ['available', 'downloading', 'downloaded'].includes(
-    state.status,
-  )
+  const available =
+    Boolean(state.version) &&
+    ['available', 'downloading', 'downloaded', 'installing', 'error'].includes(
+      state.status,
+    )
   useEffect(() => {
     let disposed = false
     const unsubscribe = window.desktop.onUpdate((next) => {
@@ -42,7 +44,15 @@ export function useAppUpdate() {
   return { state, pending, available, action }
 }
 
-export function UpdatePanel({ onClose }: { onClose?: () => void }) {
+export function UpdatePanel({
+  onClose,
+  automatic = false,
+  onStart,
+}: {
+  onClose?: () => void
+  automatic?: boolean
+  onStart?: () => Promise<void>
+}) {
   const { state, pending, action } = useAppUpdate()
   const descriptions = {
     idle: 'GitHub에서 새 버전을 확인할 수 있습니다.',
@@ -51,7 +61,8 @@ export function UpdatePanel({ onClose }: { onClose?: () => void }) {
     available: '새 버전을 다운로드할 수 있습니다.',
     downloading: '설치 파일을 다운로드하고 있습니다.',
     downloaded: '다운로드와 무결성 검증이 완료되었습니다.',
-    installing: '설치 파일을 열고 있습니다.',
+    installing:
+      '설치를 준비하고 있습니다. 앱이 종료된 후 업데이트하고 다시 실행합니다.',
     error: '업데이트를 완료하지 못했습니다.',
   }
   return (
@@ -77,15 +88,23 @@ export function UpdatePanel({ onClose }: { onClose?: () => void }) {
         <p>
           {!state.canInstall
             ? '개발 실행에서는 설치를 실행할 수 없습니다. 설치된 앱에서 이용해 주세요.'
-            : window.desktop.platform === 'darwin'
-              ? 'DMG를 열고 앱을 Applications 폴더로 옮겨 교체해 주세요. 교체 전에 Lite IDE를 종료해 주세요.'
-              : '설치 프로그램을 열면 Lite IDE가 종료됩니다. 설치 화면의 안내에 따라 업데이트해 주세요.'}
+            : '앱을 종료하고 설치한 뒤 다시 실행합니다.'}
         </p>
       )}
       <div className="dialog-actions">
         {onClose && (
           <Button variant="ghost" onClick={onClose}>
             닫기
+          </Button>
+        )}
+        {!automatic && (
+          <Button
+            variant="outline"
+            disabled={pending}
+            onClick={() => void action(window.desktop.checkUpdate)}
+          >
+            <RefreshCw size={14} />
+            업데이트 확인
           </Button>
         )}
         {state.status === 'downloading' ? (
@@ -95,29 +114,27 @@ export function UpdatePanel({ onClose }: { onClose?: () => void }) {
           >
             다운로드 취소
           </Button>
+        ) : automatic &&
+          ['available', 'error', 'downloaded'].includes(state.status) ? (
+          <Button
+            disabled={state.status === 'downloaded' && !state.canInstall}
+            onClick={() => void onStart?.()}
+          >
+            업데이트 다시 시도
+          </Button>
         ) : state.status === 'downloaded' ? (
           <Button
             disabled={!state.canInstall}
             onClick={() => void action(window.desktop.installUpdate)}
           >
-            {window.desktop.platform === 'darwin'
-              ? 'DMG 열기'
-              : '종료하고 설치'}
+            종료하고 설치
           </Button>
         ) : state.status === 'available' ? (
           <Button onClick={() => void action(window.desktop.downloadUpdate)}>
             <Download size={14} />
             다운로드
           </Button>
-        ) : (
-          <Button
-            disabled={pending}
-            onClick={() => void action(window.desktop.checkUpdate)}
-          >
-            <RefreshCw size={14} />
-            업데이트 확인
-          </Button>
-        )}
+        ) : null}
       </div>
     </>
   )

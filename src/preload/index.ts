@@ -13,6 +13,7 @@ const api: DesktopApi = {
   listBranches: (path) => ipcRenderer.invoke('repository:branches', path),
   updateStatus: () => ipcRenderer.invoke('app:update-status'),
   checkUpdate: () => ipcRenderer.invoke('app:update-check'),
+  startUpdate: () => ipcRenderer.invoke('app:update-start'),
   downloadUpdate: () => ipcRenderer.invoke('app:update-download'),
   cancelUpdateDownload: () => ipcRenderer.invoke('app:update-cancel'),
   installUpdate: () => ipcRenderer.invoke('app:update-install'),

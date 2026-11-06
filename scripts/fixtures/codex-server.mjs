@@ -55,6 +55,19 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   const message = JSON.parse(line)
   const p = message.params ?? {}
   const reply = (result) => send({ id: message.id, result })
+  if (
+    ['thread/start', 'thread/resume', 'turn/start'].includes(message.method) &&
+    (p.approvalPolicy !== 'never' ||
+      (message.method === 'turn/start'
+        ? p.sandboxPolicy?.type !== 'dangerFullAccess'
+        : p.sandbox !== 'danger-full-access'))
+  ) {
+    send({
+      id: message.id,
+      error: { code: -32602, message: 'YOLO 정책이 적용되지 않았습니다.' },
+    })
+    return
+  }
   if (!message.method) {
     const request = pending.get(message.id)
     if (request) {
