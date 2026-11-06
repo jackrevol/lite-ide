@@ -237,11 +237,10 @@ export async function removeWorktree(
     '--porcelain=v1',
     '-z',
     '--untracked-files=all',
-    '--ignored',
   ])
   if (status)
     throw new Error(
-      '변경 파일, 추적하지 않는 파일 또는 무시된 파일이 있어 삭제할 수 없습니다.',
+      '변경 파일 또는 추적하지 않는 파일이 있어 삭제할 수 없습니다.',
     )
   // Git 자체가 잠금·서브모듈 등 추가 보호 조건을 검사합니다. 브랜치는 보존합니다.
   await git(directory, ['worktree', 'remove', '--', canonicalTarget])

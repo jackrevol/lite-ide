@@ -1536,8 +1536,9 @@ export function App() {
               이 Worktree 폴더와 연결된 작업{' '}
               {(state.sessions[treeTarget?.tree.path ?? ''] ?? []).length}개의
               로컬 대화 기록·초안을 삭제합니다. Git 브랜치와 Codex 원본 세션은
-              유지됩니다. 변경 파일·무시된 파일이 있거나 작업 중이면 삭제할 수
-              없습니다.
+              유지됩니다. node_modules·out·.env 등 Git에서 무시한 파일도 폴더와
+              함께 삭제합니다. 변경 파일·추적하지 않는 파일이 있거나 작업 중이면
+              삭제할 수 없습니다.
             </p>
           )}
           {managementError && <p role="alert">{managementError}</p>}

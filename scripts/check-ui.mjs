@@ -21,7 +21,12 @@ const git = (...args) =>
   execFileSync('git', ['-C', project, ...args], { windowsHide: true })
 git('init', '--initial-branch=main')
 await writeFile(join(project, 'hello.txt'), 'Hello from Lite IDE\n', 'utf8')
-git('add', 'hello.txt')
+await writeFile(
+  join(project, '.gitignore'),
+  '.env\nnode_modules/\nout/\n',
+  'utf8',
+)
+git('add', 'hello.txt', '.gitignore')
 git(
   '-c',
   'user.name=UI Test',
@@ -714,6 +719,21 @@ try {
     name: 'Worktree 삭제',
     exact: true,
   })
+  assert.equal(await treeDelete.getByRole('checkbox').count(), 0)
+  await treeDelete
+    .getByText('node_modules·out·.env', { exact: false })
+    .waitFor()
+  await writeFile(
+    join(retrySession.workspace, '.env'),
+    '폴더와 함께 삭제할 무시 파일',
+    'utf8',
+  )
+  await mkdir(join(retrySession.workspace, 'out'))
+  await writeFile(
+    join(retrySession.workspace, 'out', 'build.js'),
+    'ignored build result',
+    'utf8',
+  )
   await treeDelete.getByRole('button', { name: '삭제', exact: true }).click()
   await treeDelete.getByRole('alert').filter({ hasText: '변경 파일' }).waitFor()
   assert.match(

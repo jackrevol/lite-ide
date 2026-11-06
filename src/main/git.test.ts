@@ -205,7 +205,7 @@ test('Worktree 삭제는 소속·기본 폴더·별도 프로젝트·변경 파�
     await writeFile(join(tree.path, 'hello.txt'), 'changed\n', 'utf8')
     await assert.rejects(removeWorktree(directory, tree.path), /변경 파일/)
     git(tree.path, 'checkout', '--', 'hello.txt')
-    for (const name of ['untracked.txt', '.env']) {
+    for (const name of ['untracked.txt']) {
       await writeFile(join(tree.path, name), '보존할 데이터\n', 'utf8')
       await assert.rejects(removeWorktree(directory, tree.path), /변경 파일/)
       assert.ok(await stat(join(tree.path, name)))
@@ -214,6 +214,11 @@ test('Worktree 삭제는 소속·기본 폴더·별도 프로젝트·변경 파�
     git(directory, 'worktree', 'lock', tree.path)
     await assert.rejects(removeWorktree(directory, tree.path))
     git(directory, 'worktree', 'unlock', tree.path)
+    await writeFile(
+      join(tree.path, '.env'),
+      'Worktree와 함께 삭제할 무시 파일',
+      'utf8',
+    )
     await removeWorktree(directory, tree.path)
     assert.equal(await stat(tree.path).catch(() => null), null)
     assert.match(
