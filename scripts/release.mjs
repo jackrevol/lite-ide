@@ -59,31 +59,45 @@ if (command === 'metadata') {
   const notes = `main 커밋 ${sha}에서 자동 빌드했습니다.\n\n- Windows x64: .exe 설치 파일\n- macOS Apple Silicon: arm64.dmg\n- macOS Intel: x64.dmg\n- 파일 무결성: SHA256SUMS.txt\n\nGit과 Codex CLI가 필요합니다. 현재 배포 파일은 개발자 인증서 서명 및 Apple 공증을 적용하지 않았습니다.\n`
   await writeFile(join(directory, 'release-notes.md'), notes, 'utf8')
   // 재실행 시 공개된 릴리스는 변경하지 않고, 업로드가 중단된 경우만 이어서 처리합니다.
-  const listReleases = () =>
-    JSON.parse(
-      gh('api', `repos/${repo}/releases?per_page=100`, '--paginate', '--slurp'),
-    ).flat()
-  const releases = listReleases()
-  let release = releases.find((entry) => entry.tag_name === tag)
+  let release
+  try {
+    const existing = JSON.parse(
+      gh('release', 'view', tag, '--json', 'databaseId,isDraft,url'),
+    )
+    release = {
+      id: existing.databaseId,
+      draft: existing.isDraft,
+      html_url: existing.url,
+    }
+  } catch (error) {
+    if (
+      !/release not found|HTTP 404/i.test(String(error.stderr ?? error.message))
+    )
+      throw error
+  }
   if (release && !release.draft) {
     console.log(`이미 공개된 릴리스: ${release.html_url}`)
   } else {
     if (!release) {
-      gh(
-        'release',
-        'create',
-        tag,
-        '--target',
-        sha,
-        '--title',
-        `Lite IDE ${version}`,
-        '--notes-file',
-        join(directory, 'release-notes.md'),
-        '--generate-notes',
-        '--draft',
+      // 생성 응답의 ID를 바로 사용해 목록 API의 반영 지연에 의존하지 않습니다.
+      release = JSON.parse(
+        execFileSync(
+          'gh',
+          ['api', '--method', 'POST', `repos/${repo}/releases`, '--input', '-'],
+          {
+            encoding: 'utf8',
+            input: JSON.stringify({
+              tag_name: tag,
+              target_commitish: sha,
+              name: `Lite IDE ${version}`,
+              body: notes,
+              generate_release_notes: true,
+              draft: true,
+            }),
+            stdio: ['pipe', 'pipe', 'pipe'],
+          },
+        ),
       )
-      release = listReleases().find((entry) => entry.tag_name === tag)
-      if (!release) throw new Error('생성한 릴리스를 확인하지 못했습니다.')
     }
     gh(
       'release',
