@@ -93,12 +93,12 @@ export function App() {
   const [collapsed, setCollapsed] = useState<string[]>([])
   const [newTaskProject, setNewTaskProject] = useState<Project | null>(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [settingsProject, setSettingsProject] = useState('')
   const [defaults, setDefaults] = useState<ProjectDefaults>({
     baseRef: 'HEAD',
     model: '',
     effort: '',
   })
-  const [branches, setBranches] = useState<string[]>([])
   const [target, setTarget] = useState<{
     task: WorkspaceTask
     action: 'rename' | 'delete'
@@ -306,10 +306,7 @@ export function App() {
     if (openingTask.current) return
     openingTask.current = true
     try {
-      const [settings, refs] = await Promise.all([
-        window.desktop.getSettings(),
-        window.desktop.listBranches(item.path),
-      ])
+      const settings = await window.desktop.getSettings()
       setDefaults(
         settings.projects[projectSettingsKey(item.path)] ?? {
           baseRef: 'HEAD',
@@ -317,7 +314,6 @@ export function App() {
           effort: '',
         },
       )
-      setBranches(refs)
       setNewTaskProject(item)
     } catch (cause) {
       setError(errorText(cause))
@@ -325,6 +321,10 @@ export function App() {
       openingTask.current = false
     }
   }, [])
+  function manageBaseBranch(item: Project) {
+    setSettingsProject(item.path)
+    setShowSettings(true)
+  }
   async function createTask(task: WorkspaceTask) {
     setState((previous) => ({
       tasks: previous.tasks.some((item) => item.id === task.id)
@@ -570,6 +570,14 @@ export function App() {
                       >
                         <FolderOpen size={14} />
                         <span>{item.name}</span>
+                      </button>
+                      <button
+                        className="project-base-branch"
+                        aria-label={`${item.name} 기준 브랜치 관리`}
+                        title="새 Worktree의 기본 기준 브랜치 관리"
+                        onClick={() => manageBaseBranch(item)}
+                      >
+                        <GitBranch size={14} />
                       </button>
                       <button
                         className="project-new-task"
@@ -984,7 +992,7 @@ export function App() {
           }
           initialEffort={defaults.effort}
           initialBaseRef={defaults.baseRef}
-          branches={branches}
+          onManageBaseBranch={() => manageBaseBranch(newTaskProject)}
           onCreate={createTask}
           onClose={() => setNewTaskProject(null)}
         />
@@ -992,11 +1000,15 @@ export function App() {
       {showSettings && (
         <SettingsDialog
           projects={projects}
-          currentProject={state.project}
+          currentProject={settingsProject || state.project}
+          initialTab={settingsProject ? 'project' : 'general'}
           connection={connection}
           theme={theme}
           onTheme={setTheme}
-          onClose={() => setShowSettings(false)}
+          onClose={() => {
+            setShowSettings(false)
+            setSettingsProject('')
+          }}
         />
       )}
       <dialog
