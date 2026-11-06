@@ -1,6 +1,6 @@
 import { _electron as electron } from 'playwright'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir } from 'node:fs/promises'
+import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -38,10 +38,6 @@ try {
     false,
   )
   assert.equal(await app.evaluate(({ app }) => app.isPackaged), true)
-  await mkdir('artifacts', { recursive: true })
-  await page.screenshot({
-    path: `artifacts/workspace-packaged-${platform}-${arch}.png`,
-  })
   console.log(`패키징된 ${platform}-${arch} 앱의 숨김 실행과 버전 확인 완료`)
 } finally {
   await app.close()
