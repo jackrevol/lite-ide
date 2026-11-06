@@ -24,6 +24,8 @@ function fixture(
     t.after(() => rm(directory, { recursive: true, force: true }))
     const sums = `${options.checksum ?? hash}  ${name}\n`
     let opened = ''
+    let openedCount = 0
+    let downloads = 0
     const service = new UpdateService({
       version: '0.1.0',
       platform: 'win32',
@@ -34,6 +36,7 @@ function fixture(
       beforeInstall: options.beforeInstall ?? (async () => {}),
       openInstaller: async (path) => {
         opened = path
+        openedCount++
       },
       fetch: async (url) => {
         if (options.responseStatus)
@@ -57,10 +60,17 @@ function fixture(
             ],
           })
         if (url.endsWith('SHA256SUMS.txt')) return new Response(sums)
+        downloads++
         return new Response(bytes)
       },
     })
-    return { service, directory, opened: () => opened }
+    return {
+      service,
+      directory,
+      opened: () => opened,
+      openedCount: () => openedCount,
+      downloads: () => downloads,
+    }
   })
 }
 test('업데이트 버전을 숫자로 비교하고 다운그레이드를 막는다', () => {
@@ -130,4 +140,55 @@ test('진행 중인 작업과 개발 실행에서는 설치하지 않는다', as
     assert.ok(result.error)
     assert.equal(f.opened(), '')
   }
+})
+
+test('한 번의 업데이트 요청으로 다운로드와 설치를 연결하고 중복 요청을 합친다', async (t) => {
+  const f = await fixture(t)
+  await f.service.check()
+  const results = await Promise.all([
+    f.service.update(),
+    f.service.update(),
+    f.service.update(),
+  ])
+  assert.ok(results.every((state) => state.status === 'installing'))
+  assert.deepEqual(await readFile(f.opened()), bytes)
+  assert.equal(f.openedCount(), 1)
+  assert.equal(f.downloads(), 1)
+  await f.service.update()
+  assert.equal(f.openedCount(), 1)
+})
+
+test('자동 업데이트도 취소·검증 실패·개발 실행에서는 설치하지 않는다', async (t) => {
+  for (const options of [{ checksum: '0'.repeat(64) }, { canInstall: false }]) {
+    const f = await fixture(t, options)
+    await f.service.check()
+    await f.service.update()
+    assert.equal(f.openedCount(), 0)
+  }
+  const f = await fixture(t)
+  await f.service.check()
+  const pending = f.service.update()
+  f.service.cancel()
+  assert.equal((await pending).status, 'available')
+  assert.equal(f.openedCount(), 0)
+  await f.service.update()
+  assert.equal(f.openedCount(), 1)
+})
+
+test('작업 중이면 앱을 유지하고 재시도 시 이미 받은 파일로 설치한다', async (t) => {
+  let busy = true
+  const f = await fixture(t, {
+    beforeInstall: async () => {
+      if (busy) throw new Error('작업 중')
+    },
+  })
+  await f.service.check()
+  const state = await f.service.update()
+  assert.equal(state.status, 'downloaded')
+  assert.match(state.error!, /작업 중/)
+  assert.equal(f.openedCount(), 0)
+  busy = false
+  assert.equal((await f.service.update()).status, 'installing')
+  assert.equal(f.downloads(), 1)
+  assert.equal(f.openedCount(), 1)
 })

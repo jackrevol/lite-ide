@@ -210,22 +210,22 @@ try {
     0,
   )
   await updateDialog
-    .getByText('새 버전을 다운로드할 수 있습니다.', { exact: true })
-    .waitFor()
-  await page.screenshot({ path: 'artifacts/workspace-update.png' })
-  await updateDialog
-    .getByRole('button', { name: '다운로드', exact: true })
-    .click()
-  await updateDialog
     .getByText('다운로드와 무결성 검증이 완료되었습니다.', { exact: true })
     .waitFor()
+  await page.screenshot({ path: 'artifacts/workspace-update.png' })
+  assert.equal(
+    await updateDialog
+      .getByRole('button', { name: '다운로드', exact: true })
+      .count(),
+    0,
+  )
   assert.equal(
     (await page.evaluate(() => window.desktop.updateStatus())).progress,
     100,
   )
   assert.equal(
     await updateDialog
-      .getByRole('button', { name: /종료하고 설치|DMG 열기/ })
+      .getByRole('button', { name: '업데이트 다시 시도' })
       .isDisabled(),
     true,
   )

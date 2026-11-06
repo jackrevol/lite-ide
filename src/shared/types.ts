@@ -24,6 +24,7 @@ export interface DesktopApi {
   platform: string
   updateStatus(): Promise<AppUpdateState>
   checkUpdate(): Promise<AppUpdateState>
+  startUpdate(): Promise<AppUpdateState>
   downloadUpdate(): Promise<AppUpdateState>
   cancelUpdateDownload(): Promise<void>
   installUpdate(): Promise<AppUpdateState>

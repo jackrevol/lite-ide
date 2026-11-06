@@ -10,6 +10,7 @@ export function AppUpdateButton() {
     canInstall: false,
   })
   const dialog = useRef<HTMLDialogElement>(null)
+  const requesting = useRef(false)
   const pending = ['checking', 'downloading', 'installing'].includes(
     state.status,
   )
@@ -31,15 +32,20 @@ export function AppUpdateButton() {
       unsubscribe()
     }
   }, [])
-  async function action(run: () => Promise<AppUpdateState>) {
+  async function start() {
+    dialog.current?.showModal()
+    if (pending || requesting.current) return
+    requesting.current = true
     try {
-      setState(await run())
+      setState(await window.desktop.startUpdate())
     } catch (error) {
       setState((previous) => ({
         ...previous,
         status: 'error',
         error: String(error),
       }))
+    } finally {
+      requesting.current = false
     }
   }
   const descriptions = {
@@ -47,9 +53,11 @@ export function AppUpdateButton() {
     checking: '최신 릴리스를 확인하고 있습니다.',
     current: '사용 가능한 새 업데이트가 없습니다.',
     available: '새 버전을 다운로드할 수 있습니다.',
-    downloading: '설치 파일을 다운로드하고 있습니다.',
+    downloading:
+      '설치 파일을 다운로드하고 있습니다. 완료되면 자동으로 종료하고 설치합니다.',
     downloaded: '다운로드와 무결성 검증이 완료되었습니다.',
-    installing: '설치 파일을 열고 있습니다.',
+    installing:
+      '설치를 준비하고 있습니다. 앱이 종료된 후 업데이트하고 다시 실행합니다.',
     error: '업데이트를 완료하지 못했습니다.',
   }
   if (!available) return null
@@ -58,10 +66,8 @@ export function AppUpdateButton() {
       <button
         className={`titlebar-update${available ? ' update-available' : ''}`}
         aria-label="앱 업데이트"
-        title={
-          available ? `Lite IDE ${state.version} 업데이트` : '앱 업데이트 확인'
-        }
-        onClick={() => dialog.current?.showModal()}
+        title={`Lite IDE ${state.version} 다운로드 후 종료하고 설치`}
+        onClick={() => void start()}
       >
         {pending ? (
           <LoaderCircle size={14} className="animate-spin" />
@@ -71,7 +77,9 @@ export function AppUpdateButton() {
         <span>
           {state.status === 'downloading'
             ? `${state.progress ?? 0}%`
-            : '업데이트'}
+            : state.status === 'installing'
+              ? '설치 중…'
+              : '업데이트'}
         </span>
         {available && state.status !== 'downloading' && (
           <span className="update-dot" />
@@ -104,9 +112,7 @@ export function AppUpdateButton() {
           <p>
             {!state.canInstall
               ? '개발 실행에서는 설치를 실행할 수 없습니다. 설치된 앱에서 이용해 주세요.'
-              : window.desktop.platform === 'darwin'
-                ? 'DMG를 열고 앱을 Applications 폴더로 옮겨 교체해 주세요. 교체 전에 Lite IDE를 종료해 주세요.'
-                : '설치 프로그램을 열면 Lite IDE가 종료됩니다. 설치 화면의 안내에 따라 업데이트해 주세요.'}
+              : '앱을 종료하고 설치한 뒤 다시 실행합니다.'}
           </p>
         )}
         <div className="dialog-actions">
@@ -121,18 +127,13 @@ export function AppUpdateButton() {
               다운로드 취소
             </Button>
           ) : state.status === 'downloaded' ? (
-            <Button
-              disabled={!state.canInstall}
-              onClick={() => void action(window.desktop.installUpdate)}
-            >
-              {window.desktop.platform === 'darwin'
-                ? 'DMG 열기'
-                : '종료하고 설치'}
+            <Button disabled={!state.canInstall} onClick={() => void start()}>
+              업데이트 다시 시도
             </Button>
           ) : state.status === 'available' || state.status === 'error' ? (
-            <Button onClick={() => void action(window.desktop.downloadUpdate)}>
+            <Button onClick={() => void start()}>
               <Download size={14} />
-              {state.status === 'error' ? '다운로드 다시 시도' : '다운로드'}
+              {state.status === 'error' ? '업데이트 다시 시도' : '업데이트'}
             </Button>
           ) : null}
         </div>

@@ -21,6 +21,7 @@ import { createWorktree, inspectRepository, readDiff } from './git'
 import { AgentService } from './agent-service'
 import { cloneRepository, validateCloneInput } from './clone'
 import { UpdateService } from './update-service'
+import { installAfterExit, takeInstallError } from './update-installer'
 import type { RequestAnswer, SendMessage } from '../shared/types'
 
 const projects = new Set<string>()
@@ -116,10 +117,16 @@ app.whenReady().then(() => {
           '진행 중인 작업이나 저장소 복제를 마친 후 설치해 주세요.',
         )
     },
-    openInstaller: async (path) => {
-      const error = await shell.openPath(path)
-      if (error) throw new Error(`설치 파일을 열지 못했습니다: ${error}`)
-      if (process.platform === 'win32') app.quit()
+    openInstaller: async (path, sha256) => {
+      await installAfterExit({
+        platform: process.platform,
+        installer: path,
+        sha256,
+        executable: process.execPath,
+        cacheDirectory: join(app.getPath('userData'), 'updates'),
+        version: updates!.snapshot().version!,
+      })
+      app.quit()
     },
   })
   let updateCheck: ReturnType<UpdateService['check']> | undefined
@@ -130,6 +137,7 @@ app.whenReady().then(() => {
   const updateHandlers: Record<string, () => unknown> = {
     'app:update-status': () => updates!.snapshot(),
     'app:update-check': checkUpdateOnce,
+    'app:update-start': () => updates!.update(),
     'app:update-download': () => updates!.download(),
     'app:update-cancel': () => updates!.cancel(),
     'app:update-install': () => updates!.install(),
@@ -146,6 +154,11 @@ app.whenReady().then(() => {
     })
   }
   if (process.env.LITE_IDE_HEADLESS !== '1') {
+    void takeInstallError(join(app.getPath('userData'), 'updates')).then(
+      (error) => {
+        if (error) dialog.showErrorBox('업데이트 설치 실패', error)
+      },
+    )
     setTimeout(() => void checkUpdateOnce(), 10000).unref()
   }
   ipcMain.handle('codex:status', () => agents!.status())
