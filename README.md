@@ -80,9 +80,13 @@ npm run test:codex -- --terminal
 
 macOS 터미널의 `node-pty@1.1.0` 실행 권한 문제는 설치 후와 패키징 후(서명 전)에 `scripts/prepare-pty.cjs`로 보정합니다. 관련 upstream 이슈: https://github.com/microsoft/node-pty/issues/919.
 
+패키징은 `node-pty`에 포함된 Node-API 사전 빌드 바이너리를 사용해 C++ 재컴파일을 생략합니다. 패키징 후 대상 플랫폼·아키텍처의 필수 바이너리를 확인하고, 소스와 빌드용 파일은 배포에서 제외합니다. 렌더러 전용 라이브러리는 Vite 번들에 포함되므로 `devDependencies`로 관리해 중복 복사를 줄입니다. Actions는 운영체제·아키텍처별로 Electron과 패키징 도구 다운로드를 캐시합니다. 자체 업데이트는 전체 설치 파일과 SHA-256을 사용하므로 DMG 차등 업데이트용 blockmap은 생성하지 않습니다.
+
 릴리스 버전은 `package.json`의 major·minor와 `기본 patch + GITHUB_RUN_NUMBER`로 생성합니다. 예를 들어 기본 `0.1.0`의 첫 실행은 `0.1.1`이고 태그는 `v0.1.1`입니다. 빌드 중의 버전 변경을 저장소에 다시 커밋하지 않으며, 같은 실행을 재시도해도 버전은 유지됩니다. 이미 공개된 릴리스는 재실행으로 덮어쓰지 않습니다. 현재 설치 파일은 개발자 인증서 서명·Apple 공증 없이 배포됩니다.
 
 `npm run package:win` 또는 `npm run package:mac`으로 패키징합니다. 배포용 서명·공증은 별도 설정이 필요하며 macOS 실기기 검증은 수행하지 않았습니다.
+
+로컬에서 `node scripts/check-packaged.mjs win x64` 또는 `node scripts/check-packaged.mjs mac arm64`로 패키징된 앱의 숨김 실행·버전·실제 PTY 명령 실행을 확인할 수 있습니다. 이 검증은 Actions에 추가하지 않습니다.
 
 현재 파일 패널은 변경 사항 검토용입니다. 범용 파일 편집기, 내장 터미널, 원격 호스트 연결은 포함하지 않습니다. Git 변경 파일은 최대 200개를 표시하고, 새 파일 미리보기는 1MB까지 지원합니다. Codex app-server는 실험적 인터페이스이므로 CLI 버전 변경 시 `test:codex`로 호환성을 확인하세요.
 
