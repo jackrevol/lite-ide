@@ -34,7 +34,9 @@ export function TaskTabs({
             aria-selected={selected === task.id}
             aria-controls="agent-task-content"
             id={`task-tab-${task.id}`}
-            tabIndex={selected === task.id ? 0 : -1}
+            tabIndex={
+              selected === task.id || (!selected && index === 0) ? 0 : -1
+            }
             title={task.title}
             onClick={() => onSelect(task.id)}
             onKeyDown={(event) => {
@@ -59,14 +61,14 @@ export function TaskTabs({
             <Code2 size={13} />
             <span>{task.title}</span>
             {task.active && (
-              <span className="tab-running-dot" aria-label="작업 중" />
+              <span className="tab-running-dot" aria-label="터미널 실행 중" />
             )}
           </button>
         ))}
       </div>
       <button
         className="agent-tab-add"
-        aria-label="새 Worktree 작업"
+        aria-label="새 작업"
         title="새 작업 (Ctrl N)"
         onClick={onAdd}
       >

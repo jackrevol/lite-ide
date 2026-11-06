@@ -1,8 +1,27 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AgentSession, AppUpdateState, DesktopApi } from '../shared/types'
+import type {
+  AgentSession,
+  AppUpdateState,
+  DesktopApi,
+  TerminalEvent,
+} from '../shared/types'
 
 const api: DesktopApi = {
   platform: process.platform,
+  openTerminal: (input) => ipcRenderer.invoke('terminal:open', input),
+  writeTerminal: (id, data) => ipcRenderer.invoke('terminal:write', id, data),
+  resizeTerminal: (id, cols, rows) =>
+    ipcRenderer.invoke('terminal:resize', id, cols, rows),
+  closeTerminal: (id) => ipcRenderer.invoke('terminal:close', id),
+  terminalSnapshot: (id) => ipcRenderer.invoke('terminal:snapshot', id),
+  onTerminal: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, event: TerminalEvent) =>
+      listener(event)
+    ipcRenderer.on('terminal:event', handler)
+    return () => {
+      ipcRenderer.removeListener('terminal:event', handler)
+    }
+  },
   getSettings: () => ipcRenderer.invoke('settings:get'),
   updateProjectSettings: (path, defaults) =>
     ipcRenderer.invoke('settings:project-update', path, defaults),
@@ -60,8 +79,8 @@ const api: DesktopApi = {
   openLink: (url) => ipcRenderer.invoke('link:open', url),
   createWorktree: (path, branch, baseRef) =>
     ipcRenderer.invoke('worktree:create', path, branch, baseRef),
-  deleteWorktree: (project, path) =>
-    ipcRenderer.invoke('worktree:delete', project, path),
+  deleteWorktree: (project, path, options) =>
+    ipcRenderer.invoke('worktree:delete', project, path, options),
   onSession: (listener) => {
     const receive = (
       _event: Electron.IpcRendererEvent,

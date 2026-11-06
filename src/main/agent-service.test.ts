@@ -9,15 +9,31 @@ import type { AgentSession } from '../shared/types.ts'
 test('동일 Worktree에는 새로운 독립 작업을 중복 연결할 수 없다', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'lite-ide-single-task-'))
   const file = join(directory, 'sessions.json')
-  await writeFile(file, JSON.stringify([{
-    id: 'existing', workspace: directory, title: '기존 작업',
-    status: 'completed', messages: [], requests: [], updatedAt: Date.now(),
-  }]), 'utf8')
+  await writeFile(
+    file,
+    JSON.stringify([
+      {
+        id: 'existing',
+        workspace: directory,
+        title: '기존 작업',
+        status: 'completed',
+        messages: [],
+        requests: [],
+        updatedAt: Date.now(),
+      },
+    ]),
+    'utf8',
+  )
   const service = new AgentService(file, () => {})
   try {
-    await assert.rejects(service.send({
-      sessionId: 'duplicate', workspace: directory, text: '새 요청',
-    }), /연결된 기존 작업/)
+    await assert.rejects(
+      service.send({
+        sessionId: 'duplicate',
+        workspace: directory,
+        text: '새 요청',
+      }),
+      /연결된 기존 작업/,
+    )
     assert.equal((await service.all()).length, 1)
   } finally {
     await service.close()
@@ -258,6 +274,68 @@ test('삭제 의도를 저장하지 못하면 폴더 삭제를 실행하지 않�
     assert.equal(removed, false)
   } finally {
     storage.persist = persist
+    await service.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('서버 사용자 입력 ID가 달라도 입력은 한 번만 기록하고 동일 문장의 다음 턴은 보존한다', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lite-ide-echo-'))
+  const service = new AgentService(join(directory, 'sessions.json'), () => {})
+  let turn = 0
+  service.client.start = async () => {}
+  service.client.request = async (method, params) => {
+    if (method === 'thread/start')
+      return { thread: { id: 'echo-thread' } } as never
+    if (method === 'turn/start') {
+      const id = `server-input-${++turn}`
+      const item = {
+        id,
+        type: 'userMessage',
+        content: [{ type: 'text', text: '동일한 명령' }],
+      }
+      for (const method of ['item/started', 'item/completed'])
+        service.client.onMessage({
+          method,
+          params: { threadId: 'echo-thread', item },
+        })
+      service.client.onMessage({
+        method: 'turn/completed',
+        params: {
+          threadId: 'echo-thread',
+          turn: { id: `turn-${turn}`, status: 'completed' },
+        },
+      })
+      assert.notEqual(id, params?.clientUserMessageId)
+      return { turn: { id: `turn-${turn}` } } as never
+    }
+    return {} as never
+  }
+  try {
+    await service.send({
+      sessionId: 'echo-session',
+      workspace: directory,
+      text: '동일한 명령',
+    })
+    let messages = (await service.all())[0].messages.filter(
+      (item) => item.kind === 'user',
+    )
+    assert.equal(messages.length, 1)
+    assert.equal(messages[0].id, 'server-input-1')
+    await service.send({
+      sessionId: 'echo-session',
+      workspace: directory,
+      text: '동일한 명령',
+    })
+    messages = (await service.all())[0].messages.filter(
+      (item) => item.kind === 'user',
+    )
+    assert.equal(messages.length, 2)
+    assert.deepEqual(
+      messages.map((item) => item.id),
+      ['server-input-1', 'server-input-2'],
+    )
+  } finally {
     await service.close()
     await rm(directory, { recursive: true, force: true })
   }

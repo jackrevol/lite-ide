@@ -31,6 +31,7 @@ import {
 import { SettingsService, validateDefaults } from './settings-service'
 import { appInfo } from './app-info'
 import { AgentService } from './agent-service'
+import { TerminalService } from './terminal-service'
 import { cloneRepository, validateCloneInput } from './clone'
 import { UpdateService } from './update-service'
 import { installAfterExit, takeInstallError } from './update-installer'
@@ -38,6 +39,8 @@ import type {
   RequestAnswer,
   SendMessage,
   ProjectDefaults,
+  TerminalOpen,
+  DeleteTaskOptions,
 } from '../shared/types'
 
 const projects = new Set<string>()
@@ -47,6 +50,7 @@ const cloneDirectories = new Set<string>()
 let cloning = false
 let window: BrowserWindow | null = null
 let agents: AgentService | undefined
+let terminals: TerminalService | undefined
 let updates: UpdateService | undefined
 let windowTheme: 'light' | 'dark' = 'dark'
 const titleBarHeight = 43
@@ -123,6 +127,56 @@ app.whenReady().then(() => {
         window.webContents.send('codex:usage-changed')
     },
   )
+  terminals = new TerminalService(
+    join(app.getPath('userData'), 'terminal-resume.json'),
+    (event) => {
+      if (window && !window.isDestroyed())
+        window.webContents.send('terminal:event', event)
+    },
+  )
+  function requireTerminalSender(event: Electron.IpcMainInvokeEvent) {
+    if (
+      !window ||
+      event.sender !== window.webContents ||
+      event.senderFrame !== event.sender.mainFrame
+    )
+      throw new Error('현재 앱 창에서만 터미널을 제어할 수 있습니다.')
+  }
+  ipcMain.handle('terminal:open', async (event, input: TerminalOpen) => {
+    requireTerminalSender(event)
+    if (updates?.snapshot().status === 'installing')
+      throw new Error('업데이트 설치를 시작하고 있습니다.')
+    const workspace = requireWorkspace(input?.workspace)
+    await requireLinkedWorktree(workspace)
+    if (
+      (await agents!.all()).some(
+        (session) =>
+          pathKey(session.workspace) === pathKey(workspace) &&
+          ['running', 'waiting'].includes(session.status),
+      )
+    )
+      throw new Error('기존 실행을 중단한 뒤 터미널을 열어 주세요.')
+    return terminals!.open({ ...input, workspace })
+  })
+  ipcMain.handle('terminal:write', (event, id: string, data: string) => {
+    requireTerminalSender(event)
+    terminals!.write(id, data)
+  })
+  ipcMain.handle(
+    'terminal:resize',
+    (event, id: string, cols: number, rows: number) => {
+      requireTerminalSender(event)
+      terminals!.resize(id, cols, rows)
+    },
+  )
+  ipcMain.handle('terminal:close', (event, id: string) => {
+    requireTerminalSender(event)
+    return terminals!.stop(id)
+  })
+  ipcMain.handle('terminal:snapshot', (event, id: string) => {
+    requireTerminalSender(event)
+    return terminals!.snapshot(id)
+  })
   updates = new UpdateService({
     version: app.isPackaged
       ? app.getVersion()
@@ -140,6 +194,7 @@ app.whenReady().then(() => {
     beforeInstall: async () => {
       if (
         cloning ||
+        terminals!.hasRunning() ||
         (await agents!.all()).some((session) =>
           ['running', 'waiting'].includes(session.status),
         )
@@ -253,19 +308,41 @@ app.whenReady().then(() => {
   )
   ipcMain.handle(
     'worktree:delete',
-    async (_event, projectPath: string, target: string) => {
+    async (
+      _event,
+      projectPath: string,
+      target: string,
+      options?: DeleteTaskOptions,
+    ) => {
+      if (
+        options?.discardChanges !== undefined &&
+        typeof options.discardChanges !== 'boolean'
+      )
+        throw new Error('올바른 삭제 옵션을 선택해 주세요.')
       await restoredProjects
       const directory = requireWorkspace(projectPath)
       if (!projects.has(directory))
         throw new Error('열린 프로젝트를 선택해 주세요.')
       const workspace = await realpath(requireWorkspace(target))
       return agents!.removeWorkspace(workspace, async () => {
-        const result = await removeWorktree(directory, workspace, [...projects])
-        deletedWorkspaces.add(pathKey(workspace))
-        for (const path of workspaces) {
-          if (pathKey(path) === pathKey(workspace)) workspaces.delete(path)
-        }
-        return result
+        if (
+          options?.discardChanges !== true &&
+          (await inspectRepository(workspace)).totalChanges > 0
+        )
+          throw new Error('변경 사항을 삭제하려면 확인이 필요합니다.')
+        return terminals!.removeWorkspace(workspace, async () => {
+          const result = await removeWorktree(
+            directory,
+            workspace,
+            [...projects],
+            options?.discardChanges === true,
+          )
+          deletedWorkspaces.add(pathKey(workspace))
+          for (const path of workspaces) {
+            if (pathKey(path) === pathKey(workspace)) workspaces.delete(path)
+          }
+          return result
+        })
       })
     },
   )
@@ -471,5 +548,7 @@ app.on('before-quit', (event) => {
   event.preventDefault()
   quitting = true
   updates?.cancel()
-  void agents.close().finally(() => app.quit())
+  void Promise.allSettled([agents.close(), terminals?.close()]).finally(() =>
+    app.quit(),
+  )
 })

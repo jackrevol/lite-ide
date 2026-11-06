@@ -8,6 +8,49 @@ export interface Worktree {
   branch: string
 }
 
+export type TerminalKind = 'codex' | 'shell'
+export interface DeleteTaskOptions {
+  discardChanges?: boolean
+}
+export interface TerminalOpen {
+  taskId: string
+  workspace: string
+  kind: TerminalKind
+  cols: number
+  rows: number
+  model?: string
+  effort?: string
+  prompt?: string
+  threadId?: string
+}
+export interface TerminalSnapshot {
+  taskId: string
+  generation: string
+  workspace: string
+  kind: TerminalKind
+  running: boolean
+  output: string
+  sequence: number
+  cols: number
+  rows: number
+  exitCode?: number
+}
+export type TerminalEvent =
+  | {
+      taskId: string
+      generation: string
+      sequence: number
+      type: 'data'
+      data: string
+    }
+  | {
+      taskId: string
+      generation: string
+      sequence: number
+      type: 'exit'
+      exitCode: number
+    }
+
 export interface ChangedFile {
   path: string
   status: string
@@ -22,6 +65,12 @@ export interface RepositorySnapshot {
 
 export interface DesktopApi {
   platform: string
+  openTerminal(input: TerminalOpen): Promise<TerminalSnapshot>
+  writeTerminal(taskId: string, data: string): Promise<void>
+  resizeTerminal(taskId: string, cols: number, rows: number): Promise<void>
+  closeTerminal(taskId: string): Promise<void>
+  terminalSnapshot(taskId: string): Promise<TerminalSnapshot | null>
+  onTerminal(listener: (event: TerminalEvent) => void): () => void
   getSettings(): Promise<AppSettings>
   updateProjectSettings(
     projectPath: string,
@@ -73,6 +122,7 @@ export interface DesktopApi {
   deleteWorktree(
     projectPath: string,
     worktreePath: string,
+    options?: DeleteTaskOptions,
   ): Promise<{ warning?: string }>
 }
 
@@ -117,12 +167,7 @@ export interface AppUpdateState {
 }
 
 export type AgentStatus =
-  | 'idle'
-  | 'running'
-  | 'waiting'
-  | 'completed'
-  | 'interrupted'
-  | 'failed'
+  'idle' | 'running' | 'waiting' | 'completed' | 'interrupted' | 'failed'
 export interface AgentMessage {
   id: string
   kind: 'user' | 'assistant' | 'command' | 'files' | 'reasoning' | 'tool'

@@ -228,6 +228,37 @@ test('Worktree 삭제는 경로·변경 파일·잠금을 보호하고 무시 �
       git(directory, 'branch', '--list', 'feature/delete-test').trim(),
       '',
     )
+    const discard = await createWorktree(directory, 'feature/confirmed-delete')
+    await writeFile(join(discard.path, 'hello.txt'), '수정한 파일\n', 'utf8')
+    await writeFile(
+      join(discard.path, '새 파일.txt'),
+      '추적하지 않는 파일\n',
+      'utf8',
+    )
+    await writeFile(join(discard.path, '.env'), '무시된 파일\n', 'utf8')
+    await assert.rejects(removeWorktree(directory, discard.path), /변경 파일/)
+    await assert.rejects(
+      removeWorktree(directory, directory, [], true),
+      /기본 작업 공간/,
+    )
+    await assert.rejects(
+      removeWorktree(directory, discard.path, [discard.path], true),
+      /별도로 연 프로젝트/,
+    )
+    git(directory, 'worktree', 'lock', discard.path)
+    await assert.rejects(removeWorktree(directory, discard.path, [], true))
+    assert.equal(
+      await readFile(join(discard.path, '새 파일.txt'), 'utf8'),
+      '추적하지 않는 파일\n',
+    )
+    git(directory, 'worktree', 'unlock', discard.path)
+    await removeWorktree(directory, discard.path, [], true)
+    assert.equal(await stat(discard.path).catch(() => null), null)
+    assert.equal(git(directory, 'branch', '--list', discard.branch).trim(), '')
+    assert.equal(
+      await readFile(join(directory, 'hello.txt'), 'utf8'),
+      'hello\n',
+    )
   } finally {
     // mkdtemp로 생성한 테스트 전용 폴더만 정리합니다.
     await rm(directory, { recursive: true, force: true })

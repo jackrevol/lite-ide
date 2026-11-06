@@ -235,6 +235,7 @@ export async function removeWorktree(
   directory: string,
   target: string,
   protectedPaths: string[] = [],
+  discardChanges = false,
 ): Promise<{ warning?: string }> {
   const canonicalTarget = await realpath(target)
   const snapshot = await inspectRepository(directory)
@@ -256,7 +257,7 @@ export async function removeWorktree(
     '-z',
     '--untracked-files=all',
   ])
-  if (status)
+  if (status && !discardChanges)
     throw new Error(
       '변경 파일 또는 추적하지 않는 파일이 있어 삭제할 수 없습니다.',
     )
@@ -284,7 +285,13 @@ export async function removeWorktree(
       `로컬 브랜치 ${branch}를 다른 Worktree에서도 사용하고 있어 삭제할 수 없습니다.`,
     )
   // Git 자체가 잠금·서브모듈 등 추가 보호 조건을 검사합니다.
-  await git(directory, ['worktree', 'remove', '--', canonicalTarget])
+  await git(directory, [
+    'worktree',
+    'remove',
+    ...(discardChanges ? ['--force'] : []),
+    '--',
+    canonicalTarget,
+  ])
   if (branch) {
     try {
       await git(directory, ['branch', '-D', '--', branch])

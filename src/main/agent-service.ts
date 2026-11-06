@@ -31,6 +31,10 @@ export class AgentService {
   private nextRequest = 0
   private inspections = new Map<string, Promise<void>>()
   private revisions = new Map<string, number>()
+  private pendingUserMessages = new Map<
+    string,
+    { id: string; text: string }[]
+  >()
   private file: string
   private emit: (session: AgentSession) => void
   private onUsageChanged: () => void
@@ -211,10 +215,11 @@ export class AgentService {
     const previous = this.sessions.get(input.sessionId)
     if (
       !previous?.parentSessionId &&
-      [...this.sessions.values()].some((session) =>
-        !session.parentSessionId &&
-        pathKey(session.workspace) === pathKey(input.workspace) &&
-        session.id !== input.sessionId,
+      [...this.sessions.values()].some(
+        (session) =>
+          !session.parentSessionId &&
+          pathKey(session.workspace) === pathKey(input.workspace) &&
+          session.id !== input.sessionId,
       )
     )
       throw new Error('이 Worktree에 연결된 기존 작업을 사용해 주세요.')
@@ -245,6 +250,9 @@ export class AgentService {
       kind: 'user',
       text: input.text,
     })
+    this.pendingUserMessages.set(session.id, [
+      { id: userMessageId, text: input.text },
+    ])
     this.publish(session)
     try {
       await this.client.start()
@@ -280,6 +288,7 @@ export class AgentService {
       session.turnId = result.turn.id
       this.publish(session, false)
     } catch (error) {
+      this.pendingUserMessages.delete(session.id)
       session.status = 'failed'
       session.error = error instanceof Error ? error.message : String(error)
       this.publish(session)
@@ -551,6 +560,10 @@ export class AgentService {
     if (this.busy.has(id)) throw new Error('이미 지시를 보내고 있습니다.')
     this.busy.add(id)
     const userMessageId = crypto.randomUUID()
+    session.messages.push({ id: userMessageId, kind: 'user', text })
+    const pendingMessages = this.pendingUserMessages.get(id) ?? []
+    pendingMessages.push({ id: userMessageId, text })
+    this.pendingUserMessages.set(id, pendingMessages)
     try {
       await this.client.request('turn/steer', {
         threadId: session.threadId,
@@ -558,9 +571,15 @@ export class AgentService {
         expectedTurnId: session.turnId,
         input: [{ type: 'text', text, text_elements: [] }],
       })
-      if (!session.messages.some((item) => item.id === userMessageId))
-        session.messages.push({ id: userMessageId, kind: 'user', text })
       this.publish(session)
+    } catch (error) {
+      this.pendingUserMessages.set(
+        id,
+        (this.pendingUserMessages.get(id) ?? []).filter(
+          (item) => item.id !== userMessageId,
+        ),
+      )
+      throw error
     } finally {
       this.busy.delete(id)
     }
@@ -795,6 +814,7 @@ export class AgentService {
       session.status = 'running'
       session.closed = false
     } else if (message.method === 'turn/completed') {
+      this.pendingUserMessages.delete(session.id)
       const turn = record(params.turn)
       session.status =
         turn.status === 'failed'
@@ -820,9 +840,23 @@ export class AgentService {
       this.trackSubagents(session, record(params.item))
       const item = this.normalizeItem(record(params.item))
       if (item) {
-        const index = session.messages.findIndex(
-          (entry) => entry.id === item.id,
-        )
+        let index = session.messages.findIndex((entry) => entry.id === item.id)
+        if (item.kind === 'user') {
+          const pending = this.pendingUserMessages.get(session.id) ?? []
+          const echoed =
+            pending.find((entry) => entry.id === item.id) ??
+            pending.find((entry) => entry.text === item.text)
+          if (echoed) {
+            if (index < 0)
+              index = session.messages.findIndex(
+                (entry) => entry.id === echoed.id,
+              )
+            this.pendingUserMessages.set(
+              session.id,
+              pending.filter((entry) => entry !== echoed),
+            )
+          }
+        }
         if (index >= 0) session.messages[index] = item
         else session.messages.push(item)
       }

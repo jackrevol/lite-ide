@@ -1,10 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CodexStatus, Project, Worktree } from '../../../shared/types'
-import {
-  createSession,
-  type Session,
-  type TaskMode,
-} from '../lib/workspace-state'
+import type { WorkspaceTask } from '../lib/workspace-state'
 import { Button } from './ui/button'
 
 export function NewTaskDialog({
@@ -23,14 +19,9 @@ export function NewTaskDialog({
   connection: CodexStatus
   initialModel: string
   initialEffort: string
-  initialMode: TaskMode
   initialBaseRef: string
   branches: string[]
-  onCreate: (
-    workspace: string,
-    session: Session,
-    mode: TaskMode,
-  ) => Promise<void>
+  onCreate: (task: WorkspaceTask) => Promise<void>
   onClose: () => void
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
@@ -45,7 +36,7 @@ export function NewTaskDialog({
   const [baseRef, setBaseRef] = useState(initialBaseRef)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
-  const created = useRef<{ workspace: string; session: Session } | null>(null)
+  const created = useRef<WorkspaceTask | null>(null)
   const submitting = useRef(false)
   const selectedModel = connection.models.find((item) => item.id === model)
   const invalidModel = !!model && !selectedModel
@@ -80,24 +71,18 @@ export function NewTaskDialog({
         )
         const target = tree.path
         created.current = {
-          workspace: target,
-          session: {
-            ...createSession(),
-            project: project.path,
-            branch: tree.branch,
-            title: name.trim() || '새 작업',
-            customTitle: !!name.trim(),
-            draft: prompt,
-            model,
-            effort,
-          },
+          id: crypto.randomUUID(),
+          project: project.path,
+          path: target,
+          branch: tree.branch,
+          name: name.trim() || '새 작업',
+          model,
+          effort,
+          terminalKind: 'codex',
+          initialPrompt: prompt || undefined,
         }
       }
-      await onCreate(
-        created.current.workspace,
-        created.current.session,
-        'worktree',
-      )
+      await onCreate(created.current)
       onClose()
     } catch (cause) {
       setError(
@@ -127,7 +112,7 @@ export function NewTaskDialog({
         <h2 id="new-task-title">새 작업</h2>
         <p title={project.path}>{project.name}에서 작업을 시작합니다.</p>
         <fieldset disabled={pending || !!created.current}>
-          <p>작업마다 새 Worktree를 생성합니다.</p>
+          <p>작업 전용 브랜치와 폴더를 함께 생성합니다.</p>
           <label>
             기준 브랜치
             <select
@@ -256,7 +241,9 @@ export function NewTaskDialog({
               pending ||
               invalidModel ||
               invalidEffort ||
-              (!branch.trim() || !worktrees.length || (baseRef !== 'HEAD' && !branches.includes(baseRef))) ||
+              !branch.trim() ||
+              !worktrees.length ||
+              (baseRef !== 'HEAD' && !branches.includes(baseRef)) ||
               (!!prompt.trim() &&
                 (!connection.connected || !connection.authenticated))
             }
