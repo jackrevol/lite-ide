@@ -250,11 +250,12 @@ app.whenReady().then(() => {
         throw new Error('열린 프로젝트를 선택해 주세요.')
       const workspace = await realpath(requireWorkspace(target))
       return agents!.removeWorkspace(workspace, async () => {
-        await removeWorktree(directory, workspace, [...projects])
+        const result = await removeWorktree(directory, workspace, [...projects])
         deletedWorkspaces.add(pathKey(workspace))
         for (const path of workspaces) {
           if (pathKey(path) === pathKey(workspace)) workspaces.delete(path)
         }
+        return result
       })
     },
   )

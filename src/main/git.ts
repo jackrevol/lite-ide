@@ -217,7 +217,7 @@ export async function removeWorktree(
   directory: string,
   target: string,
   protectedPaths: string[] = [],
-): Promise<void> {
+): Promise<{ warning?: string }> {
   const canonicalTarget = await realpath(target)
   const snapshot = await inspectRepository(directory)
   const member = snapshot.worktrees.find(
@@ -242,6 +242,39 @@ export async function removeWorktree(
     throw new Error(
       '변경 파일 또는 추적하지 않는 파일이 있어 삭제할 수 없습니다.',
     )
-  // Git 자체가 잠금·서브모듈 등 추가 보호 조건을 검사합니다. 브랜치는 보존합니다.
+  let branchRef: string | null
+  try {
+    branchRef = (
+      await git(canonicalTarget, ['symbolic-ref', '--quiet', 'HEAD'])
+    ).trim()
+  } catch (error) {
+    if ((error as { code?: unknown }).code !== 1) throw error
+    branchRef = null
+  }
+  const branch = branchRef?.startsWith('refs/heads/')
+    ? branchRef.slice(11)
+    : null
+  if (
+    branch &&
+    snapshot.worktrees.some(
+      (tree) =>
+        pathKey(tree.path) !== pathKey(canonicalTarget) &&
+        tree.branch === branch,
+    )
+  )
+    throw new Error(
+      `로컬 브랜치 ${branch}를 다른 Worktree에서도 사용하고 있어 삭제할 수 없습니다.`,
+    )
+  // Git 자체가 잠금·서브모듈 등 추가 보호 조건을 검사합니다.
   await git(directory, ['worktree', 'remove', '--', canonicalTarget])
+  if (branch) {
+    try {
+      await git(directory, ['branch', '-D', '--', branch])
+    } catch (error) {
+      return {
+        warning: `Worktree 폴더는 삭제되었지만 로컬 브랜치 ${branch}를 삭제하지 못했습니다. ${error instanceof Error ? error.message : String(error)}`,
+      }
+    }
+  }
+  return {}
 }

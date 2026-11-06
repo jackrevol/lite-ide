@@ -298,7 +298,10 @@ export class AgentService {
     await this.persist()
   }
 
-  async removeWorkspace(workspace: string, remove: () => Promise<void>) {
+  async removeWorkspace(
+    workspace: string,
+    remove: () => Promise<void | { warning?: string }>,
+  ) {
     await this.loaded
     const key = pathKey(workspace)
     if (this.deletingWorkspaces.has(key))
@@ -315,12 +318,14 @@ export class AgentService {
     )
       throw new Error('진행 중이거나 시작 중인 작업을 먼저 중단해 주세요.')
     this.deletingWorkspaces.add(key)
+    let warning: string | undefined
     try {
       // 삭제 의도를 먼저 저장하여 폴더 삭제 후 저장 실패 시에도 관련 대화만 정리합니다.
       this.removalIntents.add(key)
       try {
         await this.persist()
-        await remove()
+        const result = await remove()
+        warning = result?.warning
       } catch (error) {
         this.removalIntents.delete(key)
         await this.persist().catch(() => {})
@@ -333,11 +338,15 @@ export class AgentService {
       this.removalIntents.delete(key)
       try {
         await this.persist()
-        return {}
+        return warning ? { warning } : {}
       } catch {
         return {
-          warning:
+          warning: [
+            warning,
             'Worktree 삭제는 완료되었지만 대화 기록 파일을 저장하지 못했습니다. 앱을 종료하기 전에 저장 공간과 권한을 확인해 주세요.',
+          ]
+            .filter(Boolean)
+            .join('\n'),
         }
       }
     } finally {

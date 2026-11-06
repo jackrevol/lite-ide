@@ -35,6 +35,7 @@ test('Worktree 삭제 잠금은 동시 시작을 차단하고 삭제한 대화�
     const removing = service.removeWorkspace(alias, async () => {
       entered()
       await gate
+      return { warning: '연결된 로컬 브랜치 삭제 실패' }
     })
     await started
     await assert.rejects(
@@ -50,7 +51,7 @@ test('Worktree 삭제 잠금은 동시 시작을 차단하고 삭제한 대화�
       /이미 Worktree/,
     )
     release()
-    await removing
+    assert.match((await removing).warning ?? '', /브랜치 삭제 실패/)
     assert.deepEqual(await service.all(), [])
     const saved = JSON.parse(await readFile(file, 'utf8'))
     assert.deepEqual(saved.sessions, [])
@@ -184,10 +185,12 @@ test('삭제 후 저장 실패는 부분 성공으로 보고하고 삭제 의도
     await service.all()
     storage.persist = () =>
       ++saves === 1 ? persist() : Promise.reject(new Error('디스크 저장 실패'))
-    const result = await service.removeWorkspace(workspace, () =>
-      rm(workspace, { recursive: true }),
-    )
+    const result = await service.removeWorkspace(workspace, async () => {
+      await rm(workspace, { recursive: true })
+      return { warning: '연결된 로컬 브랜치 삭제 실패' }
+    })
     assert.match(result.warning ?? '', /Worktree 삭제는 완료/)
+    assert.match(result.warning ?? '', /브랜치 삭제 실패/)
     assert.deepEqual(await service.all(), [])
     const restored = new AgentService(file, () => {})
     assert.deepEqual(await restored.all(), [])
