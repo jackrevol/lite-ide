@@ -46,6 +46,7 @@
   "build": {
     "appId": "dev.jackrevol.liteide",
     "productName": "Lite IDE",
+    "artifactName": "Lite-IDE-${version}-${os}-${arch}.${ext}",
     "directories": {
       "output": "release"
     },
