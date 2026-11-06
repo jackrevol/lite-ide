@@ -123,9 +123,9 @@ app.whenReady().then(() => {
     async (_event, path: string, branch: string) => {
       const directory = requireWorkspace(path)
       const tree = await createWorktree(directory, branch)
-      const path = resolve(tree.path)
-      workspaces.add(path)
-      return { ...tree, path }
+      const worktreePath = resolve(tree.path)
+      workspaces.add(worktreePath)
+      return { ...tree, path: worktreePath }
     },
   )
   const projectFile = join(app.getPath('userData'), 'projects.json')
