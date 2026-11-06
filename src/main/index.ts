@@ -135,7 +135,39 @@ app.whenReady().then(() => {
       if (window && !window.isDestroyed())
         window.webContents.send('terminal:event', event)
     },
+    undefined,
+    undefined,
+    async (input, resuming) => {
+      if (
+        process.env.LITE_IDE_HEADLESS === '1' && process.env.LITE_IDE_TEST_TERMINAL
+      )
+        return undefined
+      await agents!.client.start()
+      if (resuming) {
+        const result = await agents!.client.request<{ data: { id: string }[] }>(
+          'thread/list',
+          {
+            cwd: input.workspace,
+            sourceKinds: ['cli', 'appServer'],
+            sortKey: 'updated_at',
+            limit: 1,
+          },
+        )
+        if (result.data[0]) return result.data[0].id
+      }
+      return undefined
+    },
+    async (threadId) => {
+      await agents!.client.start()
+      const { thread } = await agents!.client.request<{
+        thread: { turns: { id: string; status: string }[] }
+      }>('thread/read', { threadId, includeTurns: true })
+      const turn = thread.turns.at(-1)
+      if (turn?.status === 'inProgress')
+        await agents!.client.request('turn/interrupt', { threadId, turnId: turn.id })
+    },
   )
+  let restoredTerminals = Promise.resolve()
   function requireTerminalSender(event: Electron.IpcMainInvokeEvent) {
     if (
       !window ||
@@ -146,6 +178,7 @@ app.whenReady().then(() => {
   }
   ipcMain.handle('terminal:open', async (event, input: TerminalOpen) => {
     requireTerminalSender(event)
+    await restoredTerminals
     if (updates?.snapshot().status === 'installing')
       throw new Error('업데이트 설치를 시작하고 있습니다.')
     const workspace = requireWorkspace(input?.workspace)
@@ -154,10 +187,13 @@ app.whenReady().then(() => {
       (await agents!.all()).some(
         (session) =>
           pathKey(session.workspace) === pathKey(workspace) &&
+          (!input.threadId || session.threadId !== input.threadId) &&
           ['running', 'waiting'].includes(session.status),
       )
     )
       throw new Error('기존 실행을 중단한 뒤 터미널을 열어 주세요.')
+    if (updates?.snapshot().status === 'installing')
+      throw new Error('업데이트 설치를 시작하고 있습니다.')
     return terminals!.open({ ...input, workspace })
   })
   ipcMain.handle('terminal:write', (event, id: string, data: string) => {
@@ -194,26 +230,26 @@ app.whenReady().then(() => {
         window.webContents.send('app:update', state)
     },
     beforeInstall: async () => {
-      if (
-        cloning ||
-        terminals!.hasRunning() ||
-        (await agents!.all()).some((session) =>
-          ['running', 'waiting'].includes(session.status),
-        )
-      )
-        throw new Error(
-          '진행 중인 작업이나 저장소 복제를 마친 후 설치해 주세요.',
-        )
+      if (cloning)
+        throw new Error('저장소 복제를 마친 후 설치해 주세요.')
     },
     openInstaller: async (path, sha256) => {
-      await installAfterExit({
-        platform: process.platform,
-        installer: path,
-        sha256,
-        executable: process.execPath,
-        cacheDirectory: join(app.getPath('userData'), 'updates'),
-        version: updates!.snapshot().version!,
-      })
+      await restoredTerminals
+      await terminals!.prepareForUpdate()
+      window?.webContents.session.flushStorageData()
+      try {
+        await installAfterExit({
+          platform: process.platform,
+          installer: path,
+          sha256,
+          executable: process.execPath,
+          cacheDirectory: join(app.getPath('userData'), 'updates'),
+          version: updates!.snapshot().version!,
+        })
+      } catch (error) {
+        await terminals!.cancelUpdateRestore()
+        throw error
+      }
       app.quit()
     },
   })
@@ -390,6 +426,18 @@ app.whenReady().then(() => {
       /* 처음 실행하거나 저장 파일이 손상된 경우 빈 목록으로 시작합니다. */
     }
   })()
+  restoredTerminals = restoredProjects.then(async () => {
+    await agents!.reconnectSessions()
+    for (const project of projects) {
+      const repository = await inspectRepository(project).catch(() => null)
+      for (const tree of repository?.worktrees ?? [])
+        workspaces.add(resolve(tree.path))
+    }
+    await terminals!.restoreAfterUpdate(async (workspace) => {
+      const directory = requireWorkspace(workspace)
+      await requireLinkedWorktree(directory)
+    })
+  })
   async function requireProject(path: string) {
     await restoredProjects
     const directory = requireWorkspace(path)
@@ -414,7 +462,7 @@ app.whenReady().then(() => {
     settings.update(await requireProject(path), null),
   )
   ipcMain.handle('project:list', async () => {
-    await restoredProjects
+    await restoredTerminals
     return [...projects].map((path) => ({ path, name: basename(path) }))
   })
   ipcMain.handle('project:open', async () => {
@@ -561,7 +609,12 @@ app.on('before-quit', (event) => {
   event.preventDefault()
   quitting = true
   updates?.cancel()
-  void Promise.allSettled([agents.close(), terminals?.close()]).finally(() =>
-    app.quit(),
-  )
+  void (async () => {
+    // 터미널의 세션 ID를 저장한 뒤 관찰 연결을 닫습니다.
+    try {
+      await terminals?.close()
+    } finally {
+      await agents.close()
+    }
+  })().finally(() => app.quit())
 })

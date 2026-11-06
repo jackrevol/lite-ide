@@ -123,11 +123,11 @@ test('설치 직전에 파일 변경을 다시 검증한다', async (t) => {
   assert.equal((await f.service.install()).status, 'error')
   assert.equal(f.opened(), '')
 })
-test('진행 중인 작업과 개발 실행에서는 설치하지 않는다', async (t) => {
+test('설치 전 보류 조건과 개발 실행에서는 설치하지 않는다', async (t) => {
   for (const options of [
     {
       beforeInstall: async () => {
-        throw new Error('작업 중')
+        throw new Error('복제 중')
       },
     },
     { canInstall: false },
@@ -175,17 +175,17 @@ test('자동 업데이트도 취소·검증 실패·개발 실행에서는 설�
   assert.equal(f.openedCount(), 1)
 })
 
-test('작업 중이면 앱을 유지하고 재시도 시 이미 받은 파일로 설치한다', async (t) => {
+test('복제 중이면 앱을 유지하고 재시도 시 이미 받은 파일로 설치한다', async (t) => {
   let busy = true
   const f = await fixture(t, {
     beforeInstall: async () => {
-      if (busy) throw new Error('작업 중')
+      if (busy) throw new Error('복제 중')
     },
   })
   await f.service.check()
   const state = await f.service.update()
   assert.equal(state.status, 'downloaded')
-  assert.match(state.error!, /작업 중/)
+  assert.match(state.error!, /복제 중/)
   assert.equal(f.openedCount(), 0)
   busy = false
   assert.equal((await f.service.update()).status, 'installing')

@@ -1,9 +1,14 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import {
+  execFile, spawn, type ChildProcessWithoutNullStreams,
+} from 'node:child_process'
+import { promisify } from 'node:util'
 import { access, readdir } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { delimiter, join } from 'node:path'
 import { homedir } from 'node:os'
 import { createInterface } from 'node:readline'
+import { Duplex } from 'node:stream'
+import WebSocket from 'ws'
 
 export type RpcMessage = {
   id?: string | number
@@ -81,6 +86,7 @@ export async function findCodex(): Promise<string> {
 
 export class CodexClient {
   private process?: ChildProcessWithoutNullStreams
+  private socket?: WebSocket
   private startup?: Promise<void>
   private sequence = 0
   private pending = new Map<
@@ -107,9 +113,15 @@ export class CodexClient {
     const binary = await findCodex()
     const fixture =
       process.env.LITE_IDE_HEADLESS === '1' && binary.endsWith('.mjs')
+    // 앱은 연결만 소유합니다. 백그라운드 서버의 작업은 앱 업데이트 중에도 유지합니다.
+    if (!fixture)
+      await promisify(execFile)(binary, ['app-server', 'daemon', 'start'], {
+        windowsHide: true,
+        timeout: 20000,
+      })
     const child = spawn(
       fixture ? process.execPath : binary,
-      fixture ? [binary] : ['app-server', '--stdio'],
+      fixture ? [binary] : ['app-server', 'proxy'],
       {
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -125,8 +137,7 @@ export class CodexClient {
       stderr = (stderr + data).slice(-3000)
     })
     child.stdin.on('error', () => {})
-    const lines = createInterface({ input: child.stdout })
-    lines.on('line', (line) => {
+    const receive = (line: string) => {
       let message: RpcMessage
       try {
         message = JSON.parse(line)
@@ -141,11 +152,16 @@ export class CodexClient {
         if (message.error) pending.reject(new Error(message.error.message))
         else pending.resolve(message.result)
       } else this.onMessage(message)
-    })
+    }
     const disconnected = (reason: string) => {
       if (this.process !== child) return
+      const socket = this.socket
       this.process = undefined
+      this.socket = undefined
       this.startup = undefined
+      socket?.terminate()
+      child.stdin.end()
+      child.kill()
       for (const pending of this.pending.values()) {
         clearTimeout(pending.timer)
         pending.reject(new Error(reason))
@@ -159,6 +175,27 @@ export class CodexClient {
         stderr.trim() || 'Codex 연결이 종료되었습니다. 다시 연결해 주세요.',
       ),
     )
+    if (fixture) {
+      createInterface({ input: child.stdout }).on('line', receive)
+    } else {
+      // proxy는 바이트 중계만 하므로 제어 소켓의 WebSocket 핸드셰이크가 필요합니다.
+      const socket = new WebSocket('ws://localhost/', {
+        createConnection: () =>
+          Duplex.from({ readable: child.stdout, writable: child.stdin }),
+        handshakeTimeout: 10000,
+        perMessageDeflate: false,
+      })
+      this.socket = socket
+      socket.on('message', (data) => receive(data.toString()))
+      socket.on('error', (error) => disconnected(error.message))
+      socket.on('close', () =>
+        disconnected('Codex 연결이 종료되었습니다. 다시 연결해 주세요.'),
+      )
+      await new Promise<void>((resolve, reject) => {
+        socket.once('open', resolve)
+        socket.once('error', reject)
+      })
+    }
     await this.request('initialize', {
       clientInfo: { name: 'lite_ide', title: 'Lite IDE', version: '0.1.0' },
       capabilities: { experimentalApi: true },
@@ -195,6 +232,10 @@ export class CodexClient {
   }
 
   write(message: object) {
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify(message))
+      return
+    }
     if (!this.process?.stdin.writable)
       throw new Error('Codex에 연결되어 있지 않습니다.')
     this.process.stdin.write(`${JSON.stringify(message)}\n`)
@@ -202,6 +243,8 @@ export class CodexClient {
 
   stop() {
     const child = this.process
+    const socket = this.socket
+    this.socket = undefined
     this.process = undefined
     this.startup = undefined
     for (const pending of this.pending.values()) {
@@ -209,6 +252,7 @@ export class CodexClient {
       pending.reject(new Error('Codex 연결이 종료되었습니다.'))
     }
     this.pending.clear()
+    socket?.terminate()
     child?.stdin.end()
     child?.kill()
   }

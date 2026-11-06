@@ -476,6 +476,20 @@ export class AgentService {
       throw new Error('서브에이전트를 찾을 수 없습니다.')
     if (this.deletionBlocked(session.workspace, id))
       throw new Error('삭제 중인 Worktree의 작업은 제어할 수 없습니다.')
+    return this.inspectSession(session)
+  }
+
+  async reconnectSessions() {
+    await this.loaded
+    await Promise.allSettled(
+      [...this.sessions.values()]
+        .filter((session) => session.threadId && session.status === 'interrupted')
+        .map((session) => this.inspectSession(session)),
+    )
+  }
+
+  private inspectSession(session: AgentSession): Promise<void> {
+    const id = session.id
     const pending = this.inspections.get(id)
     if (pending) return pending
     const inspection = (async () => {

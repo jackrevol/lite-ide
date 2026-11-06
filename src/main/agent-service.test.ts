@@ -6,6 +6,38 @@ import { tmpdir } from 'node:os'
 import { AgentService } from './agent-service.ts'
 import type { AgentSession } from '../shared/types.ts'
 
+test('재시작 후 실행 중인 세션을 다시 구독하고 요청을 재전송하지 않는다', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'lite-ide-reconnect-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const file = join(directory, 'sessions.json')
+  await writeFile(file, JSON.stringify([{
+    id: 'running', workspace: directory, title: '진행 중인 작업',
+    threadId: 'same-thread', status: 'running', messages: [], requests: [], updatedAt: Date.now(),
+  }]), 'utf8')
+  const service = new AgentService(file, () => {})
+  const methods: string[] = []
+  service.client.start = async () => {}
+  service.client.request = async (method, params) => {
+    methods.push(method)
+    assert.equal(params.threadId, 'same-thread')
+    return { thread: {
+      id: 'same-thread', status: { type: 'active', activeFlags: [] },
+      turns: [{ id: 'same-turn', status: 'inProgress', items: [] }],
+    } } as never
+  }
+  try {
+    await service.reconnectSessions()
+    const [session] = await service.all()
+    assert.equal(session.status, 'running')
+    assert.equal(session.turnId, 'same-turn')
+    assert.deepEqual(methods, ['thread/resume'])
+    service.client.onMessage({ method: 'turn/completed', params: {
+      threadId: 'same-thread', turn: { id: 'same-turn', status: 'completed' },
+    } })
+    assert.equal((await service.all())[0].status, 'completed')
+  } finally { await service.close() }
+})
+
 test('동일 Worktree에는 새로운 독립 작업을 중복 연결할 수 없다', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'lite-ide-single-task-'))
   const file = join(directory, 'sessions.json')
