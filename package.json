@@ -1,0 +1,44 @@
+{
+  "name": "lite-ide",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A minimal desktop workspace for Codex",
+  "author": "jackrevol",
+  "license": "MIT",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && electron-vite build",
+    "start": "electron-vite preview",
+    "test": "node --experimental-strip-types --test src/main/git.test.ts",
+    "test:ui": "node scripts/check-ui.mjs",
+    "package:win": "npm run build && electron-builder --win",
+    "package:mac": "npm run build && electron-builder --mac"
+  },
+  "dependencies": {
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "lucide-react": "0.577.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.7",
+    "@vitejs/plugin-react": "6.1.2",
+    "electron": "43.8.6",
+    "electron-builder": "26.15.3",
+    "electron-vite": "6.0.0",
+    "playwright": "1.64.1",
+    "typescript": "7.0.2",
+    "vite": "8.3.5"
+  },
+  "build": {
+    "appId": "dev.jackrevol.liteide",
+    "productName": "Lite IDE",
+    "directories": { "output": "release" },
+    "files": ["out/**/*", "package.json"],
+    "mac": { "target": ["dmg"], "category": "public.app-category.developer-tools" },
+    "win": { "target": ["nsis"] }
+  }
+}

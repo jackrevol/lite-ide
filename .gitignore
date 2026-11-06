@@ -1,0 +1,6 @@
+node_modules/
+out/
+release/
+artifacts/
+*.log
+.DS_Store
