@@ -21,6 +21,9 @@ let window: BrowserWindow | null = null
 let agents: AgentService | undefined
 let windowTheme: 'light' | 'dark' = 'dark'
 const titleBarHeight = 43
+const iconDirectory = app.isPackaged
+  ? join(app.getAppPath(), 'resources')
+  : join(__dirname, '../../resources')
 
 function titleBarColors(theme: 'light' | 'dark') {
   return theme === 'dark'
@@ -42,7 +45,7 @@ if (process.env.LITE_IDE_HEADLESS === '1' && process.env.LITE_IDE_TEST_DATA)
 
 app.whenReady().then(() => {
   if (process.platform === 'darwin')
-    app.dock?.setIcon(join(app.getAppPath(), 'resources', 'icon.png'))
+    app.dock?.setIcon(join(iconDirectory, 'icon.png'))
   nativeTheme.themeSource = windowTheme
   ipcMain.handle('window:theme', (event, theme: unknown) => {
     if (
@@ -120,8 +123,9 @@ app.whenReady().then(() => {
     async (_event, path: string, branch: string) => {
       const directory = requireWorkspace(path)
       const tree = await createWorktree(directory, branch)
-      workspaces.add(resolve(tree.path))
-      return tree
+      const path = resolve(tree.path)
+      workspaces.add(path)
+      return { ...tree, path }
     },
   )
   const projectFile = join(app.getPath('userData'), 'projects.json')
@@ -256,8 +260,7 @@ function createWindow(): void {
     minHeight: 600,
     title: 'Lite IDE',
     icon: join(
-      app.getAppPath(),
-      'resources',
+      iconDirectory,
       process.platform === 'win32' ? 'icon.ico' : 'icon.png',
     ),
     titleBarStyle: 'hidden',

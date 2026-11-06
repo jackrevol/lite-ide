@@ -158,5 +158,9 @@ export async function createWorktree(
     `${name}-${crypto.randomUUID().slice(0, 8)}`,
   )
   await git(directory, ['worktree', 'add', '-b', branch, path])
-  return { path, branch }
+  // Git이 정규화한 경로를 사용해 Windows의 짧은 경로·드라이브 표기 차이를 없앱니다.
+  const snapshot = await inspectRepository(directory)
+  const created = snapshot.worktrees.find((tree) => tree.branch === branch)
+  if (!created) throw new Error('생성한 Worktree 경로를 확인하지 못했습니다.')
+  return created
 }
