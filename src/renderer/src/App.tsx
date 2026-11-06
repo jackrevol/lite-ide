@@ -72,6 +72,15 @@ const samePath = (a: string, b: string) =>
     '\\',
     '/',
   )
+const workspaceContains = (root: string, path: string) => {
+  const normalize = (value: string) =>
+    (window.desktop.platform === 'win32' ? value.toLowerCase() : value)
+      .replaceAll('\\', '/')
+      .replace(/\/+$/, '')
+  const parent = normalize(root),
+    target = normalize(path)
+  return target === parent || target.startsWith(parent + '/')
+}
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error)
 
@@ -400,6 +409,10 @@ export function App() {
       try {
         const settings = await window.desktop.getSettings()
         const defaults = settings.projects[projectSettingsKey(target.path)]
+        const nextModel = defaults
+          ? defaults.model || (connection.models.find((item) => item.isDefault) ?? connection.models[0])?.id || ''
+          : model
+        const catalogModel = connection.models.find((item) => item.id === nextModel)
         const branch = `task/${new Date().toISOString().slice(0, 10)}-${crypto.randomUUID().slice(0, 8)}`
         const created = await window.desktop.createWorktree(target.path, branch, defaults?.baseRef ?? 'HEAD')
         const workspace = created.path
@@ -408,8 +421,8 @@ export function App() {
           title: '새 작업',
           project: target.path,
           branch: created.branch,
-          model: defaults?.model || model,
-          effort: defaults?.model ? defaults.effort : effort,
+          model: nextModel,
+          effort: defaults ? defaults.effort || catalogModel?.defaultEffort || '' : effort,
         }
         setState((previous) => ({
           ...previous,
@@ -428,7 +441,15 @@ export function App() {
         openingTask.current = false
       }
     },
-    [projects, state.project, state.workspace, state.sessions, model, effort],
+    [
+      projects,
+      state.project,
+      state.workspace,
+      state.sessions,
+      model,
+      effort,
+      connection.models,
+    ],
   )
 
   useEffect(() => {
@@ -671,13 +692,20 @@ export function App() {
               : {}),
           }
         })
-        setAgents((previous) =>
-          Object.fromEntries(
-            Object.entries(previous).filter(
-              ([, item]) => !samePath(item.workspace, target.path),
-            ),
-          ),
-        )
+        setAgents((previous) => {
+          const roots = Object.values(previous).filter((item) =>
+            workspaceContains(target.path, item.workspace),
+          )
+          const ids = new Set(
+            roots.flatMap((item) => [
+              item.id,
+              ...getSubagents(item.id, previous).map((child) => child.id),
+            ]),
+          )
+          return Object.fromEntries(
+            Object.entries(previous).filter(([id]) => !ids.has(id)),
+          )
+        })
         setRepositories((previous) =>
           Object.fromEntries(
             Object.entries(previous).map(([path, snapshot]) => [
@@ -864,6 +892,7 @@ export function App() {
                   {!folded &&
                     workspaces.map((entry) => (
                       <div className="workspace-group" key={entry.path}>
+
                         {(state.sessions[entry.path] ?? []).map((session) => {
                           const live = agents[session.id]
                           const children = getSubagents(session.id, agents)
@@ -947,7 +976,8 @@ export function App() {
                                 className="row-action"
                                 aria-label={`${entry.branch} Worktree 삭제`}
                                 disabled={projects.some((opened) => samePath(opened.path, entry.path)) ||
-                                  Object.values(agents).some((live) => samePath(live.workspace, entry.path) && isAgentActive(live))}
+                                  Object.values(agents).some((live) => workspaceContains(entry.path, live.workspace) &&
+                                    (isAgentActive(live) || getSubagents(live.id, agents).some(isAgentActive)))}
                                 onClick={() => manageTree(item, entry, 'delete')}
                               ><Trash2 size={12} /></button>
                             </div>
@@ -1519,9 +1549,13 @@ export function App() {
             <p>
               이 Worktree 폴더와 연결된 작업{' '}
               {(state.sessions[treeTarget?.tree.path ?? ''] ?? []).length}개의
-              로컬 대화 기록·초안을 삭제합니다. Git 브랜치와 Codex 원본 세션은
-              유지됩니다. node_modules·out·.env 등 Git에서 무시한 파일도 폴더와
-              함께 삭제합니다. 변경 파일·추적하지 않는 파일이 있거나 작업 중이면
+              로컬 대화 기록·초안을 삭제합니다. Codex 원본 세션과 원격 브랜치는
+              유지됩니다.
+              {treeTarget?.tree.branch === 'Detached HEAD'
+                ? ' Detached HEAD이므로 삭제할 연결 로컬 브랜치는 없습니다.'
+                : ` 연결된 로컬 브랜치 ${treeTarget?.tree.branch}도 미병합 커밋을 포함해 삭제합니다.`}
+              node_modules·out·.env 등 Git에서 무시한 파일도 폴더와 함께
+              삭제합니다. 변경 파일·추적하지 않는 파일이 있거나 작업 중이면
               삭제할 수 없습니다.
             </p>
           )}

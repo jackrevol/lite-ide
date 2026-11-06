@@ -872,6 +872,12 @@ try {
   await treeDelete
     .getByText('node_modules·out·.env', { exact: false })
     .waitFor()
+  await treeDelete
+    .getByText(
+      '연결된 로컬 브랜치 feature/retry-test도 미병합 커밋을 포함해 삭제합니다.',
+      { exact: false },
+    )
+    .waitFor()
   await writeFile(
     join(retrySession.workspace, '.env'),
     '폴더와 함께 삭제할 무시 파일',
@@ -904,9 +910,9 @@ try {
     ),
     false,
   )
-  assert.match(
-    git('branch', '--list', 'feature/retry-test').toString(),
-    /feature\/retry-test/,
+  assert.equal(
+    git('branch', '--list', 'feature/retry-test').toString().trim(),
+    '',
   )
   await page.locator('.task-row').filter({ hasText: '제품 검증 작업' }).click()
   await page
@@ -1174,12 +1180,16 @@ try {
     .getByRole('textbox', { name: '새 브랜치 이름' })
     .fill('feature/project-target')
   await targetDialog
-    .getByRole('button', { name: '만들기', exact: true })
+    .getByRole('textbox', { name: '첫 요청' })
+    .fill('브랜치 부분 삭제 실패 검증')
+  await targetDialog
+    .getByRole('button', { name: '만들고 시작', exact: true })
     .click()
   await targetDialog.waitFor({ state: 'detached' })
   await page
     .getByRole('heading', { name: '프로젝트 대상 검증', exact: true })
     .waitFor()
+  await page.locator('.status-label.completed').waitFor()
   const targetTree = await page.evaluate(
     async (directory) =>
       (await window.desktop.inspectRepository(directory)).worktrees.find(
@@ -1188,6 +1198,23 @@ try {
     project,
   )
   assert.ok(targetTree)
+  const partialSession = await page.evaluate(
+    async (workspace) =>
+      (await window.desktop.listSessions()).find(
+        (session) => session.workspace === workspace,
+      ),
+    targetTree.path,
+  )
+  assert.ok(partialSession)
+  const branchLock = join(
+    project,
+    '.git',
+    'refs',
+    'heads',
+    'feature',
+    'project-target.lock',
+  )
+  await writeFile(branchLock, '', 'utf8')
   assert.equal(
     await page.evaluate(
       () => JSON.parse(localStorage.getItem('lite-ide.workspace.v2')).project,
@@ -1208,6 +1235,41 @@ try {
     .locator('.task-row')
     .filter({ hasText: 'feature/project-target' })
     .waitFor({ state: 'detached' })
+  await page
+    .getByRole('alert')
+    .filter({
+      hasText: '폴더는 삭제되었지만 로컬 브랜치 feature/project-target',
+    })
+    .waitFor()
+  assert.equal(await stat(targetTree.path).catch(() => null), null)
+  assert.match(
+    git('branch', '--list', 'feature/project-target').toString(),
+    /feature\/project-target/,
+  )
+  assert.equal(
+    await page.evaluate(
+      async (id) =>
+        (await window.desktop.listSessions()).some(
+          (session) => session.id === id,
+        ),
+      partialSession.id,
+    ),
+    false,
+  )
+  assert.equal(
+    await page.evaluate(async (workspace) => {
+      try {
+        await window.desktop.inspectRepository(workspace)
+        return false
+      } catch {
+        return true
+      }
+    }, targetTree.path),
+    true,
+  )
+  await rm(branchLock)
+  git('branch', '-D', '--', 'feature/project-target')
+  await page.getByRole('button', { name: '오류 닫기', exact: true }).click()
   const existingSessions = await page.evaluate(
     (directory) =>
       JSON.parse(localStorage.getItem('lite-ide.workspace.v2')).sessions[
@@ -1418,6 +1480,76 @@ try {
   const persistedSettings = await page.evaluate(() =>
     window.desktop.getSettings(),
   )
+  const settingsComposer = page.getByRole('textbox', {
+    name: 'Codex에게 메시지',
+    exact: true,
+  })
+  await page
+    .getByRole('combobox', { name: '모델', exact: true })
+    .selectOption('fixture-model-alt')
+  await page
+    .getByRole('combobox', { name: '추론 수준', exact: true })
+    .selectOption('low')
+  await page.evaluate(
+    (directory) =>
+      window.desktop.updateProjectSettings(directory, {
+        baseRef: 'HEAD',
+        model: '',
+        effort: 'high',
+      }),
+    project,
+  )
+  await page
+    .getByRole('button', { name: '한글 project 새 작업', exact: true })
+    .click()
+  await page.waitForFunction(
+    () =>
+      document.querySelector('select[aria-label="모델"]').value ===
+        'fixture-model' &&
+      document.querySelector('select[aria-label="추론 수준"]').value === 'high',
+  )
+  await settingsComposer.fill('모델 전달 확인')
+  await settingsComposer.press('Enter')
+  await page.locator('.agent-heading .status-label.completed').waitFor()
+  assert.match(
+    await page.locator('.markdown').innerText(),
+    /model=fixture-model; effort=high/,
+  )
+  await page.evaluate(
+    (directory) =>
+      window.desktop.updateProjectSettings(directory, {
+        baseRef: 'HEAD',
+        model: 'fixture-model',
+        effort: '',
+      }),
+    project,
+  )
+  await page
+    .getByRole('button', { name: '한글 project 새 작업', exact: true })
+    .click()
+  await page.waitForFunction(
+    () =>
+      document.querySelector('select[aria-label="추론 수준"]').value ===
+      'medium',
+  )
+  await settingsComposer.fill('모델 전달 확인')
+  await settingsComposer.press('Enter')
+  await page.locator('.agent-heading .status-label.completed').waitFor()
+  assert.match(
+    await page.locator('.markdown').innerText(),
+    /model=fixture-model; effort=medium/,
+  )
+  await page.evaluate(
+    ({ directory, defaults }) =>
+      window.desktop.updateProjectSettings(directory, defaults),
+    {
+      directory: project,
+      defaults:
+        persistedSettings.projects[
+          process.platform === 'win32' ? project.toLowerCase() : project
+        ],
+    },
+  )
   const keyFor = (path) =>
     process.platform === 'win32' ? path.toLowerCase() : path
   assert.equal(
@@ -1462,7 +1594,7 @@ try {
     )
   }
   console.log(
-    'UI 검증 통과: 서브에이전트 관찰·추가 지시·중단·재개·복원, 프로젝트별 +·단축키 채팅 시작·초안 보존·설정 생성·모델/추론 전달·생성 후 재시도, 작업/Worktree 이름 변경·삭제·재시작 영속, 실행 중/dirty 삭제 보호·브랜치 보존, 사용량, Git 복제, 통합 타이틀바, Codex 전송/재개/승인/질문/중단, diff, 검색, 960px 3열 및 960x600 생성 창. 모든 창을 숨김 상태로 유지했습니다.',
+    'UI 검증 통과: 서브에이전트 관찰·추가 지시·중단·재개·복원, 프로젝트별 +·단축키 채팅 시작·초안 보존·설정 생성·모델/추론 전달·생성 후 재시도, 작업/Worktree 이름 변경·삭제·재시작 영속, 실행 중/dirty 삭제 보호·연결 브랜치 삭제, 사용량, Git 복제, 통합 타이틀바, Codex 전송/재개/승인/질문/중단, diff, 검색, 960px 3열 및 960x600 생성 창. 모든 창을 숨김 상태로 유지했습니다.',
   )
 } catch (error) {
   if (page && !page.isClosed()) {

@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { pathKey } from './git.ts'
+import { pathKey, workspaceContains } from './git.ts'
 import { CodexClient, type RpcMessage } from './codex-client.ts'
 import type {
   AgentMessage,
@@ -26,6 +26,7 @@ export class AgentService {
   private loadedThreads = new Set<string>()
   private busy = new Set<string>()
   private deletingWorkspaces = new Set<string>()
+  private deletingSessions = new Set<string>()
   private removalIntents = new Set<string>()
   private nextRequest = 0
   private inspections = new Map<string, Promise<void>>()
@@ -78,19 +79,26 @@ export class AgentService {
           !Array.isArray(session.messages)
         )
           continue
-        if (
-          this.removalIntents.has(pathKey(session.workspace)) &&
-          (await stat(session.workspace).then(
-            () => false,
-            (error: NodeJS.ErrnoException) =>
-              ['ENOENT', 'ENOTDIR'].includes(error.code ?? ''),
-          ))
-        )
-          continue
         if (session.status === 'running' || session.status === 'waiting')
           session.status = 'interrupted'
         session.requests = []
         this.sessions.set(session.id, session)
+      }
+      for (const workspace of this.removalIntents) {
+        const removed = await stat(workspace).then(
+          () => false,
+          (error: NodeJS.ErrnoException) =>
+            ['ENOENT', 'ENOTDIR'].includes(error.code ?? ''),
+        )
+        if (!removed) continue
+        const roots = [...this.sessions.values()].filter((item) =>
+          workspaceContains(workspace, item.workspace),
+        )
+        for (const parent of roots) {
+          for (const child of this.descendants(parent.id))
+            this.sessions.delete(child.id)
+          this.sessions.delete(parent.id)
+        }
       }
     } catch {
       /* 첫 실행 또는 손상된 기록은 빈 세션 목록으로 복구합니다. */
@@ -187,7 +195,7 @@ export class AgentService {
 
   async send(input: SendMessage) {
     await this.loaded
-    if (this.deletingWorkspaces.has(pathKey(input.workspace)))
+    if (this.deletionBlocked(input.workspace, input.sessionId))
       throw new Error('삭제 중인 Worktree에서는 작업을 시작할 수 없습니다.')
     if (
       typeof input.sessionId !== 'string' ||
@@ -324,29 +332,44 @@ export class AgentService {
     await this.persist()
   }
 
-  async removeWorkspace(workspace: string, remove: () => Promise<void>) {
+  async removeWorkspace(
+    workspace: string,
+    remove: () => Promise<void | { warning?: string }>,
+  ) {
     await this.loaded
     const key = pathKey(workspace)
     if (this.deletingWorkspaces.has(key))
       throw new Error('이미 Worktree를 삭제하고 있습니다.')
-    const sessions = [...this.sessions.values()].filter(
-      (item) => pathKey(item.workspace) === key,
+    const roots = [...this.sessions.values()].filter((item) =>
+      workspaceContains(key, item.workspace),
     )
+    const sessions = [
+      ...new Map(
+        roots
+          .flatMap((item) => [item, ...this.descendants(item.id)])
+          .map((item) => [item.id, item]),
+      ).values(),
+    ]
     if (
       sessions.some(
         (item) =>
           this.busy.has(item.id) ||
+          this.inspections.has(item.id) ||
+          this.deletingSessions.has(item.id) ||
           ['running', 'waiting'].includes(item.status),
       )
     )
       throw new Error('진행 중이거나 시작 중인 작업을 먼저 중단해 주세요.')
     this.deletingWorkspaces.add(key)
+    for (const session of sessions) this.deletingSessions.add(session.id)
+    let warning: string | undefined
     try {
       // 삭제 의도를 먼저 저장하여 폴더 삭제 후 저장 실패 시에도 관련 대화만 정리합니다.
       this.removalIntents.add(key)
       try {
         await this.persist()
-        await remove()
+        const result = await remove()
+        warning = result?.warning
       } catch (error) {
         this.removalIntents.delete(key)
         await this.persist().catch(() => {})
@@ -359,16 +382,30 @@ export class AgentService {
       this.removalIntents.delete(key)
       try {
         await this.persist()
-        return {}
+        return warning ? { warning } : {}
       } catch {
         return {
-          warning:
+          warning: [
+            warning,
             'Worktree 삭제는 완료되었지만 대화 기록 파일을 저장하지 못했습니다. 앱을 종료하기 전에 저장 공간과 권한을 확인해 주세요.',
+          ]
+            .filter(Boolean)
+            .join('\n'),
         }
       }
     } finally {
       this.deletingWorkspaces.delete(key)
+      for (const session of sessions) this.deletingSessions.delete(session.id)
     }
+  }
+
+  private deletionBlocked(workspace: string, sessionId: string) {
+    return (
+      this.deletingSessions.has(sessionId) ||
+      [...this.deletingWorkspaces].some((root) =>
+        workspaceContains(root, workspace),
+      )
+    )
   }
 
   private descendants(id: string): AgentSession[] {
@@ -386,6 +423,7 @@ export class AgentService {
   }
 
   private discoverSubagent(parent: AgentSession, threadId: string) {
+    if (this.deletionBlocked(parent.workspace, parent.id)) return undefined
     if (!threadId || threadId === parent.threadId) return undefined
     let child = [...this.sessions.values()].find(
       (item) => item.threadId === threadId,
@@ -427,6 +465,8 @@ export class AgentService {
     const session = this.sessions.get(id)
     if (!session?.parentSessionId || !session.threadId)
       throw new Error('서브에이전트를 찾을 수 없습니다.')
+    if (this.deletionBlocked(session.workspace, id))
+      throw new Error('삭제 중인 Worktree의 작업은 제어할 수 없습니다.')
     const pending = this.inspections.get(id)
     if (pending) return pending
     const inspection = (async () => {
@@ -496,6 +536,8 @@ export class AgentService {
       throw new Error('올바른 작업 내용을 입력해 주세요.')
     await this.inspectSubagent(id)
     const session = this.sessions.get(id)!
+    if (this.deletionBlocked(session.workspace, id))
+      throw new Error('삭제 중인 Worktree의 작업은 제어할 수 없습니다.')
     if (session.closed || session.canAcceptDirectInput === false)
       throw new Error(
         '이 서브에이전트는 직접 지시를 받을 수 없습니다. 부모 작업에서 지시해 주세요.',

@@ -167,7 +167,7 @@ test('구버전 Git의 줄바꿈 형식에서도 한글 경로를 읽는다', ()
   )
 })
 
-test('Worktree 삭제는 소속·기본 폴더·별도 프로젝트·변경 파일·잠금·무시 파일을 보호하고 브랜치를 보존한다', async () => {
+test('Worktree 삭제는 경로·변경 파일·잠금을 보호하고 무시 파일과 연결 브랜치를 삭제한다', async () => {
   const directory = await realpath(
     await mkdtemp(join(tmpdir(), 'lite-ide-git-delete-')),
   )
@@ -224,13 +224,101 @@ test('Worktree 삭제는 소속·기본 폴더·별도 프로젝트·변경 파�
     )
     await removeWorktree(directory, tree.path)
     assert.equal(await stat(tree.path).catch(() => null), null)
-    assert.match(
-      git(directory, 'branch', '--list', 'feature/delete-test'),
-      /feature\/delete-test/,
+    assert.equal(
+      git(directory, 'branch', '--list', 'feature/delete-test').trim(),
+      '',
     )
   } finally {
     // mkdtemp로 생성한 테스트 전용 폴더만 정리합니다.
     await rm(directory, { recursive: true, force: true })
     await rm(other, { recursive: true, force: true })
+  }
+})
+
+test('연결된 미병합 로컬 브랜치를 삭제하고 detached·공유 브랜치·삭제 부분 실패를 처리한다', async () => {
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), 'lite-ide-delete-branch-')),
+  )
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync('git', ['-C', cwd, ...args], {
+      windowsHide: true,
+      encoding: 'utf8',
+    })
+  try {
+    git(root, 'init', '--initial-branch=main')
+    await writeFile(join(root, 'file.txt'), 'base', 'utf8')
+    git(root, 'add', '.')
+    git(
+      root,
+      '-c',
+      'user.name=Test',
+      '-c',
+      'user.email=test@example.invalid',
+      'commit',
+      '-m',
+      'base',
+    )
+    git(root, 'branch', 'keep')
+    const unmerged = join(root, 'unmerged')
+    git(root, 'worktree', 'add', '-b', 'feature/unmerged', unmerged)
+    await writeFile(join(unmerged, 'file.txt'), 'unmerged commit', 'utf8')
+    git(
+      unmerged,
+      '-c',
+      'user.name=Test',
+      '-c',
+      'user.email=test@example.invalid',
+      'commit',
+      '-am',
+      'unmerged',
+    )
+    const commit = git(unmerged, 'rev-parse', 'HEAD').trim()
+    git(root, 'update-ref', 'refs/remotes/origin/feature/unmerged', commit)
+    assert.deepEqual(await removeWorktree(root, unmerged), {})
+    assert.equal(await stat(unmerged).catch(() => null), null)
+    assert.equal(git(root, 'branch', '--list', 'feature/unmerged').trim(), '')
+    assert.equal(
+      git(root, 'rev-parse', 'refs/remotes/origin/feature/unmerged').trim(),
+      commit,
+    )
+    assert.match(git(root, 'branch', '--list', 'main', 'keep'), /main/)
+
+    const detached = join(root, 'detached')
+    git(root, 'worktree', 'add', '--detach', detached, 'HEAD')
+    assert.deepEqual(await removeWorktree(root, detached), {})
+    assert.equal(await stat(detached).catch(() => null), null)
+    assert.match(git(root, 'branch', '--list', 'keep'), /keep/)
+
+    const shared = join(root, 'shared'),
+      other = join(root, 'shared-other')
+    git(root, 'worktree', 'add', '-b', 'feature/shared', shared)
+    git(root, 'worktree', 'add', '--force', other, 'feature/shared')
+    await assert.rejects(removeWorktree(root, shared), /다른 Worktree/)
+    assert.ok(await stat(shared))
+    assert.ok(await stat(other))
+    assert.match(
+      git(root, 'branch', '--list', 'feature/shared'),
+      /feature\/shared/,
+    )
+    git(root, 'worktree', 'remove', '--', other)
+    await removeWorktree(root, shared)
+
+    const partial = join(root, 'partial')
+    git(root, 'worktree', 'add', '-b', 'feature/partial', partial)
+    const lock = join(root, '.git', 'refs', 'heads', 'feature', 'partial.lock')
+    await writeFile(lock, '', 'utf8')
+    const result = await removeWorktree(root, partial)
+    assert.match(
+      result.warning ?? '',
+      /폴더는 삭제되었지만 로컬 브랜치 feature\/partial/,
+    )
+    assert.equal(await stat(partial).catch(() => null), null)
+    assert.match(
+      git(root, 'branch', '--list', 'feature/partial'),
+      /feature\/partial/,
+    )
+    await rm(lock)
+  } finally {
+    await rm(root, { recursive: true, force: true })
   }
 })

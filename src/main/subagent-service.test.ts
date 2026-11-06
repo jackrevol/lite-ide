@@ -237,6 +237,126 @@ test('개별 중단은 자식 턴에만 전달하고 실행 중인 자식이 있
   assert.equal((await service.all()).length, 0)
 })
 
+test('Worktree 하위 cwd와 다른 cwd의 활성 자식을 보호하고 완료한 계층은 함께 정리한다', async (t) => {
+  const { service, child, notify } = await setup(t)
+  const parent = (await service.all()).find((item) => item.id === 'parent')!
+  const nested = await child('nested-cwd', {
+    cwd: join(parent.workspace, 'subdir'),
+  })
+  let removed = false
+  await assert.rejects(
+    service.removeWorkspace(parent.workspace, async () => {
+      removed = true
+    }),
+    /진행 중이거나 시작 중/,
+  )
+  notify('turn/completed', {
+    threadId: nested.threadId,
+    turn: { id: nested.turnId, status: 'completed' },
+  })
+  const external = await child('external-cwd', {
+    cwd: join(parent.workspace, '..', 'other-workspace'),
+  })
+  await assert.rejects(
+    service.removeWorkspace(parent.workspace, async () => {
+      removed = true
+    }),
+    /진행 중이거나 시작 중/,
+  )
+  assert.equal(removed, false)
+  notify('turn/completed', {
+    threadId: external.threadId,
+    turn: { id: external.turnId, status: 'completed' },
+  })
+  const result = await service.removeWorkspace(parent.workspace, async () => ({
+    warning: '연결 브랜치 삭제 실패',
+  }))
+  assert.match(result.warning ?? '', /브랜치 삭제 실패/)
+  assert.deepEqual(await service.all(), [])
+})
+
+test('Worktree 삭제 잠금은 하위 cwd 시작과 다른 cwd 자식의 개별 제어를 차단한다', async (t) => {
+  const { service, child, notify } = await setup(t)
+  const parent = (await service.all()).find((item) => item.id === 'parent')!
+  const external = await child('external-cwd', {
+    cwd: join(parent.workspace, '..', 'other-workspace'),
+  })
+  notify('turn/completed', {
+    threadId: external.threadId,
+    turn: { id: external.turnId, status: 'completed' },
+  })
+  let release!: () => void, entered!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const started = new Promise<void>((resolve) => {
+    entered = resolve
+  })
+  const removal = service.removeWorkspace(parent.workspace, async () => {
+    entered()
+    await gate
+  })
+  try {
+    await started
+    await assert.rejects(
+      service.send({
+        sessionId: 'new-child',
+        workspace: join(parent.workspace, 'subdir'),
+        text: '새 작업',
+      }),
+      /삭제 중/,
+    )
+    await assert.rejects(
+      service.sendSubagentMessage(external.id, '추가 지시'),
+      /삭제 중/,
+    )
+    await assert.rejects(service.inspectSubagent(external.id), /삭제 중/)
+  } finally {
+    release()
+    await removal
+  }
+})
+
+test('자식 조회가 진행 중이면 Worktree 삭제를 거부하고 갱신된 활성 상태를 보존한다', async (t) => {
+  const { service, child, notify } = await setup(t)
+  const parent = (await service.all()).find((item) => item.id === 'parent')!
+  const session = await child()
+  notify('turn/completed', {
+    threadId: session.threadId,
+    turn: { id: session.turnId, status: 'completed' },
+  })
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  service.client.request = async <T>() => {
+    await gate
+    return {
+      thread: {
+        id: session.threadId,
+        status: { type: 'active', activeFlags: [] },
+      },
+    } as T
+  }
+  const inspection = service.inspectSubagent(session.id)
+  try {
+    await Promise.resolve()
+    await Promise.resolve()
+    await assert.rejects(
+      service.removeWorkspace(parent.workspace, async () => {}),
+      /진행 중이거나 시작 중/,
+    )
+  } finally {
+    release()
+    await inspection
+  }
+  assert.equal(session.status, 'running')
+  await assert.rejects(
+    service.removeWorkspace(parent.workspace, async () => {}),
+    /진행 중이거나 시작 중/,
+  )
+})
+
 test('조회 실패는 실행 실패로 바꾸지 않고, 조회 중 수신한 완료 상태와 응답을 보존한다', async (t) => {
   const { service, child, notify } = await setup(t)
   const session = await child()
