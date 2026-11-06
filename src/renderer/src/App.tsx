@@ -18,6 +18,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Settings,
   Square,
   Sun,
   Trash2,
@@ -28,7 +29,10 @@ import { Conversation } from './components/Conversation'
 import { CodexUsagePanel } from './components/CodexUsagePanel'
 import { ProjectDialog } from './components/ProjectDialog'
 import { AppUpdateButton } from './components/AppUpdateButton'
-import { createSession, loadWorkspace, storageKey } from './lib/workspace-state'
+import { SettingsDialog } from './components/SettingsDialog'
+import { WorktreeDialog } from './components/WorktreeDialog'
+import { loadWorkspace, storageKey } from './lib/workspace-state'
+import { defaultBaseBranchKey, loadDefaultBaseBranch } from './lib/preferences'
 import type {
   AgentSession,
   CodexStatus,
@@ -87,18 +91,16 @@ export function App() {
   const [search, setSearch] = useState('')
   const [collapsed, setCollapsed] = useState<string[]>([])
   const [rename, setRename] = useState('')
-  const [branch, setBranch] = useState('')
-  const [creatingTree, setCreatingTree] = useState(false)
+  const [showWorktree, setShowWorktree] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
+  const [defaultBaseBranch, setDefaultBaseBranch] = useState(loadDefaultBaseBranch)
   const [submitting, setSubmitting] = useState(false)
   const searchDialog = useRef<HTMLDialogElement>(null)
   const renameDialog = useRef<HTMLDialogElement>(null)
   const deleteDialog = useRef<HTMLDialogElement>(null)
-  const treeDialog = useRef<HTMLDialogElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
-  const key = state.workspace || 'welcome'
-  const tabs = state.sessions[key] ?? []
-  const current =
-    tabs.find((session) => session.id === state.selected[key]) ?? tabs[0]
+  const key = state.workspace
+  const current = state.tasks[key]
   const agent = current ? agents[current.id] : undefined
   const active = agent?.status === 'running' || agent?.status === 'waiting'
   const project = projects.find((item) => item.path === state.project)
@@ -111,18 +113,11 @@ export function App() {
   function selectWorkspace(
     path: string,
     projectPath = state.project,
-    sessionId?: string,
   ) {
     setState((previous) => ({
       ...previous,
       project: projectPath,
-      workspace: path,
-      sessions: previous.sessions[path]
-        ? previous.sessions
-        : { ...previous.sessions, [path]: [createSession()] },
-      selected: sessionId
-        ? { ...previous.selected, [path]: sessionId }
-        : previous.selected,
+      workspace: previous.tasks[path]?.project === projectPath ? path : '',
     }))
   }
 
@@ -202,42 +197,25 @@ export function App() {
         if (disposed) return
         setProjects(opened)
         setRepositories(Object.fromEntries(snapshots))
-        setAgents((previous) => ({
-          ...Object.fromEntries(saved.map((item) => [item.id, item])),
-          ...previous,
-        }))
         setState((previous) => {
-          const sessions = { ...previous.sessions }
-          for (const item of saved) {
-            if (
-              !(sessions[item.workspace] ?? []).some(
-                (entry) => entry.id === item.id,
-              )
-            )
-              sessions[item.workspace] = [
-                ...(sessions[item.workspace] ?? []),
-                { id: item.id, title: item.title, draft: '' },
-              ]
-          }
+          const tasks = Object.fromEntries(
+            Object.entries(previous.tasks).filter(([path, task]) => {
+              const snapshot = snapshots.find(([projectPath]) => projectPath === task.project)?.[1]
+              return snapshot?.worktrees.some((item, index) => index > 0 && samePath(item.path, path))
+            }),
+          )
           const restored =
             opened.find((item) => item.path === previous.project) ?? opened[0]
-          const snapshot = snapshots.find(
-            ([path]) => path === restored?.path,
-          )?.[1]
-          const workspace = restored
-            ? (snapshot?.worktrees.find((item) =>
-                samePath(item.path, previous.workspace),
-              )?.path ?? restored.path)
-            : ''
-          if (workspace && !sessions[workspace]?.length)
-            sessions[workspace] = [createSession()]
+          const workspace = tasks[previous.workspace]?.project === restored?.path
+            ? previous.workspace : ''
           return {
             ...previous,
-            sessions,
+            tasks,
             project: restored?.path ?? '',
             workspace,
           }
         })
+        setAgents(Object.fromEntries(saved.map((item) => [item.id, item])))
         setReady(true)
       })
       .catch((cause) => {
@@ -255,7 +233,8 @@ export function App() {
   }, [reconnect])
 
   useEffect(() => {
-    if (!ready || !state.workspace) {
+    const directory = state.workspace || state.project
+    if (!ready || !directory) {
       setRepository(emptyRepository)
       return
     }
@@ -264,10 +243,10 @@ export function App() {
     setSelectedFile('')
     setDiff('')
     window.desktop
-      .inspectRepository(state.workspace)
+      .inspectRepository(directory)
       .then((snapshot) => {
         if (disposed) return
-        setRepository(snapshot)
+        setRepository(state.workspace ? snapshot : emptyRepository)
         setRepositories((previous) => ({
           ...previous,
           [state.project]: snapshot,
@@ -308,17 +287,16 @@ export function App() {
   }, [selectedFile, state.workspace, refresh])
 
   const addSession = useCallback(() => {
-    const session = createSession((state.sessions[key]?.length ?? 0) + 1)
-    setState((previous) => ({
-      ...previous,
-      sessions: {
-        ...previous.sessions,
-        [key]: [...(previous.sessions[key] ?? []), session],
-      },
-      selected: { ...previous.selected, [key]: session.id },
-    }))
-    composer.current?.focus()
-  }, [key, state.sessions])
+    if (!state.project) {
+      setOpening(true)
+      return
+    }
+    if (!repositories[state.project]?.isGitRepository) {
+      setError('Git 저장소를 열어 Worktree 작업을 만들어 주세요.')
+      return
+    }
+    setShowWorktree(true)
+  }, [state.project, repositories])
   useEffect(() => {
     function shortcut(event: KeyboardEvent) {
       if (!(event.ctrlKey || event.metaKey) || event.isComposing) return
@@ -355,13 +333,12 @@ export function App() {
     selectWorkspace(opened.path, opened.path)
   }
   function updateDraft(draft: string) {
+    if (!current) return
     setState((previous) => ({
       ...previous,
-      sessions: {
-        ...previous.sessions,
-        [key]: (previous.sessions[key] ?? []).map((session) =>
-          session.id === current?.id ? { ...session, draft } : session,
-        ),
+      tasks: {
+        ...previous.tasks,
+        [key]: { ...previous.tasks[key], draft },
       },
     }))
   }
@@ -385,13 +362,10 @@ export function App() {
       setError(errorText(cause))
       setState((previous) => ({
         ...previous,
-        sessions: {
-          ...previous.sessions,
-          [key]: previous.sessions[key].map((item) =>
-            item.id === sessionId && !item.draft
-              ? { ...item, draft: text }
-              : item,
-          ),
+        tasks: {
+          ...previous.tasks,
+          [key]: previous.tasks[key]?.id === sessionId && !previous.tasks[key].draft
+            ? { ...previous.tasks[key], draft: text } : previous.tasks[key],
         },
       }))
     } finally {
@@ -405,11 +379,9 @@ export function App() {
       if (agent) await window.desktop.renameSession(current.id, rename)
       setState((previous) => ({
         ...previous,
-        sessions: {
-          ...previous.sessions,
-          [key]: previous.sessions[key].map((item) =>
-            item.id === current.id ? { ...item, title: rename.trim() } : item,
-          ),
+        tasks: {
+          ...previous.tasks,
+          [key]: { ...previous.tasks[key], title: rename.trim() },
         },
       }))
       renameDialog.current?.close()
@@ -427,15 +399,12 @@ export function App() {
         return next
       })
       setState((previous) => {
-        const remaining = previous.sessions[key].filter(
-          (item) => item.id !== current.id,
-        )
+        const tasks = { ...previous.tasks }
+        delete tasks[key]
         return {
           ...previous,
-          sessions: {
-            ...previous.sessions,
-            [key]: remaining.length ? remaining : [createSession()],
-          },
+          tasks,
+          workspace: '',
         }
       })
       deleteDialog.current?.close()
@@ -443,41 +412,17 @@ export function App() {
       setError(errorText(cause))
     }
   }
-  async function newWorktree() {
-    if (!project || !branch.trim()) return
-    setCreatingTree(true)
-    try {
-      const created = await window.desktop.createWorktree(
-        project.path,
-        branch.trim(),
-      )
-      selectWorkspace(created.path)
-      setRefresh((value) => value + 1)
-      treeDialog.current?.close()
-      setBranch('')
-    } catch (cause) {
-      setError(errorText(cause))
-    } finally {
-      setCreatingTree(false)
-    }
-  }
-
   const query = search.trim().toLowerCase()
   const searchResults = projects
     .flatMap((item) => {
-      const paths = new Set([
-        item.path,
-        ...(repositories[item.path]?.worktrees.map((entry) => entry.path) ??
-          []),
-      ])
-      return [...paths].flatMap((path) =>
-        (state.sessions[path] ?? []).map((session) => ({
+      return Object.entries(state.tasks)
+        .filter(([, task]) => task.project === item.path)
+        .map(([path, session]) => ({
           project: item,
           path,
           session,
           title: agents[session.id]?.title ?? session.title,
-        })),
-      )
+        }))
     })
     .filter((item) =>
       `${item.title} ${item.project.name} ${item.path}`
@@ -573,10 +518,9 @@ export function App() {
               </div>
             )}
             {projects.map((item) => {
-              const trees = repositories[item.path]?.worktrees ?? []
-              const workspaces = trees.length
-                ? trees
-                : [{ path: item.path, branch: '로컬 작업 공간' }]
+              const tasks = Object.entries(state.tasks).filter(
+                ([, task]) => task.project === item.path,
+              )
               const folded = collapsed.includes(item.path)
               return (
                 <div className="project-group" key={item.path}>
@@ -609,82 +553,32 @@ export function App() {
                       <span>{item.name}</span>
                     </button>
                   </div>
-                  {!folded &&
-                    workspaces.map((entry) => (
-                      <div className="workspace-group" key={entry.path}>
-                        <button
-                          className={`workspace-row ${samePath(state.workspace, entry.path) ? 'selected' : ''}`}
-                          title={entry.path}
-                          onClick={() => selectWorkspace(entry.path, item.path)}
-                        >
-                          <GitBranch size={13} />
-                          <span>{entry.branch}</span>
-                          {samePath(state.workspace, entry.path) && (
-                            <span className="active-dot" />
-                          )}
-                        </button>
-                        {(state.sessions[entry.path] ?? []).map((session) => {
-                          const live = agents[session.id]
-                          return (
-                            <button
-                              key={session.id}
-                              className={`session-row ${current?.id === session.id ? 'selected' : ''}`}
-                              title={live?.title ?? session.title}
-                              aria-current={
-                                current?.id === session.id ? 'page' : undefined
-                              }
-                              onClick={() =>
-                                selectWorkspace(
-                                  entry.path,
-                                  item.path,
-                                  session.id,
-                                )
-                              }
-                            >
-                              <span
-                                className={`session-dot ${live?.status ?? 'idle'}`}
-                              />
-                              <span>{live?.title ?? session.title}</span>
-                              {live?.status === 'waiting' && (
-                                <span className="attention-tag">응답</span>
-                              )}
-                            </button>
-                          )
-                        })}
-                      </div>
-                    ))}
+                  {!folded && tasks.map(([path, task]) => {
+                    const live = agents[task.id]
+                    return (
+                      <button
+                        key={path}
+                        className={`task-row ${state.workspace === path ? 'selected' : ''}`}
+                        title={`${task.branch} · ${path}`}
+                        aria-current={state.workspace === path ? 'page' : undefined}
+                        onClick={() => selectWorkspace(path, item.path)}
+                      >
+                        <span className={`session-dot ${live?.status ?? 'idle'}`} />
+                        <span className="task-label">
+                          <span>{live?.title ?? task.title}</span>
+                          <small>{task.branch}</small>
+                        </span>
+                        {live?.status === 'waiting' && <span className="attention-tag">응답</span>}
+                      </button>
+                    )
+                  })}
+                  {!folded && !tasks.length && (
+                    <p className="project-no-tasks">새 작업을 만들면 전용 Worktree가 생성됩니다.</p>
+                  )}
                 </div>
               )
             })}
-            {!state.workspace &&
-              tabs.map((session) => (
-                <button
-                  className={`session-row ${current?.id === session.id ? 'selected' : ''}`}
-                  key={session.id}
-                  onClick={() =>
-                    setState((previous) => ({
-                      ...previous,
-                      selected: { ...previous.selected, welcome: session.id },
-                    }))
-                  }
-                >
-                  <MessageSquare size={13} />
-                  <span>{session.title}</span>
-                </button>
-              ))}
           </nav>
-          {project && (
-            <button
-              className="add-worktree"
-              disabled={!repository.isGitRepository || loading}
-              onClick={() => {
-                setBranch('')
-                treeDialog.current?.showModal()
-              }}
-            >
-              <Plus size={13} />새 Worktree
-            </button>
-          )}
           <footer className="sidebar-footer">
             <CodexUsagePanel connection={connection} connecting={connecting} />
             <div className="sidebar-bottom">
@@ -696,6 +590,13 @@ export function App() {
                 <FolderOpen size={16} />
               </button>
               <span>Lite IDE</span>
+              <button
+                aria-label="설정"
+                title="설정"
+                onClick={() => setShowSettings(true)}
+              >
+                <Settings size={16} />
+              </button>
               <button
                 aria-label={theme === 'dark' ? '라이트 테마' : '다크 테마'}
                 onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
@@ -719,6 +620,7 @@ export function App() {
                 variant="ghost"
                 size="icon-sm"
                 aria-label="작업 이름 변경"
+                disabled={!current}
                 onClick={() => {
                   setRename(title)
                   renameDialog.current?.showModal()
@@ -730,7 +632,7 @@ export function App() {
                 variant="ghost"
                 size="icon-sm"
                 aria-label="작업 삭제"
-                disabled={active}
+                disabled={!current || active}
                 onClick={() => deleteDialog.current?.showModal()}
               >
                 <Trash2 />
@@ -751,7 +653,9 @@ export function App() {
               <h2>무엇을 만들어 볼까요?</h2>
               <p>
                 {project
-                  ? `${project.name}에서 Codex와 함께 작업하세요.`
+                  ? current
+                    ? `${project.name}에서 Codex와 함께 작업하세요.`
+                    : '새 작업을 만들어 전용 Worktree에서 시작하세요.'
                   : '프로젝트를 열고, 생각을 코드로 옮겨보세요.'}
               </p>
               <div className="starter-actions">
@@ -762,6 +666,7 @@ export function App() {
                 ].map((prompt) => (
                   <button
                     key={prompt}
+                    disabled={!current}
                     onClick={() => {
                       updateDraft(prompt)
                       composer.current?.focus()
@@ -772,6 +677,11 @@ export function App() {
                   </button>
                 ))}
               </div>
+              {project && !current && (
+                <Button variant="outline" onClick={addSession}>
+                  <Plus size={14} />새 작업
+                </Button>
+              )}
               {!project && (
                 <Button
                   variant="outline"
@@ -798,11 +708,12 @@ export function App() {
                 ref={composer}
                 aria-label="Codex에게 메시지"
                 placeholder={
-                  project
+                  current
                     ? 'Codex에게 작업을 요청하세요…'
-                    : '어떤 작업을 하고 싶으신가요?'
+                    : '새 작업을 만들어 주세요'
                 }
                 value={current?.draft ?? ''}
+                disabled={!current}
                 onChange={(event) => updateDraft(event.target.value)}
                 onKeyDown={(event) => {
                   if (
@@ -963,14 +874,14 @@ export function App() {
                   )}
                   <strong>
                     {!state.workspace
-                      ? '아직 열린 프로젝트가 없습니다'
+                      ? '작업을 선택해 주세요'
                       : repository.isGitRepository
                         ? '모든 변경 사항이 반영되었습니다'
                         : 'Git 저장소가 아닙니다'}
                   </strong>
                   <p>
                     {!state.workspace
-                      ? '프로젝트의 변경 사항이 여기에 표시됩니다.'
+                      ? '전용 Worktree의 변경 사항이 여기에 표시됩니다.'
                       : repository.isGitRepository
                         ? '작업 중인 변경 파일이 여기에 표시됩니다.'
                         : 'Codex 작업은 그대로 사용할 수 있습니다.'}
@@ -1108,7 +1019,6 @@ export function App() {
                 selectWorkspace(
                   result.path,
                   result.project.path,
-                  result.session.id,
                 )
                 searchDialog.current?.close()
               }}
@@ -1181,40 +1091,40 @@ export function App() {
           </Button>
         </div>
       </dialog>
-      <dialog
-        ref={treeDialog}
-        className="form-dialog"
-        aria-labelledby="tree-title"
-      >
-        <form
-          onSubmit={(event) => {
-            event.preventDefault()
-            void newWorktree()
+      {showSettings && (
+        <SettingsDialog
+          defaultBaseBranch={defaultBaseBranch}
+          onSave={(value) => {
+            localStorage.setItem(defaultBaseBranchKey, value)
+            setDefaultBaseBranch(value)
           }}
-        >
-          <h2 id="tree-title">새 Worktree</h2>
-          <p>현재 프로젝트에서 독립적인 브랜치와 작업 폴더를 만듭니다.</p>
-          <input
-            autoFocus
-            aria-label="새 브랜치 이름"
-            placeholder="feature/my-task"
-            value={branch}
-            onChange={(event) => setBranch(event.target.value)}
-          />
-          <div className="dialog-actions">
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => treeDialog.current?.close()}
-            >
-              취소
-            </Button>
-            <Button type="submit" disabled={!branch.trim() || creatingTree}>
-              {creatingTree ? '생성 중…' : '만들기'}
-            </Button>
-          </div>
-        </form>
-      </dialog>
+          onClose={() => setShowSettings(false)}
+        />
+      )}
+      {showWorktree && project && (
+        <WorktreeDialog
+          key={project.path}
+          project={project}
+          defaultBaseBranch={defaultBaseBranch}
+          onCreated={(created) => {
+            const task = {
+              id: crypto.randomUUID(),
+              title: '새 작업',
+              draft: '',
+              project: project.path,
+              branch: created.branch,
+            }
+            setState((previous) => ({
+              ...previous,
+              project: project.path,
+              workspace: created.path,
+              tasks: { ...previous.tasks, [created.path]: task },
+            }))
+            setRefresh((value) => value + 1)
+          }}
+          onClose={() => setShowWorktree(false)}
+        />
+      )}
     </div>
   )
 }

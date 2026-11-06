@@ -1,6 +1,7 @@
 import { _electron as electron } from 'playwright'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -55,26 +56,36 @@ try {
     }),
   )
   if (process.argv.includes('--live')) {
+    const sourceProject = join(fixture, 'project')
+    await mkdir(sourceProject)
+    const git = (...args) => execFileSync('git', ['-C', sourceProject, ...args], { windowsHide: true })
+    git('init', '--initial-branch=main')
+    await writeFile(join(sourceProject, 'README.md'), 'Codex smoke fixture\n', 'utf8')
+    git('add', '.')
+    git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'fixture')
     await app.evaluate(({ dialog }, directory) => {
       dialog.showOpenDialog = async () => ({
         canceled: false,
         filePaths: [directory],
       })
-    }, fixture)
+    }, sourceProject)
     const project = await page.evaluate(() => window.desktop.openProject())
+    const worktree = await page.evaluate((project) =>
+      window.desktop.createWorktree(project.path, 'task/live-smoke', 'refs/heads/main'), project,
+    )
     const model =
       status.models.find((entry) => entry.isDefault) ?? status.models[0]
     await page.evaluate(
-      async ({ project, model }) => {
+      async ({ worktree, model }) => {
         await window.desktop.sendMessage({
           sessionId: 'live-smoke',
-          workspace: project.path,
+          workspace: worktree.path,
           text: 'Reply exactly LITE_IDE_OK. Do not use tools or change any files.',
           model: model.id,
           effort: model.efforts.includes('low') ? 'low' : model.defaultEffort,
         })
       },
-      { project, model },
+      { worktree, model },
     )
     const session = await waitForTurn(page)
     assert.equal(session.status, 'completed', session.error)
@@ -91,17 +102,18 @@ try {
       app = await launch()
       page = await app.firstWindow()
       await page.evaluate(() => window.desktop.listProjects())
+      await page.evaluate((project) => window.desktop.inspectRepository(project.path), project)
       await page.evaluate(
-        async ({ project, model }) => {
+        async ({ worktree, model }) => {
           await window.desktop.sendMessage({
             sessionId: 'live-smoke',
-            workspace: project.path,
+            workspace: worktree.path,
             text: 'Create only codex-smoke.txt in the working directory using apply_patch. Its content must be exactly the marker you replied in the previous turn plus a newline. Do not change other files. Reply DONE when finished.',
             model: model.id,
             effort: model.efforts.includes('low') ? 'low' : model.defaultEffort,
           })
         },
-        { project, model },
+        { worktree, model },
       )
       const resumed = await waitForTurn(page)
       assert.equal(
@@ -111,7 +123,7 @@ try {
       )
       assert.equal(resumed.threadId, session.threadId)
       assert.equal(
-        (await readFile(join(fixture, 'codex-smoke.txt'), 'utf8')).trim(),
+        (await readFile(join(worktree.path, 'codex-smoke.txt'), 'utf8')).trim(),
         'LITE_IDE_OK',
       )
       console.log(

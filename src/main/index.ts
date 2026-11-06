@@ -17,7 +17,13 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
-import { createWorktree, inspectRepository, readDiff } from './git'
+import {
+  createWorktree,
+  inspectRepository,
+  listBranches,
+  readDiff,
+  requireLinkedWorktree,
+} from './git'
 import { AgentService } from './agent-service'
 import { cloneRepository, validateCloneInput } from './clone'
 import { UpdateService } from './update-service'
@@ -147,10 +153,11 @@ app.whenReady().then(() => {
   ipcMain.handle('codex:status', () => agents!.status())
   ipcMain.handle('codex:usage', () => agents!.usage())
   ipcMain.handle('codex:sessions', () => agents!.all())
-  ipcMain.handle('codex:send', (_event, input: SendMessage) => {
+  ipcMain.handle('codex:send', async (_event, input: SendMessage) => {
     if (updates?.snapshot().status === 'installing')
       throw new Error('업데이트 설치를 시작하고 있습니다.')
     const workspace = requireWorkspace(input?.workspace)
+    await requireLinkedWorktree(workspace)
     return agents!.send({ ...input, workspace })
   })
   ipcMain.handle('codex:interrupt', (_event, id: string) =>
@@ -186,9 +193,9 @@ app.whenReady().then(() => {
   })
   ipcMain.handle(
     'worktree:create',
-    async (_event, path: string, branch: string) => {
+    async (_event, path: string, branch: string, baseBranch: string) => {
       const directory = requireWorkspace(path)
-      const tree = await createWorktree(directory, branch)
+      const tree = await createWorktree(directory, branch, baseBranch)
       const worktreePath = resolve(tree.path)
       workspaces.add(worktreePath)
       return { ...tree, path: worktreePath }
@@ -279,6 +286,9 @@ app.whenReady().then(() => {
         cloning = false
       }
     },
+  )
+  ipcMain.handle('repository:branches', (_event, projectPath: unknown) =>
+    listBranches(requireWorkspace(projectPath)),
   )
   ipcMain.handle('repository:inspect', async (_event, projectPath: unknown) => {
     const directory = requireWorkspace(projectPath)

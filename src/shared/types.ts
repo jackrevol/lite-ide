@@ -8,6 +8,11 @@ export interface Worktree {
   branch: string
 }
 
+export interface RepositoryBranch {
+  name: string
+  ref: string
+}
+
 export interface ChangedFile {
   path: string
   status: string
@@ -35,6 +40,7 @@ export interface DesktopApi {
   defaultCloneDirectory(): Promise<string>
   cloneProject(url: string, parent: string, name: string): Promise<Project>
   inspectRepository(projectPath: string): Promise<RepositorySnapshot>
+  listBranches(projectPath: string): Promise<RepositoryBranch[]>
   readDiff(projectPath: string, filePath: string): Promise<string>
   codexStatus(): Promise<CodexStatus>
   codexUsage(): Promise<CodexUsage>
@@ -53,7 +59,11 @@ export interface DesktopApi {
   deleteSession(sessionId: string): Promise<void>
   loginCodex(): Promise<void>
   openLink(url: string): Promise<void>
-  createWorktree(projectPath: string, branch: string): Promise<Worktree>
+  createWorktree(
+    projectPath: string,
+    branch: string,
+    baseBranch: string,
+  ): Promise<Worktree>
 }
 
 export interface AppUpdateState {

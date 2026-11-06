@@ -166,6 +166,10 @@ export class AgentService {
     if (this.busy.has(input.sessionId))
       throw new Error('이미 작업을 시작하고 있습니다.')
     const previous = this.sessions.get(input.sessionId)
+    if ([...this.sessions.values()].some((session) =>
+      session.workspace === input.workspace && session.id !== input.sessionId,
+    ))
+      throw new Error('이 Worktree에 연결된 기존 작업을 사용해 주세요.')
     if (previous && previous.workspace !== input.workspace)
       throw new Error('작업의 프로젝트 경로가 일치하지 않습니다.')
     if (previous && ['running', 'waiting'].includes(previous.status))

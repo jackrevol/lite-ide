@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { parseStatus, parseWorktrees } from './git.ts'
+import { execFileSync } from 'node:child_process'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+  createWorktree, listBranches, parseStatus, parseWorktrees, requireLinkedWorktree,
+} from './git.ts'
 import { validateCloneInput } from './clone.ts'
 
 test('Git 복제는 HTTPS와 SSH 주소 및 안전한 폴더 이름을 허용한다', () => {
@@ -74,4 +80,56 @@ test('구버전 Git의 줄바꿈 형식에서도 한글 경로를 읽는다', ()
     ),
     [{ path: 'C:/Projects/한글 project', branch: 'main' }],
   )
+})
+
+test('Worktree는 선택한 로컬·원격 브랜치 또는 HEAD 커밋에서 생성된다', async () => {
+  const fixture = await mkdtemp(join(tmpdir(), 'lite-ide-branches-'))
+  const project = join(fixture, '한글 project')
+  const git = (...args: string[]) => execFileSync('git', [
+    '-C', project, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', ...args,
+  ], { encoding: 'utf8', windowsHide: true }).trim()
+  try {
+    await mkdir(project)
+    git('init', '--initial-branch=main')
+    assert.deepEqual(await listBranches(project), [])
+    await writeFile(join(project, 'file.txt'), 'main\n', 'utf8')
+    git('add', '.')
+    git('commit', '-m', 'main')
+    const mainCommit = git('rev-parse', 'HEAD')
+    await assert.rejects(requireLinkedWorktree(project), /전용 Worktree/)
+    git('checkout', '-b', 'develop')
+    await writeFile(join(project, 'file.txt'), 'develop\n', 'utf8')
+    git('commit', '-am', 'develop')
+    const developCommit = git('rev-parse', 'HEAD')
+    git('update-ref', 'refs/remotes/origin/develop', developCommit)
+    git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/develop')
+    assert.deepEqual(await listBranches(project), [
+      { name: 'develop', ref: 'refs/heads/develop' },
+      { name: 'main', ref: 'refs/heads/main' },
+      { name: 'origin/develop', ref: 'refs/remotes/origin/develop' },
+    ])
+    for (const [branch, base, commit] of [
+      ['feature/from-main', 'refs/heads/main', mainCommit],
+      ['feature/from-remote', 'refs/remotes/origin/develop', developCommit],
+      ['feature/from-head', 'HEAD', developCommit],
+    ]) {
+      const created = await createWorktree(project, branch, base)
+      assert.equal(created.branch, branch)
+      await requireLinkedWorktree(created.path)
+      assert.equal(execFileSync('git', ['-C', created.path, 'rev-parse', 'HEAD'], {
+        encoding: 'utf8', windowsHide: true,
+      }).trim(), commit)
+    }
+    // 존재하지 않거나 브랜치가 아닌 리비전은 새 브랜치를 만들기 전에 거부합니다.
+    for (const base of ['', '--help', 'refs/heads/missing', 'HEAD~1', mainCommit]) {
+      await assert.rejects(createWorktree(project, 'feature/invalid', base), /기준 브랜치/)
+    }
+    assert.equal(git('branch', '--list', 'feature/invalid'), '')
+    git('branch', 'removed')
+    assert.ok((await listBranches(project)).some((item) => item.name === 'removed'))
+    git('branch', '-D', 'removed')
+    await assert.rejects(createWorktree(project, 'feature/removed', 'refs/heads/removed'), /기준 브랜치/)
+  } finally {
+    await rm(fixture, { recursive: true, force: true })
+  }
 })

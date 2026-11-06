@@ -27,6 +27,7 @@ const api: DesktopApi = {
   cloneProject: (url, parent, name) =>
     ipcRenderer.invoke('project:clone', url, parent, name),
   inspectRepository: (path) => ipcRenderer.invoke('repository:inspect', path),
+  listBranches: (path) => ipcRenderer.invoke('repository:branches', path),
   readDiff: (path, file) => ipcRenderer.invoke('repository:diff', path, file),
   codexStatus: () => ipcRenderer.invoke('codex:status'),
   codexUsage: () => ipcRenderer.invoke('codex:usage'),
@@ -46,8 +47,8 @@ const api: DesktopApi = {
   deleteSession: (id) => ipcRenderer.invoke('codex:delete', id),
   loginCodex: () => ipcRenderer.invoke('codex:login'),
   openLink: (url) => ipcRenderer.invoke('link:open', url),
-  createWorktree: (path, branch) =>
-    ipcRenderer.invoke('worktree:create', path, branch),
+  createWorktree: (path, branch, baseBranch) =>
+    ipcRenderer.invoke('worktree:create', path, branch, baseBranch),
   onSession: (listener) => {
     const receive = (
       _event: Electron.IpcRendererEvent,

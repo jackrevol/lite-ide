@@ -334,45 +334,43 @@
 .current-project {
   color: var(--foreground);
 }
-.workspace-group {
-  margin: 1px 0 6px;
-}
-.workspace-row,
-.session-row {
+.task-row {
   width: 100%;
   display: flex;
   align-items: center;
   text-align: left;
   gap: 8px;
-  min-height: 30px;
+  min-height: 46px;
   padding: 6px 9px 6px 26px;
   border-radius: 6px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted-foreground) !important;
 }
-.workspace-row span:not(.active-dot),
-.session-row > span:not(.session-dot):not(.attention-tag) {
+.task-label {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+.task-label > span,
+.task-label > small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.workspace-row {
+.task-label > small {
   font-family: var(--font-mono);
   font-size: 10px;
 }
-.workspace-row.selected {
-  color: var(--foreground) !important;
-}
-.session-row {
-  padding-left: 37px;
-  font-size: 12px;
+.task-row {
   position: relative;
 }
-.session-row.selected {
+.task-row.selected {
   background: var(--selected);
   color: var(--foreground) !important;
 }
-.session-row.selected::before {
+.task-row.selected::before {
   content: '';
   position: absolute;
   left: 0;
@@ -382,8 +380,7 @@
   background: #a4afcb;
   border-radius: 2px;
 }
-.session-row:hover,
-.workspace-row:hover,
+.task-row:hover,
 .project-row:hover,
 .section-label button:hover,
 .sidebar-bottom button:hover {
@@ -434,13 +431,11 @@
   font-size: 12px;
   line-height: 1.8;
 }
-.add-worktree {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin: 4px 16px 16px;
+.project-no-tasks {
+  padding: 6px 12px 6px 26px;
   font-size: 11px;
-  color: var(--muted-foreground) !important;
+  line-height: 1.6;
+  color: var(--muted-foreground);
 }
 .sidebar-footer {
   margin-top: auto;
@@ -1304,6 +1299,37 @@ dialog::backdrop {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 20px;
+}
+.branch-dialog label {
+  display: block;
+  margin-top: 16px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.branch-dialog label input,
+.branch-dialog select {
+  display: block;
+  margin-top: 7px;
+}
+.branch-dialog select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--input);
+  border-radius: 6px;
+  background: var(--background);
+  color: var(--foreground);
+}
+.branch-dialog .branch-help {
+  margin-top: 12px;
+  font-size: 11px;
+}
+.branch-dialog .branch-error {
+  margin-top: 12px;
+  color: #d8847b;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 110px;
+  overflow: auto;
 }
 .spinning {
   animation: spin 1s linear infinite;

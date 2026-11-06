@@ -37,6 +37,14 @@ await writeFile(
   'utf8',
 )
 await writeFile(join(project, '새 파일.txt'), '새 파일 내용\n', 'utf8')
+const mainCommit = git('rev-parse', 'HEAD').toString().trim()
+const developCommit = git(
+  '-c', 'user.name=UI Test', '-c', 'user.email=test@example.invalid',
+  'commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'develop fixture',
+).toString().trim()
+git('update-ref', 'refs/heads/develop', developCommit)
+git('update-ref', 'refs/remotes/origin/develop', developCommit)
+git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/develop')
 await mkdir('artifacts', { recursive: true })
 git('update-server-info')
 const gitRoot = join(project, '.git')
@@ -72,6 +80,12 @@ const launch = (usageScenario = '') =>
       LITE_IDE_FIXTURE_USAGE: usageScenario,
     },
   })
+await mkdir(join(fixture, 'user-data'), { recursive: true })
+await writeFile(join(fixture, 'user-data', 'sessions.json'), JSON.stringify([{
+  id: 'legacy-local', workspace: project, title: '이전 로컬 작업',
+  status: 'completed', messages: [{ id: 'old', kind: 'assistant', text: '이전 로컬 대화' }],
+  requests: [], updatedAt: Date.now(),
+}]), 'utf8')
 let app = await launch()
 let page
 async function checkTitlebar(page, app) {
@@ -246,14 +260,18 @@ try {
   )
   await page.screenshot({ path: 'artifacts/workspace-empty.png' })
   const input = page.getByRole('textbox', { name: 'Codex에게 메시지' })
-  await input.fill('첫 번째 작업 내용')
-  await page
-    .getByRole('button', { name: '새 작업', exact: false })
-    .first()
-    .click()
-  assert.equal(await input.inputValue(), '')
-  await page.locator('.session-row').filter({ hasText: '작업 1' }).click()
-  assert.equal(await input.inputValue(), '첫 번째 작업 내용')
+  assert.equal(await input.isEnabled(), false)
+  await page.evaluate((directory) => {
+    localStorage.setItem('lite-ide.workspace.v1', JSON.stringify({
+      project: directory, workspace: directory,
+      sessions: { [directory]: [{ id: 'legacy-local', title: '이전 로컬 작업', draft: '이전 로컬 입력' }] },
+      selected: { [directory]: 'legacy-local' },
+    }))
+  }, project)
+  await page.reload()
+  await page.getByRole('heading', { name: '무엇을 만들어 볼까요?' }).waitFor()
+  assert.equal(await page.getByText('이전 로컬 작업', { exact: true }).count(), 0)
+  assert.equal(await page.getByText('이전 로컬 대화', { exact: true }).count(), 0)
   await app.evaluate(({ dialog }, directory) => {
     dialog.showOpenDialog = async () => ({
       canceled: false,
@@ -265,6 +283,33 @@ try {
     .first()
     .click()
   await page.getByRole('button', { name: '로컬 폴더 열기' }).click()
+  await page.locator('.project-name').filter({ hasText: '한글 project' }).waitFor()
+  assert.equal(await page.locator('.task-row').count(), 0)
+  assert.equal(await input.isEnabled(), false)
+  assert.equal(await page.getByRole('button', { name: 'hello.txt', exact: true }).count(), 0)
+  assert.equal(await page.evaluate(async (directory) => {
+    try {
+      await window.desktop.sendMessage({ sessionId: 'root-rejected', workspace: directory, text: 'root' })
+      return false
+    } catch (error) { return String(error).includes('전용 Worktree') }
+  }, project), true)
+  await page.getByRole('button', { name: '새 작업', exact: false }).first().click()
+  await page.getByRole('dialog', { name: '새 작업', exact: true }).waitFor()
+  await page.getByRole('textbox', { name: '새 브랜치 이름' }).fill('task/first')
+  await page.waitForFunction(() => document.querySelector('.branch-dialog select')?.value === 'HEAD')
+  await page.screenshot({ path: 'artifacts/workspace-new-task.png' })
+  await page.getByRole('button', { name: '만들기', exact: true }).click()
+  await page.locator('.task-row.selected').filter({ hasText: 'task/first' }).waitFor()
+  const firstWorktree = await page.evaluate(async (directory) =>
+    (await window.desktop.inspectRepository(directory)).worktrees.find((entry) => entry.branch === 'task/first').path,
+    project,
+  )
+  assert.notEqual(firstWorktree, project)
+  assert.equal(await page.locator('.workspace-row, .session-row').count(), 0)
+  assert.equal(await page.locator('.task-row').count(), 1)
+  await writeFile(join(firstWorktree, 'hello.txt'), 'Hello from Lite IDE\nChanged line\n', 'utf8')
+  await writeFile(join(firstWorktree, '새 파일.txt'), '새 파일 내용\n', 'utf8')
+  await page.getByRole('button', { name: '변경 사항 새로고침' }).click()
   await page.getByRole('button', { name: 'hello.txt', exact: true }).waitFor()
   await page.getByRole('button', { name: 'hello.txt', exact: true }).click()
   await page.getByText('+Changed line', { exact: false }).waitFor()
@@ -292,8 +337,14 @@ try {
   )
   assert.equal(await page.locator('.markdown pre').count(), 1)
   const firstThread = await page.evaluate(
-    async () => (await window.desktop.listSessions())[0].threadId,
+    async () => (await window.desktop.listSessions()).find((session) => session.id !== 'legacy-local').threadId,
   )
+  assert.equal(await page.evaluate(async (directory) => {
+    try {
+      await window.desktop.sendMessage({ sessionId: 'duplicate-task', workspace: directory, text: 'duplicate' })
+      return false
+    } catch (error) { return String(error).includes('연결된 기존 작업') }
+  }, firstWorktree), true)
   await input.fill('이어서 확인해 주세요')
   await input.press('Enter')
   await page.waitForFunction(
@@ -303,7 +354,7 @@ try {
   assert.equal(await page.locator('.assistant-message').count(), 2)
   assert.equal(
     await page.evaluate(
-      async () => (await window.desktop.listSessions())[0].threadId,
+      async () => (await window.desktop.listSessions()).find((session) => session.id !== 'legacy-local').threadId,
     ),
     firstThread,
   )
@@ -349,19 +400,30 @@ try {
     .fill('제품 검증')
   assert.equal(await page.locator('.command-results > button').count(), 1)
   await page.keyboard.press('Escape')
-  await page.getByRole('button', { name: '새 Worktree', exact: true }).click()
+  await page.getByRole('button', { name: '설정', exact: true }).click()
+  await page.getByRole('textbox', { name: 'Worktree 기본 기준 브랜치' }).fill('develop')
+  await page.getByRole('button', { name: '저장', exact: true }).click()
+  await page.keyboard.press('Control+n')
+  const baseBranch = page.getByRole('combobox', { name: '기준 브랜치', exact: true })
+  await page.waitForFunction(() => document.querySelector('.branch-dialog select')?.value === 'refs/heads/develop')
+  assert.equal(await baseBranch.locator('option[value="refs/remotes/origin/develop"]').count(), 1)
+  assert.equal(await baseBranch.locator('option[value="refs/remotes/origin/HEAD"]').count(), 0)
+  await baseBranch.selectOption('refs/heads/main')
   await page
     .getByRole('textbox', { name: '새 브랜치 이름' })
     .fill('feature/ui-test')
   await page.getByRole('button', { name: '만들기', exact: true }).click()
   await page
-    .locator('.workspace-row.selected')
+    .locator('.task-row.selected')
     .filter({ hasText: 'feature/ui-test' })
     .waitFor()
+  assert.equal(git('rev-parse', 'feature/ui-test').toString().trim(), mainCommit)
+  assert.equal(await page.locator('.task-row').count(), 2)
+  assert.equal(await input.inputValue(), '')
   await input.fill('Worktree별 입력 보존')
   await page
-    .locator('.workspace-row')
-    .filter({ hasText: /^main$/ })
+    .locator('.task-row')
+    .filter({ hasText: 'task/first' })
     .click()
   await page
     .getByRole('heading', { name: '제품 검증 작업', exact: true })
@@ -422,14 +484,37 @@ try {
     'light',
   )
   await checkTitlebar(page, app)
+  assert.equal(await page.locator('.task-row').count(), 2)
+  assert.equal(await page.getByText('이전 로컬 작업', { exact: true }).count(), 0)
+  assert.equal(await page.getByText('이전 로컬 대화', { exact: true }).count(), 0)
+  await page.getByRole('button', { name: '설정', exact: true }).click()
+  assert.equal(await page.getByRole('textbox', { name: 'Worktree 기본 기준 브랜치' }).inputValue(), 'develop')
+  await page.getByRole('textbox', { name: 'Worktree 기본 기준 브랜치' }).fill('missing-branch')
+  await page.getByRole('button', { name: '저장', exact: true }).click()
+  await page.getByRole('button', { name: '새 작업', exact: false }).first().click()
+  await page.getByRole('status').filter({ hasText: 'missing-branch' }).waitFor()
+  await page.getByRole('textbox', { name: '새 브랜치 이름' }).fill('feature/missing-default')
+  assert.equal(await page.getByRole('button', { name: '만들기', exact: true }).isEnabled(), false)
+  await page.getByRole('button', { name: '취소', exact: true }).click()
+  await page.getByRole('button', { name: '설정', exact: true }).click()
+  await page.getByRole('textbox', { name: 'Worktree 기본 기준 브랜치' }).fill('')
+  await page.getByRole('button', { name: '저장', exact: true }).click()
+  await page.getByRole('button', { name: '새 작업', exact: false }).first().click()
+  await page.waitForFunction(() => document.querySelector('.branch-dialog select')?.value === 'HEAD')
+  await page.getByRole('button', { name: '취소', exact: true }).click()
   await page
-    .locator('.workspace-row')
+    .locator('.task-row')
     .filter({ hasText: 'feature/ui-test' })
     .click()
   assert.equal(
     await page.getByRole('textbox', { name: 'Codex에게 메시지' }).inputValue(),
     'Worktree별 입력 보존',
   )
+  await page.getByRole('button', { name: '작업 삭제', exact: true }).click()
+  await page.getByRole('button', { name: '삭제', exact: true }).click()
+  await page.waitForFunction(() => document.querySelectorAll('.task-row').length === 1)
+  assert.equal(await page.getByRole('textbox', { name: 'Codex에게 메시지' }).isEnabled(), false)
+  assert.equal((await readFile(join(project, 'hello.txt'), 'utf8')).replaceAll('\r\n', '\n'), 'Hello from Lite IDE\nChanged line\n')
   assert.equal(
     await app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].isVisible(),
@@ -557,7 +642,7 @@ try {
     )
   }
   console.log(
-    'UI 검증 통과: 사용량 조회·알림 갱신·초기화 시각·초기화권·미제공/실패 상태, Git 복제·기존 폴더 보호·실패 정리·재시작 복원, 통합 타이틀바, Codex 전송/스트리밍/재개/승인/질문/중단, Worktree, diff, 검색, 960px 3열. 모든 창을 숨김 상태로 유지했습니다.',
+    'UI 검증 통과: 사용량 조회·알림 갱신·초기화 시각·초기화권·미제공/실패 상태, Git 복제·기존 폴더 보호·실패 정리·재시작 복원, 통합 타이틀바, Codex 전송/스트리밍/재개/승인/질문/중단, 작업별 Worktree 생성·기준 브랜치 설정·단축키·통합 목록·기존 로컬 작업 숨김·원본 폴더 실행 차단·1:1 연결·삭제, diff, 검색, 960px 3열. 모든 창을 숨김 상태로 유지했습니다.',
   )
 } catch (error) {
   if (page && !page.isClosed()) {
