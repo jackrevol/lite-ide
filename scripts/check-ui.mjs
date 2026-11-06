@@ -364,9 +364,51 @@ try {
     }, project),
     true,
   )
-  await input.fill('프로젝트를 확인해 주세요')
-  await page.getByRole('button', { name: '메시지 보내기', exact: true }).click()
+  assert.equal(await page.locator('.welcome').count(), 0)
+  await page.locator('.conversation').waitFor()
+  await input.fill('첫 번째 작업 내용')
+  await page.keyboard.press('Control+n')
+  await page.getByRole('heading', { name: '작업 2', exact: true }).waitFor()
+  assert.equal(await input.inputValue(), '')
+  assert.equal(
+    await page.getByRole('dialog', { name: '새 작업', exact: true }).count(),
+    0,
+  )
+  await page.locator('.session-row').filter({ hasText: '작업 1' }).click()
+  assert.equal(await input.inputValue(), '첫 번째 작업 내용')
+  await page
+    .getByRole('button', { name: '새 작업', exact: false })
+    .first()
+    .click()
+  await page.getByRole('heading', { name: '작업 3', exact: true }).waitFor()
+  assert.equal(
+    await input.evaluate((node) => node === document.activeElement),
+    true,
+  )
+  await page.keyboard.type('프로젝트를 확인해 주세요')
+  await input.press('Shift+Enter')
+  await page.keyboard.type('구조도 알려 주세요')
+  assert.equal(
+    await input.inputValue(),
+    '프로젝트를 확인해 주세요\n구조도 알려 주세요',
+  )
+  assert.equal(await page.locator('.user-message').count(), 0)
+  const composerBefore = await input.boundingBox()
+  await page.screenshot({ path: 'artifacts/workspace-new-chat.png' })
+  await input.press('Enter')
   await page.locator('.status-label.completed').waitFor()
+  assert.equal(
+    await page.locator('.user-message').innerText(),
+    '프로젝트를 확인해 주세요\n구조도 알려 주세요',
+  )
+  assert.equal(await input.inputValue(), '')
+  const composerAfter = await input.boundingBox()
+  assert.ok(
+    Math.abs(
+      composerBefore.y + composerBefore.height -
+        composerAfter.y - composerAfter.height,
+    ) <= 1,
+  )
   await usage.getByText('70% 남음', { exact: true }).waitFor()
   assert.match(
     await page.locator('.markdown').innerText(),
@@ -435,7 +477,7 @@ try {
   await page.keyboard.press('Escape')
   assert.equal(await page.locator('.sidebar-top .new-task').count(), 0)
   await page
-    .getByRole('button', { name: '한글 project 새 작업', exact: true })
+    .getByRole('button', { name: '한글 project 작업 설정하여 만들기', exact: true })
     .click()
   const newTask = page.getByRole('dialog', { name: '새 작업', exact: true })
   assert.equal(
@@ -525,7 +567,10 @@ try {
   )
   assert.equal(treeState.newTaskMode, 'worktree')
   assert.equal(treeState.sessions[treeState.workspace].length, 1)
-  await page.keyboard.press('Control+n')
+  await page
+    .getByRole('button', { name: /작업 설정하여 만들기$/ })
+    .first()
+    .click()
   assert.equal(
     await newTask
       .getByRole('combobox', { name: '작업 공간 방식' })
@@ -556,7 +601,10 @@ try {
   await page
     .getByRole('heading', { name: '제품 검증 작업', exact: true })
     .waitFor()
-  await page.keyboard.press('Control+n')
+  await page
+    .getByRole('button', { name: /작업 설정하여 만들기$/ })
+    .first()
+    .click()
   await newTask
     .getByRole('combobox', { name: '작업 공간 방식' })
     .selectOption('existing')
@@ -626,7 +674,7 @@ try {
     project,
   )
   await page
-    .getByRole('button', { name: '한글 project 새 작업', exact: true })
+    .getByRole('button', { name: '한글 project 작업 설정하여 만들기', exact: true })
     .click()
   assert.equal(
     await newTask
@@ -860,7 +908,10 @@ try {
     await page.getByRole('textbox', { name: 'Codex에게 메시지' }).inputValue(),
     'Worktree별 입력 보존',
   )
-  await page.keyboard.press('Control+n')
+  await page
+    .getByRole('button', { name: /작업 설정하여 만들기$/ })
+    .first()
+    .click()
   const restoredTaskDialog = page.getByRole('dialog', {
     name: '새 작업',
     exact: true,
@@ -891,7 +942,10 @@ try {
   )
   assert.equal(localState.newTaskMode, 'local')
   assert.equal(localState.workspace, localState.project)
-  await page.keyboard.press('Control+n')
+  await page
+    .getByRole('button', { name: /작업 설정하여 만들기$/ })
+    .first()
+    .click()
   assert.equal(
     await restoredTaskDialog
       .getByRole('combobox', { name: '작업 공간 방식' })
@@ -998,9 +1052,9 @@ try {
       (item) => item.name === '복제한 project',
     ),
   )
-  // 현재 선택과 다른 프로젝트의 +가 해당 프로젝트에 작업을 만듭니다.
+  // 현재 선택과 다른 프로젝트의 설정 버튼이 해당 프로젝트에 작업을 만듭니다.
   await page
-    .getByRole('button', { name: '한글 project 새 작업', exact: true })
+    .getByRole('button', { name: '한글 project 작업 설정하여 만들기', exact: true })
     .click()
   const targetDialog = page.getByRole('dialog', {
     name: '새 작업',
@@ -1206,7 +1260,7 @@ try {
     existingSessions,
   )
   await page
-    .getByRole('button', { name: '한글 project 새 작업', exact: true })
+    .getByRole('button', { name: '한글 project 작업 설정하여 만들기', exact: true })
     .click()
   const configuredTask = page.getByRole('dialog', {
     name: '새 작업',
@@ -1356,7 +1410,7 @@ try {
     )
   }
   console.log(
-    'UI 검증 통과: 프로젝트별 +·통합 생성·모델/추론 전달·생성 후 재시도, 작업/Worktree 이름 변경·삭제·재시작 영속, 실행 중/dirty 삭제 보호·연결 브랜치 삭제, 사용량, Git 복제, 통합 타이틀바, Codex 전송/재개/승인/질문/중단, diff, 검색, 960px 3열 및 960x600 생성 창. 모든 창을 숨김 상태로 유지했습니다.',
+    'UI 검증 통과: 프로젝트별 +·단축키 채팅 시작·초안 보존·설정 생성·모델/추론 전달·생성 후 재시도, 작업/Worktree 이름 변경·삭제·재시작 영속, 실행 중/dirty 삭제 보호·연결 브랜치 삭제, 사용량, Git 복제, 통합 타이틀바, Codex 전송/재개/승인/질문/중단, diff, 검색, 960px 3열 및 960x600 생성 창. 모든 창을 숨김 상태로 유지했습니다.',
   )
 } catch (error) {
   if (page && !page.isClosed()) {

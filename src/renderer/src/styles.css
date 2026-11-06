@@ -631,32 +631,8 @@
   text-align: center;
   line-height: 1.8;
 }
-.starter-actions {
-  display: flex;
-  flex-direction: column;
-  width: min(300px, 100%);
-  gap: 5px;
-  margin: 25px 0 18px;
-}
-.starter-actions button {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  padding: 9px 12px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  color: var(--muted-foreground);
-  font-size: 11px;
-  text-align: left;
-}
-.starter-actions button:hover {
-  background: var(--surface);
-  color: var(--foreground);
-}
-.starter-actions svg {
-  transform: rotate(45deg);
-  opacity: 0.5;
+.welcome > [data-slot='button'] {
+  margin-top: 24px;
 }
 .composer-area {
   padding: 12px 24px 16px;
@@ -666,26 +642,22 @@
   margin: 0 auto;
 }
 .composer {
-  border: 1px solid var(--input);
-  border-radius: 13px;
-  background: var(--surface);
-  box-shadow: 0 4px 20px #00000008;
+  border-top: 1px solid var(--border);
 }
 .composer:focus-within {
   border-color: #7d84966b;
-  box-shadow: 0 0 0 2px #828eaa08;
 }
 .composer textarea {
   display: block;
   width: 100%;
-  min-height: 93px;
+  min-height: 48px;
   max-height: 220px;
   field-sizing: content;
   resize: none;
   border: 0;
   background: none;
   color: var(--foreground);
-  padding: 15px 16px 8px;
+  padding: 14px 3px 8px;
   font-size: 13px;
   line-height: 1.7;
 }
@@ -696,7 +668,7 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 7px 10px 10px 14px;
+  padding: 7px 0;
   color: var(--muted-foreground);
 }
 .composer-toolbar select {
@@ -1532,12 +1504,6 @@ dialog::backdrop {
   }
   .welcome {
     padding: 20px;
-  }
-  .starter-actions {
-    margin: 16px 0 10px;
-  }
-  .composer textarea {
-    min-height: 76px;
   }
   .sidebar-top {
     padding-top: 12px;
