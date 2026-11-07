@@ -204,7 +204,13 @@ try {
   page = await app.firstWindow()
   observeErrors(page)
   page.setDefaultTimeout(15000)
-  if (process.argv.includes('--cursor-only') || process.argv.includes('--compact-only')) {
+  if (process.argv.includes('--settings-only')) {
+    await setupFocusedTerminal()
+    await checkSettingsLayout()
+    assert.deepEqual(errors, [])
+    assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible()), false)
+    console.log('설정 화면 숨김 UI 검증 통과')
+  } else if (process.argv.includes('--cursor-only') || process.argv.includes('--compact-only')) {
     const task = await setupFocusedTerminal()
     if (process.argv.includes('--compact-only')) {
       await command('/child')
@@ -783,6 +789,7 @@ try {
     JSON.parse(await readFile('package.json', 'utf8')).version,
   )
   await settings.getByRole('button', { name: '닫기', exact: true }).click()
+  await checkSettingsLayout()
   await taskAction(first, 'Codex 터미널')
   await waitOutput(first.id, 'fixture · resume')
   assert.deepEqual((await page.evaluate(() => window.desktop.getSettings())).notifications,
@@ -876,6 +883,9 @@ async function checkResetAnnouncements() {
   })
   try {
     await publish(state)
+    assert.equal(await news.getAttribute('open'), null)
+    await news.locator('summary').filter({ hasText: '예고 1건' }).waitFor()
+    await news.locator('summary').click()
     await news.getByRole('button', { name: '리셋 예고 원문 보기', exact: true }).waitFor()
     await news.getByRole('button', { name: '초기화권 지급 공지 원문 보기', exact: true }).click()
     assert.equal(await app.evaluate(() => globalThis.resetOpenedUrl), url)
@@ -894,6 +904,7 @@ async function checkResetAnnouncements() {
     await news.getByText('수집된 리셋 예고 없음', { exact: true }).waitFor()
     assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible()), false)
   } finally {
+    if (await news.getAttribute('open') !== null) await news.locator('summary').click()
     await app.evaluate(({ shell }) => {
       shell.openExternal = globalThis.originalResetOpen
       delete globalThis.originalResetOpen
@@ -1081,6 +1092,32 @@ async function checkCompactProcessLayout(task) {
   assert.equal(await page.locator('.process-panel').count(), 1)
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(960, 600))
   try {
+    const usage = page.getByRole('region', { name: 'Codex 사용량 한도', exact: true })
+    const details = usage.getByRole('button', { name: '사용량 상세 정보', exact: true })
+    await usage.getByRole('progressbar', { name: '5시간 남은 사용량', exact: true }).waitFor()
+    assert.equal(await details.getAttribute('aria-expanded'), 'false')
+    assert.equal(await usage.locator('.usage-reset').count(), 0)
+    await usage.getByText('남은 초기화권', { exact: true }).waitFor()
+    const compactHeight = (await usage.boundingBox()).height
+    assert.ok(compactHeight <= 190, `접힌 사용량 영역이 너무 큽니다: ${compactHeight}px`)
+    await details.click()
+    assert.equal(await details.getAttribute('aria-expanded'), 'true')
+    await usage.getByText('가장 가까운 사용 기간', { exact: true }).scrollIntoViewIfNeeded()
+    assert.equal(await usage.locator('.usage-reset').count(), 3)
+    assert.ok((await usage.boundingBox()).height > compactHeight + 50)
+    assert.equal(await page.getByRole('button', { name: '설정', exact: true }).isVisible(), true)
+    await details.click()
+    assert.equal(await usage.locator('.usage-reset').count(), 0)
+    const density = await page.evaluate(() => {
+      const list = document.querySelector('.project-list').getBoundingClientRect()
+      const heading = document.querySelector('.changes-heading').getBoundingClientRect()
+      const tabs = document.querySelector('.agent-tabs-bar').getBoundingClientRect()
+      return { listHeight: list.height, headingHeight: heading.height, tabsHeight: tabs.height,
+        overflow: document.documentElement.scrollWidth > innerWidth }
+    })
+    assert.ok(density.listHeight >= 275, JSON.stringify(density))
+    assert.equal(density.headingHeight, density.tabsHeight)
+    assert.equal(density.overflow, false)
     await until(async () => page.evaluate(() => {
       const host = document.querySelector('.task-terminal-slot:not([hidden]) .terminal-host')
       const screen = host?.querySelector('.xterm-screen')
@@ -1339,6 +1376,57 @@ async function checkMiddleInsertion(task) {
     console.log('중간 입력 회귀 통과: Left/Home/Right는 PTY로 유지, ASCII·한글 삽입 후 Enter/Shift+Enter/Ctrl+Enter 손실·중복 없음.')
   } finally {
     await app.evaluate(({ ipcMain }) => { ipcMain.removeHandler('terminal:write'); ipcMain.handle('terminal:write', globalThis.middleInputHandler); delete globalThis.middleInputHandler })
+  }
+}
+
+async function checkSettingsLayout() {
+  const previousTheme = await page.evaluate(() => document.documentElement.classList.contains('dark') ? 'dark' : 'light')
+  await page.getByRole('button', { name: '설정', exact: true }).click()
+  const settings = page.getByRole('dialog', { name: '설정', exact: true })
+  try {
+    await settings.getByRole('combobox', { name: '알림음', exact: true }).waitFor()
+    for (const [width, height] of [[960, 600], [1320, 850]]) {
+      await app.evaluate(({ BrowserWindow }, [width, height]) => BrowserWindow.getAllWindows()[0].setSize(width, height), [width, height])
+      for (const theme of ['light', 'dark']) {
+        await settings.getByRole('tab', { name: '일반', exact: true }).click()
+        await settings.getByRole('combobox', { name: '설정 테마', exact: true }).selectOption(theme)
+        for (const [tab, name] of [['general', '일반'], ['project', '프로젝트'], ['about', '프로그램 정보']]) {
+          await settings.getByRole('tab', { name, exact: true }).click()
+          const layout = await settings.evaluate((dialog) => {
+            const content = dialog.querySelector('.settings-content')
+            const rect = dialog.getBoundingClientRect()
+            return { top: rect.top, bottom: rect.bottom, viewport: innerHeight,
+              overflowX: content.scrollWidth > content.clientWidth + 1,
+              overflowY: content.scrollHeight > content.clientHeight + 1 }
+          })
+          assert.ok(layout.top >= 0 && layout.bottom <= layout.viewport, JSON.stringify(layout))
+          assert.equal(layout.overflowX, false, `${tab} ${width}px 가로 넘침`)
+          if (tab !== 'project') assert.equal(layout.overflowY, false, `${tab} ${width}px 불필요한 세로 스크롤`)
+          if (tab === 'project') {
+            const help = settings.locator('.settings-help')
+            await help.locator('summary').click()
+            await settings.locator('.settings-content').evaluate((content) => { content.scrollTop = content.scrollHeight })
+            const footer = await settings.locator('.settings-footer').boundingBox()
+            const save = await settings.getByRole('button', { name: '저장', exact: true }).boundingBox()
+            assert.ok(save.y >= footer.y && save.y + save.height <= footer.y + footer.height)
+            await help.locator('summary').click()
+            await settings.locator('.settings-content').evaluate((content) => { content.scrollTop = 0 })
+          }
+          await page.screenshot({ path: `artifacts/settings-${tab}-${theme}-${width}.png` })
+        }
+      }
+    }
+    await settings.getByRole('tab', { name: '프로젝트', exact: true }).click()
+    const save = settings.getByRole('button', { name: '저장', exact: true })
+    await until(() => save.isEnabled(), '설정 저장 준비')
+    await save.click()
+    await settings.getByRole('status').filter({ hasText: '프로젝트 기본값을 저장했습니다.' }).waitFor()
+    await settings.getByRole('tab', { name: '일반', exact: true }).click()
+    await settings.getByRole('combobox', { name: '설정 테마', exact: true }).selectOption(previousTheme)
+    console.log('설정 레이아웃 검증 통과: 960×600·1320×850, 라이트·다크, 일반·프로젝트·프로그램 정보, 고정 저장 버튼과 실제 저장.')
+  } finally {
+    await settings.getByRole('button', { name: '닫기', exact: true }).click()
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1320, 850))
   }
 }
 

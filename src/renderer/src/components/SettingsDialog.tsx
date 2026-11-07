@@ -167,47 +167,52 @@ export function SettingsDialog({
         role="tabpanel"
         id={`settings-${tab}`}
         aria-labelledby={`settings-tab-${tab}`}
-        className="settings-content"
+        className={`settings-content settings-${tab}`}
       >
         {tab === 'general' && (
           <>
-            <h3>화면</h3>
-            <label>
-              테마
-              <select
-                aria-label="설정 테마"
-                value={theme}
-                onChange={(event) => onTheme(event.target.value)}
-              >
-                <option value="dark">다크</option>
-                <option value="light">라이트</option>
-              </select>
-            </label>
+            <section className="settings-section">
+              <h3>화면</h3>
+              <label className="settings-inline-field">
+                테마
+                <select
+                  aria-label="설정 테마"
+                  value={theme}
+                  onChange={(event) => onTheme(event.target.value)}
+                >
+                  <option value="dark">다크</option>
+                  <option value="light">라이트</option>
+                </select>
+              </label>
+            </section>
             {settings && <NotificationSettingsPanel initial={settings.notifications}
               onSaved={(notifications) => setSettings({ ...settings, notifications })} />}
-            <h3>앱 업데이트</h3>
-            <UpdatePanel />
+            <section className="settings-section">
+              <h3>앱 업데이트</h3>
+              <div className="settings-update">
+                <UpdatePanel />
+              </div>
+            </section>
           </>
         )}
         {tab === 'project' && (
           <>
             <h3>새 작업 기본값</h3>
             <p>
-              새 Worktree를 만들 때 사용할 기준 브랜치와 Codex 설정입니다. 기존
-              작업에는 적용하지 않습니다. 원격 브랜치는 마지막으로 가져온 상태를
-              사용합니다.
+              새 Worktree에 적용할 기준 브랜치와 Codex 설정입니다. 기존 작업은 유지됩니다.
             </p>
             {!projects.length ? (
               <p>프로젝트를 먼저 열어 주세요.</p>
             ) : (
               <form
+                id="project-settings-form"
                 onSubmit={(event) => {
                   event.preventDefault()
                   void save()
                 }}
               >
                 <fieldset disabled={pending || !settings}>
-                  <label>
+                  <label className="settings-inline-field">
                     프로젝트
                     <select
                       aria-label="설정 프로젝트"
@@ -232,65 +237,68 @@ export function SettingsDialog({
                     onChange={(baseRef) => setDefaults({ ...defaults, baseRef })}
                     {...branchList}
                   />
-                  <label>
-                    기본 모델
-                    <select
-                      aria-label="기본 모델"
-                      value={defaults.model}
-                      onChange={(event) =>
-                        setDefaults({
-                          ...defaults,
-                          model: event.target.value,
-                          effort: '',
-                        })
-                      }
-                    >
-                      <option value="">Codex 기본 모델</option>
-                      {missingModel && (
-                        <option value={defaults.model}>
-                          {defaults.model} (현재 사용 불가)
-                        </option>
-                      )}
-                      {connection.models.map((item) => (
-                        <option value={item.id} key={item.id}>
-                          {item.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  {missingModel && (
-                    <p>
-                      저장된 모델을 현재 연결에서 확인할 수 없습니다. 설정은
-                      보존되며 새 작업에서 사용 가능한 모델을 선택해야 합니다.
-                    </p>
-                  )}
-                  <label>
-                    기본 추론 수준
-                    <select
-                      aria-label="기본 추론 수준"
-                      value={defaults.effort}
-                      onChange={(event) =>
-                        setDefaults({ ...defaults, effort: event.target.value })
-                      }
-                    >
-                      <option value="">모델 기본값</option>
-                      {defaults.effort &&
-                        !selectedModel?.efforts.includes(defaults.effort) && (
-                          <option value={defaults.effort}>
-                            {defaults.effort} (현재 확인 불가)
+                  <div className="settings-field-pair">
+                    <label>
+                      기본 모델
+                      <select
+                        aria-label="기본 모델"
+                        value={defaults.model}
+                        onChange={(event) =>
+                          setDefaults({
+                            ...defaults,
+                            model: event.target.value,
+                            effort: '',
+                          })
+                        }
+                      >
+                        <option value="">Codex 기본 모델</option>
+                        {missingModel && (
+                          <option value={defaults.model}>
+                            {defaults.model} (현재 사용 불가)
                           </option>
                         )}
-                      {selectedModel?.efforts.map((effort) => (
-                        <option value={effort} key={effort}>
-                          {effort}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <h3>Startup 스크립트</h3>
-                  <p>스크립트 파일을 레포에 추가하고 커밋해 주세요. 새 Worktree 안의 파일을 작업 폴더에서 실행하며, 성공하면 Codex를 시작합니다. Windows는 .ps1 또는 .sh(Git Bash 필요), macOS는 .sh 파일을 사용합니다.</p>
-                  <label>
-                    레포 기준 스크립트 파일 경로
+                        {connection.models.map((item) => (
+                          <option value={item.id} key={item.id}>
+                            {item.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      기본 추론 수준
+                      <select
+                        aria-label="기본 추론 수준"
+                        value={defaults.effort}
+                        onChange={(event) =>
+                          setDefaults({ ...defaults, effort: event.target.value })
+                        }
+                      >
+                        <option value="">모델 기본값</option>
+                        {defaults.effort &&
+                          !selectedModel?.efforts.includes(defaults.effort) && (
+                            <option value={defaults.effort}>
+                              {defaults.effort} (현재 확인 불가)
+                            </option>
+                          )}
+                        {selectedModel?.efforts.map((effort) => (
+                          <option value={effort} key={effort}>
+                            {effort}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  {missingModel && (
+                    <p>
+                      저장된 모델을 현재 연결에서 확인할 수 없습니다. 새 작업에서 사용 가능한 모델을 선택해 주세요.
+                    </p>
+                  )}
+                  <div className="settings-startup-heading">
+                    <h3>Startup 스크립트</h3>
+                    <span>선택 사항</span>
+                  </div>
+                  <label className="settings-inline-field">
+                    스크립트 파일 경로
                     <input aria-label="Startup 스크립트 파일 경로" maxLength={4096} spellCheck={false} placeholder={window.desktop.platform === 'win32' ? 'scripts/startup.ps1' : 'scripts/startup.sh'} value={defaults.startupScriptPath ?? ''} onChange={(event) => setDefaults({ ...defaults, startupScriptPath: event.target.value })} />
                   </label>
                   {defaults.startupScript?.trim() && !defaults.startupScriptPath?.trim() && <details>
@@ -298,29 +306,17 @@ export function SettingsDialog({
                     <p>이전 명령은 자동 실행되지 않습니다. 아래 내용을 파일로 저장하고 경로를 지정해 주세요.</p>
                     <pre>{defaults.startupScript}</pre>
                   </details>}
-                  {window.desktop.platform === 'win32' && <p>Windows PowerShell에서 한글을 사용하는 .ps1 파일은 UTF-8 with BOM으로 저장해 주세요.</p>}
                   <label className="startup-auto-label">
                     <input type="checkbox" aria-label="새 Worktree Startup 자동 실행" checked={defaults.startupAutoRun !== false} onChange={(event) => setDefaults({ ...defaults, startupAutoRun: event.target.checked })} />
                     새 Worktree에서 자동 실행 후 에이전트 시작
                   </label>
-                  <p>자동 실행을 끄면 기존처럼 바로 에이전트를 시작합니다. 작업 화면의 Startup에서 수동 실행·중지·로그 확인을 할 수 있습니다. 복원한 작업에서는 자동으로 다시 실행하지 않습니다.</p>
+                  <details className="settings-help">
+                    <summary>스크립트 실행 방법과 주의 사항</summary>
+                    <p>스크립트 파일을 레포에 추가하고 커밋해 주세요. 새 Worktree의 작업 폴더에서 실행하며, 성공하면 Codex를 시작합니다. Windows는 .ps1 또는 .sh(Git Bash 필요), macOS는 .sh 파일을 사용합니다.</p>
+                    {window.desktop.platform === 'win32' && <p>Windows PowerShell에서 한글을 사용하는 .ps1 파일은 UTF-8 with BOM으로 저장해 주세요.</p>}
+                    <p>자동 실행을 끄면 바로 에이전트를 시작합니다. 작업 화면의 Startup에서 수동 실행·중지·로그 확인을 할 수 있습니다. 복원한 작업에서는 자동으로 다시 실행하지 않습니다.</p>
+                  </details>
                 </fieldset>
-                <div className="dialog-actions">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={pending || !settings}
-                    onClick={() => void save(true)}
-                  >
-                    프로젝트 기본값 초기화
-                  </Button>
-                  <Button
-                    type="submit"
-                    disabled={pending || !settings || invalidBaseRef}
-                  >
-                    {pending ? '저장 중…' : '저장'}
-                  </Button>
-                </div>
               </form>
             )}
           </>
@@ -390,9 +386,21 @@ export function SettingsDialog({
             </div>
           </>
         )}
-        {error && <p role="alert">{error}</p>}
-        {notice && <p role="status">{notice}</p>}
       </section>
+      {(error || notice || (tab === 'project' && projects.length > 0)) && (
+        <footer className="settings-footer">
+          {error && <p role="alert">{error}</p>}
+          {notice && <p role="status">{notice}</p>}
+          {tab === 'project' && projects.length > 0 && <div className="dialog-actions">
+            <Button type="button" variant="outline" size="sm" disabled={pending || !settings} onClick={() => void save(true)}>
+              프로젝트 기본값 초기화
+            </Button>
+            <Button type="submit" form="project-settings-form" size="sm" disabled={pending || !settings || invalidBaseRef}>
+              {pending ? '저장 중…' : '저장'}
+            </Button>
+          </div>}
+        </footer>
+      )}
     </dialog>
   )
 }

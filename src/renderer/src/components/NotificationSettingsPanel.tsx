@@ -27,9 +27,8 @@ export function NotificationSettingsPanel({ initial, onSaved }: {
     })
   }}>
     <h3>Codex 응답 대기 알림</h3>
-    <p>Codex가 질문, 승인 또는 계획 확인을 기다리면 데스크톱 알림을 표시합니다. 다른 작업을 보거나 앱을 최소화해도 알려드립니다.</p>
+    <p>Codex가 질문·승인·계획 확인을 기다리면 알려드립니다. 운영체제의 알림 권한과 방해 금지 설정이 적용됩니다.</p>
     {supported === false && <p>현재 환경에서 데스크톱 알림을 사용할 수 없습니다.</p>}
-    <p>운영체제의 알림 권한과 방해 금지 설정에 따라 알림이 표시되지 않을 수 있습니다.</p>
     <fieldset disabled={pending} className="notification-settings">
       <label className="notification-toggle"><input type="checkbox" checked={settings.enabled}
         onChange={(event) => setSettings({ ...settings, enabled: event.target.checked })} />데스크톱 알림 사용</label>
@@ -42,7 +41,7 @@ export function NotificationSettingsPanel({ initial, onSaved }: {
       </select></label>
       <label>알림음 볼륨 · {settings.volume}%<input type="range" aria-label="알림음 볼륨" min="0" max="100" step="1" value={settings.volume}
         onChange={(event) => setSettings({ ...settings, volume: Number(event.target.value) })} /></label>
-      <p>사용자 음원: WAV, MP3, OGG · 최대 10MB. 파일을 앱에 복사하여 보관하며 최대 5초 재생합니다.</p>
+      <p className="notification-help">사용자 음원: WAV, MP3, OGG · 최대 10MB · 앱에 복사하여 최대 5초 재생</p>
       <div className="dialog-actions">
         <Button type="button" variant="outline" onClick={() => void perform(async () => {
           const customSound = await window.desktop.chooseNotificationSound()

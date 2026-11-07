@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { RefreshCw } from 'lucide-react'
+import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 import { ResetAnnouncementPanel } from './ResetAnnouncementPanel'
 import type {
   CodexStatus,
@@ -38,10 +38,12 @@ function UsageWindow({
   window,
   index,
   now,
+  expanded,
 }: {
   window: CodexUsageWindow
   index: number
   now: number
+  expanded: boolean
 }) {
   const label = windowLabel(window.windowDurationMins, index)
   const remaining = Math.max(0, Math.min(100, 100 - window.usedPercent))
@@ -61,7 +63,7 @@ function UsageWindow({
       >
         <span style={{ width: `${remaining}%` }} />
       </div>
-      <div
+      {expanded && <div
         className="usage-reset"
         title={
           window.resetsAt
@@ -73,7 +75,7 @@ function UsageWindow({
         {window.resetsAt != null && (
           <span className="usage-date">{dateLabel(window.resetsAt)}</span>
         )}
-      </div>
+      </div>}
     </div>
   )
 }
@@ -90,6 +92,7 @@ export function CodexUsagePanel({
   const [error, setError] = useState('')
   const [updatedAt, setUpdatedAt] = useState(0)
   const [now, setNow] = useState(Date.now)
+  const [expanded, setExpanded] = useState(false)
   const refresh = useRef<() => void>(() => {})
   const available = connection.connected && connection.authenticated
 
@@ -175,7 +178,15 @@ export function CodexUsagePanel({
   return (
     <section className="codex-usage" aria-label="Codex 사용량 한도">
       <div className="usage-heading">
-        <strong>Codex 사용량</strong>
+        <button
+          className="usage-toggle"
+          aria-label="사용량 상세 정보"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          <strong>Codex 사용량</strong>
+        </button>
         {available && !error && plan && (
           <span className="usage-plan">{plan}</span>
         )}
@@ -213,6 +224,7 @@ export function CodexUsagePanel({
                     window={item}
                     index={index}
                     now={now}
+                    expanded={expanded}
                   />
                 ) : null,
               )}
@@ -230,7 +242,7 @@ export function CodexUsagePanel({
                 : '정보 미제공'}
             </strong>
           </div>
-          {resetCredits && resetCredits.availableCount > 0 && (
+          {expanded && resetCredits && resetCredits.availableCount > 0 && (
             <div className="usage-reset">
               <span>가장 가까운 사용 기간</span>
               {nearestCredit ? (

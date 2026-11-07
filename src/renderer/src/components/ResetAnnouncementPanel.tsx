@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { ChevronRight } from 'lucide-react'
 import type { ResetAnnouncementState } from '../../../shared/types'
 import { resetAnnouncementLabels, resetAnnouncementSource } from '../../../shared/reset-announcements'
 
@@ -37,8 +38,13 @@ export function ResetAnnouncementPanel() {
     try { await window.desktop.openLink(url) }
     catch { setLinkError('원문을 열지 못했습니다.') }
   }
-  return <div className="usage-reset-news" aria-label="초기화권 및 리셋 소식">
-    <div className="usage-row"><strong>리셋 소식</strong><span>공개 공지</span></div>
+  return <details className="usage-reset-news" aria-label="초기화권 및 리셋 소식">
+    <summary>
+      <ChevronRight size={12} />
+      <strong>리셋 소식</strong>
+      <span>{stale ? '갱신 지연' : upcoming.length ? `예고 ${upcoming.length}건` : state?.checkedAt ? '예고 없음' : '조회 중…'}</span>
+    </summary>
+    <div className="usage-reset-news-details">
     {!state?.checkedAt && !state?.error && <p className="usage-empty" role="status">리셋 공지 조회 중…</p>}
     {stale ? <p className="usage-empty" role="status" title={state?.error ?? undefined}>
       공지 갱신 지연 · 예고 확인 불가
@@ -65,5 +71,6 @@ export function ResetAnnouncementPanel() {
       </span>}
     </div>
     {linkError && <p className="usage-empty" role="alert">{linkError}</p>}
-  </div>
+    </div>
+  </details>
 }

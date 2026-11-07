@@ -56,7 +56,7 @@ export function WorkspacePanels({
           <Panel
             id="changes"
             className="workspace-panel"
-            defaultSize={300}
+            defaultSize={260}
             minSize={240}
             maxSize="50%"
           >
