@@ -749,6 +749,7 @@ try {
   await page.keyboard.press('Control+,')
   const settings = page.getByRole('dialog', { name: '설정', exact: true })
   await settings.getByRole('tab', { name: '일반', exact: true }).click()
+  await checkSettingsUpdate(settings)
   const notificationToggle = settings.getByRole('checkbox', { name: '데스크톱 알림 사용', exact: true })
   await notificationToggle.uncheck()
   await settings.getByRole('combobox', { name: '알림음', exact: true }).selectOption('glass')
@@ -1288,5 +1289,61 @@ async function checkMiddleInsertion(task) {
     console.log('중간 입력 회귀 통과: Left/Home/Right는 PTY로 유지, ASCII·한글 삽입 후 Enter/Shift+Enter/Ctrl+Enter 손실·중복 없음.')
   } finally {
     await app.evaluate(({ ipcMain }) => { ipcMain.removeHandler('terminal:write'); ipcMain.handle('terminal:write', globalThis.middleInputHandler); delete globalThis.middleInputHandler })
+  }
+}
+
+async function checkSettingsUpdate(settings) {
+  await app.evaluate(({ ipcMain, BrowserWindow }) => {
+    const channels = ['app:update-check', 'app:update-start', 'app:update-download', 'app:update-install']
+    globalThis.updateOriginalHandlers = channels.map(channel => [channel, ipcMain._invokeHandlers.get(channel)])
+    globalThis.updateCalls = []
+    globalThis.updateTestVersion = true
+    const publish = (status) => {
+      const state = { status, currentVersion: '0.1.0', canInstall: false,
+        ...(status === 'current' ? {} : { version: '0.2.0' }) }
+      BrowserWindow.getAllWindows()[0].webContents.send('app:update', state)
+      return state
+    }
+    for (const channel of channels) {
+      ipcMain.removeHandler(channel)
+      ipcMain.handle(channel, async () => {
+        globalThis.updateCalls.push(channel)
+        if (channel === 'app:update-check') return publish(globalThis.updateTestVersion ? 'available' : 'current')
+        if (channel === 'app:update-start') {
+          publish('downloading')
+          await new Promise(resolve => setTimeout(resolve, 200))
+          return publish('downloaded')
+        }
+        throw new Error('개별 다운로드·설치 API를 호출하면 안 됩니다.')
+      })
+    }
+  })
+  try {
+    await settings.getByRole('button', { name: '업데이트 확인 및 설치', exact: true }).click()
+    await settings.getByText('다운로드와 무결성 검증이 완료되었습니다.', { exact: true }).waitFor()
+    assert.deepEqual(await app.evaluate(() => globalThis.updateCalls), ['app:update-check', 'app:update-start'])
+    assert.equal(await settings.getByRole('button', { name: '업데이트', exact: true }).isDisabled(), true)
+    assert.equal(await settings.getByRole('button', { name: '종료하고 설치', exact: true }).count(), 0)
+    // 최신 버전이면 확인만 하고 다운로드·설치 요청을 보내지 않습니다.
+    await app.evaluate(({ BrowserWindow }) => {
+      globalThis.updateCalls = []
+      globalThis.updateTestVersion = false
+      BrowserWindow.getAllWindows()[0].webContents.send('app:update', { status: 'idle', currentVersion: '0.1.0', canInstall: false })
+    })
+    await settings.getByRole('button', { name: '업데이트 확인 및 설치', exact: true }).click()
+    await settings.getByText('사용 가능한 새 업데이트가 없습니다.', { exact: true }).waitFor()
+    assert.deepEqual(await app.evaluate(() => globalThis.updateCalls), ['app:update-check'])
+    console.log('설정 업데이트 검증 통과: 한 번 클릭으로 확인→통합 업데이트 호출, 개발 실행 설치 차단, 최신 버전은 설치하지 않음.')
+  } finally {
+    await app.evaluate(({ ipcMain, BrowserWindow }) => {
+      for (const [channel, handler] of globalThis.updateOriginalHandlers) {
+        ipcMain.removeHandler(channel)
+        ipcMain.handle(channel, handler)
+      }
+      BrowserWindow.getAllWindows()[0].webContents.send('app:update', { status: 'idle', currentVersion: '0.1.0', canInstall: false })
+      delete globalThis.updateOriginalHandlers
+      delete globalThis.updateCalls
+      delete globalThis.updateTestVersion
+    })
   }
 }

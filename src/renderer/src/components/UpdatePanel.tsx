@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Download, RefreshCw } from 'lucide-react'
 import type { AppUpdateState } from '../../../shared/types'
 import { Button } from './ui/button'
@@ -54,6 +54,30 @@ export function UpdatePanel({
   onStart?: () => Promise<void>
 }) {
   const { state, pending, action } = useAppUpdate()
+  const requesting = useRef(false)
+  const [starting, setStarting] = useState(false)
+  async function start() {
+    if (pending || requesting.current) return
+    requesting.current = true
+    setStarting(true)
+    try {
+      if (automatic && onStart) {
+        await onStart()
+      } else {
+        await action(async () => {
+          const next = state.version && ['available', 'error', 'downloaded'].includes(state.status)
+            ? state
+            : await window.desktop.checkUpdate()
+          return next.version && ['available', 'error', 'downloaded'].includes(next.status)
+            ? window.desktop.startUpdate()
+            : next
+        })
+      }
+    } finally {
+      requesting.current = false
+      setStarting(false)
+    }
+  }
   const descriptions = {
     idle: 'GitHub에서 새 버전을 확인할 수 있습니다.',
     checking: '최신 릴리스를 확인하고 있습니다.',
@@ -97,16 +121,6 @@ export function UpdatePanel({
             닫기
           </Button>
         )}
-        {!automatic && (
-          <Button
-            variant="outline"
-            disabled={pending}
-            onClick={() => void action(window.desktop.checkUpdate)}
-          >
-            <RefreshCw size={14} />
-            업데이트 확인
-          </Button>
-        )}
         {state.status === 'downloading' ? (
           <Button
             variant="outline"
@@ -114,25 +128,19 @@ export function UpdatePanel({
           >
             다운로드 취소
           </Button>
-        ) : automatic &&
-          ['available', 'error', 'downloaded'].includes(state.status) ? (
+        ) : (!automatic || ['available', 'error', 'downloaded'].includes(state.status)) ? (
           <Button
-            disabled={state.status === 'downloaded' && !state.canInstall}
-            onClick={() => void onStart?.()}
+            disabled={pending || starting || (state.status === 'downloaded' && !state.canInstall)}
+            onClick={() => void start()}
           >
-            업데이트 다시 시도
-          </Button>
-        ) : state.status === 'downloaded' ? (
-          <Button
-            disabled={!state.canInstall}
-            onClick={() => void action(window.desktop.installUpdate)}
-          >
-            종료하고 설치
-          </Button>
-        ) : state.status === 'available' ? (
-          <Button onClick={() => void action(window.desktop.downloadUpdate)}>
-            <Download size={14} />
-            다운로드
+            {state.version ? <Download size={14} /> : <RefreshCw size={14} />}
+            {pending || starting
+              ? '업데이트 진행 중…'
+              : state.status === 'error' || automatic
+                ? '업데이트 다시 시도'
+                : state.version
+                  ? '업데이트'
+                  : '업데이트 확인 및 설치'}
           </Button>
         ) : null}
       </div>
