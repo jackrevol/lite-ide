@@ -428,7 +428,7 @@ export function App() {
       if (snapshot) receiveStartup(snapshot, task.path)
       else {
         autoStartTasks.current.delete(task.path)
-        setError('프로젝트 설정에서 Startup 스크립트를 입력하고 저장해 주세요.')
+        setError('프로젝트 설정에서 Startup 스크립트 파일의 상대 경로를 입력하고 저장해 주세요.')
       }
     } catch (cause) {
       autoStartTasks.current.delete(task.path)

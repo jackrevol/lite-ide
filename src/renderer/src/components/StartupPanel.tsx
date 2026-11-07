@@ -18,7 +18,7 @@ export function StartupPanel({ workspace, project, snapshot, blocked, onSnapshot
     try {
       const result = await window.desktop.runStartup(project, workspace)
       if (result) onSnapshot(result)
-      else onError('프로젝트 설정에서 Startup 스크립트를 입력하고 저장해 주세요.')
+      else onError('프로젝트 설정에서 Startup 스크립트 파일의 상대 경로를 입력하고 저장해 주세요.')
     } catch (cause) { onError(cause instanceof Error ? cause.message : String(cause)) }
     finally { setPending(false) }
   }

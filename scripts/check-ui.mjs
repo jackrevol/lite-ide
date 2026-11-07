@@ -832,11 +832,20 @@ async function checkStartupFlow() {
   const successfulScript = win
     ? "Write-Output 'STARTUP_BEGIN'; Start-Sleep -Seconds 2; Set-Content -Encoding utf8 startup-ready.txt '설치 완료'; Write-Output 'STARTUP_DONE'"
     : "printf 'STARTUP_BEGIN\\n'; sleep 2; printf '설치 완료' > startup-ready.txt; printf 'STARTUP_DONE\\n'"
-  const setScript = async (script, auto = true) => page.evaluate(async ({ project, script, auto }) => {
-    const key = window.desktop.platform === 'win32' ? project.toLowerCase() : project
-    const previous = (await window.desktop.getSettings()).projects[key]
-    await window.desktop.updateProjectSettings(project, { ...previous, startupScript: script, startupAutoRun: auto })
-  }, { project, script, auto })
+  const scriptPath = `scripts/startup.${win ? 'ps1' : 'sh'}`
+  const setScript = async (script, auto = true, workspace = project) => {
+    await mkdir(join(workspace, 'scripts'), { recursive: true })
+    await writeFile(join(workspace, scriptPath), (win ? '\ufeff' : '') + script, 'utf8')
+    if (workspace === project) {
+      git('add', scriptPath)
+      git('-c', 'user.name=UI Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'Startup fixture')
+    }
+    await page.evaluate(async ({ project, scriptPath, auto }) => {
+      const key = window.desktop.platform === 'win32' ? project.toLowerCase() : project
+      const previous = (await window.desktop.getSettings()).projects[key]
+      await window.desktop.updateProjectSettings(project, { ...previous, baseRef: 'refs/heads/main', startupScriptPath: scriptPath, startupAutoRun: auto })
+    }, { project, scriptPath, auto })
+  }
   const startup = (task) => page.evaluate((path) => window.desktop.startupSnapshot(path), task.path)
   const create = async (name) => {
     await openTaskCreation()
@@ -853,11 +862,12 @@ async function checkStartupFlow() {
     await assert.rejects(page.evaluate((task) => window.desktop.openTerminal({ taskId: task.id, workspace: task.path, kind: 'codex', cols: 80, rows: 24 }), task), /Startup/)
     await assert.rejects(page.evaluate((task) => window.desktop.sendMessage({ sessionId: task.id, workspace: task.path, text: 'blocked' }), task), /Startup/)
   }
-  // 실제 설정 폼에서 여러 줄 명령 저장과 자동 실행 선택을 확인합니다.
+  // 레포에 커밋된 파일 경로와 자동 실행 선택을 실제 설정 폼에서 확인합니다.
+  await setScript(successfulScript)
   await page.getByRole('button', { name: '설정', exact: true }).click()
   const settings = page.getByRole('dialog', { name: '설정', exact: true })
   await settings.getByRole('tab', { name: '프로젝트', exact: true }).click()
-  await settings.getByRole('textbox', { name: 'Startup 스크립트', exact: true }).fill(successfulScript)
+  await settings.getByRole('textbox', { name: 'Startup 스크립트 파일 경로', exact: true }).fill(scriptPath)
   await settings.getByRole('checkbox', { name: '새 Worktree Startup 자동 실행', exact: true }).check()
   await settings.getByRole('button', { name: '저장', exact: true }).click()
   await settings.getByText('프로젝트 기본값을 저장했습니다. 다음 새 작업부터 적용됩니다.', { exact: true }).waitFor()
@@ -891,7 +901,7 @@ async function checkStartupFlow() {
   await page.getByText(/초기화가 완료되지 않아 에이전트를 시작하지 않았습니다/).waitFor()
   assert.equal((await startup(failed)).status, 'stopped')
   await assertBlocked(failed)
-  await setScript(win ? "Write-Output 'LATEST_SCRIPT_RECOVERED'" : "printf 'LATEST_SCRIPT_RECOVERED\\n'")
+  await setScript(win ? "Write-Output 'LATEST_SCRIPT_RECOVERED'" : "printf 'LATEST_SCRIPT_RECOVERED\\n'", true, failed.path)
   await page.getByRole('button', { name: 'Startup 실행', exact: true }).click()
   await readyTerminal()
   await waitOutput(failed.id, 'FIRST_PROMPT_Startup 실패')
