@@ -335,7 +335,7 @@ app.whenReady().then(() => {
     await requireLinkedWorktree(workspace)
     const defaults = (await settings.get()).projects[pathKey(directory)]
     if (updates?.snapshot().status === 'installing') throw new Error('업데이트 설치를 시작하고 있습니다.')
-    return startups!.run(workspace, defaults?.startupScript ?? '', automatic)
+    return startups!.run(workspace, defaults?.startupScriptPath ?? '', automatic)
   })
   ipcMain.handle('startup:stop', (event, path: string) => {
     requireTerminalSender(event)
@@ -493,8 +493,8 @@ app.whenReady().then(() => {
       const tree = await createWorktree(directory, branch, baseRef)
       const worktreePath = resolve(tree.path)
       workspaces.add(worktreePath)
-      if (defaults?.startupAutoRun !== false && defaults?.startupScript?.trim())
-        await startups!.initialize(worktreePath, defaults.startupScript).catch(() => {
+      if (defaults?.startupAutoRun !== false && defaults?.startupScriptPath?.trim())
+        await startups!.initialize(worktreePath, defaults.startupScriptPath).catch(() => {
           // 생성된 Worktree는 반환하고, 미완료 상태는 작업 화면에서 복구합니다.
         })
       return { ...tree, path: worktreePath }

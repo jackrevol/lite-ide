@@ -288,11 +288,17 @@ export function SettingsDialog({
                     </select>
                   </label>
                   <h3>Startup 스크립트</h3>
-                  <p>새 Worktree를 만든 뒤 작업 폴더에서 실행합니다. 성공적으로 완료되면 Codex를 시작합니다. Windows는 PowerShell, macOS는 로그인 셸을 사용합니다.</p>
+                  <p>스크립트 파일을 레포에 추가하고 커밋해 주세요. 새 Worktree 안의 파일을 작업 폴더에서 실행하며, 성공하면 Codex를 시작합니다. Windows는 .ps1, macOS는 .sh 파일을 사용합니다.</p>
                   <label>
-                    초기화 명령
-                    <textarea aria-label="Startup 스크립트" rows={6} maxLength={30000} spellCheck={false} placeholder="예: npm install" value={defaults.startupScript ?? ''} onChange={(event) => setDefaults({ ...defaults, startupScript: event.target.value })} />
+                    레포 기준 스크립트 파일 경로
+                    <input aria-label="Startup 스크립트 파일 경로" maxLength={4096} spellCheck={false} placeholder={window.desktop.platform === 'win32' ? 'scripts/startup.ps1' : 'scripts/startup.sh'} value={defaults.startupScriptPath ?? ''} onChange={(event) => setDefaults({ ...defaults, startupScriptPath: event.target.value })} />
                   </label>
+                  {defaults.startupScript?.trim() && !defaults.startupScriptPath?.trim() && <details>
+                    <summary>이전 초기화 명령을 레포의 스크립트 파일로 옮겨 주세요.</summary>
+                    <p>이전 명령은 자동 실행되지 않습니다. 아래 내용을 파일로 저장하고 경로를 지정해 주세요.</p>
+                    <pre>{defaults.startupScript}</pre>
+                  </details>}
+                  {window.desktop.platform === 'win32' && <p>Windows PowerShell에서 한글을 사용하는 .ps1 파일은 UTF-8 with BOM으로 저장해 주세요.</p>}
                   <label className="startup-auto-label">
                     <input type="checkbox" aria-label="새 Worktree Startup 자동 실행" checked={defaults.startupAutoRun !== false} onChange={(event) => setDefaults({ ...defaults, startupAutoRun: event.target.checked })} />
                     새 Worktree에서 자동 실행 후 에이전트 시작

@@ -3,10 +3,11 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { pathKey, workspaceContains } from './git.ts'
 import type { StartupSnapshot } from '../shared/types.ts'
+import { resolveStartupScript } from './startup-script.ts'
 
 type Execution = {
   snapshot: StartupSnapshot
-  process: ChildProcess
+  process?: ChildProcess
   exited: Promise<void>
   stopping: boolean
 }
@@ -59,18 +60,18 @@ export class StartupService {
     await writeFile(`${this.file}.tmp`, JSON.stringify({ attempted: [...this.attempted], required: [...this.required] }), 'utf8')
     await rename(`${this.file}.tmp`, this.file)
   }
-  async initialize(workspace: string, script: string) {
+  async initialize(workspace: string, scriptPath: string) {
     const initialize = this.queue.catch(() => {}).then(async () => {
       await this.loaded
-      if (!script.trim()) return
+      if (!scriptPath.trim()) return
       this.required.add(pathKey(workspace))
       await this.save()
     })
     this.queue = initialize
     await initialize
-    return this.run(workspace, script)
+    return this.run(workspace, scriptPath)
   }
-  run(workspace: string, script: string, automatic = false): Promise<StartupSnapshot | null> {
+  run(workspace: string, scriptPath: string, automatic = false): Promise<StartupSnapshot | null> {
     const operation = this.queue.catch(() => {}).then(async () => {
       await this.loaded
       const key = pathKey(workspace)
@@ -78,20 +79,31 @@ export class StartupService {
       if (this.deleting.has(key)) throw new Error('삭제 중인 작업입니다.')
       const existing = this.snapshot(workspace)
       if (existing?.status === 'running') return existing
-      if (!script.trim() || (automatic && this.attempted.has(key))) return existing
+      if (!scriptPath.trim() || (automatic && this.attempted.has(key))) return existing
       // 실행 전 기록을 저장해 창 새로고침과 앱 재시작으로 중복 실행되지 않도록 합니다.
       this.attempted.add(key)
+      this.required.add(key)
       await this.save()
       if (this.closed || this.deleting.has(key)) throw new Error('작업을 종료 중입니다.')
       const snapshot: StartupSnapshot = { workspace, status: 'running', output: '', startedAt: Math.max(Date.now(), (existing?.startedAt ?? 0) + 1), revision: 0 }
+      let scriptFile: string
+      try { scriptFile = await resolveStartupScript(workspace, scriptPath) }
+      catch (error) {
+        snapshot.status = 'failed'
+        snapshot.error = String(error instanceof Error ? error.message : error)
+        snapshot.revision++
+        this.executions.set(key, { snapshot, stopping: false, exited: Promise.resolve() })
+        this.emit({ ...snapshot })
+        return { ...snapshot }
+      }
       const win = process.platform === 'win32'
-      const powershell = `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); $OutputEncoding = [Console]::OutputEncoding; $ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; $LASTEXITCODE = 0;\ntry {\n${script}\nif ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n} catch { [Console]::Error.WriteLine($_.ToString()); exit 1 }`
+      const powershell = `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); $OutputEncoding = [Console]::OutputEncoding; $ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; $LASTEXITCODE = 0;\ntry {\n& '${scriptFile.replaceAll("'", "''")}'\nif ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n} catch { [Console]::Error.WriteLine($_.ToString()); exit 1 }`
       const env = { ...process.env }
       delete env.ELECTRON_RUN_AS_NODE
       if (win) for (const name of Object.keys(env)) if (name.toUpperCase() === 'PSMODULEPATH') delete env[name]
       const child = spawn(win ? 'powershell.exe' : process.env.SHELL || '/bin/sh',
-        win ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-OutputFormat', 'Text', '-EncodedCommand', Buffer.from(powershell, 'utf16le').toString('base64')]
-          : ['-lc', `set -e\n${script}`],
+        win ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-OutputFormat', 'Text', '-EncodedCommand', Buffer.from(powershell, 'utf16le').toString('base64')]
+          : ['-l', '-e', scriptFile],
         { cwd: workspace, env, windowsHide: true, detached: !win, stdio: ['ignore', 'pipe', 'pipe'] })
       let finish!: () => void
       const execution: Execution = { snapshot, process: child, stopping: false, exited: new Promise((resolve) => { finish = resolve }) }
@@ -143,10 +155,11 @@ export class StartupService {
     if (execution.stopping) return execution.exited
     execution.stopping = true
     try {
-      if (execution.process.pid) {
+      const pid = execution.process?.pid
+      if (pid) {
         if (process.platform === 'win32') {
           await new Promise<void>((resolve, reject) => {
-            const killer = spawn('taskkill.exe', ['/PID', String(execution.process.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+            const killer = spawn('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
             killer.once('error', reject)
             killer.once('close', (code) => {
               if (code === 0 || execution.snapshot.status !== 'running') resolve()
@@ -154,7 +167,7 @@ export class StartupService {
             })
           })
         } else {
-          try { process.kill(-execution.process.pid, 'SIGKILL') }
+          try { process.kill(-pid, 'SIGKILL') }
           catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error }
         }
       }

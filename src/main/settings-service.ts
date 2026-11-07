@@ -4,6 +4,7 @@ import { pathKey } from './git.ts'
 import type { AppSettings, ProjectDefaults } from '../shared/types.ts'
 import type { NotificationSettings } from '../shared/types.ts'
 import { defaultNotificationSettings, validateNotificationSettings } from '../shared/notifications.ts'
+import { validateStartupScriptPath } from './startup-script.ts'
 
 export function validateDefaults(value: unknown): ProjectDefaults {
   if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -30,6 +31,7 @@ export function validateDefaults(value: unknown): ProjectDefaults {
     model: (input.model as string).trim(),
     effort: (input.effort as string).trim(),
     ...(input.startupScript !== undefined ? { startupScript: input.startupScript as string } : {}),
+    ...(input.startupScriptPath !== undefined ? { startupScriptPath: validateStartupScriptPath(input.startupScriptPath) } : {}),
     ...(input.startupAutoRun !== undefined ? { startupAutoRun: input.startupAutoRun as boolean } : {}),
   }
 }

@@ -46,7 +46,7 @@ test('이전 설정은 알림 기본값으로 마이그레이션하고 알림·�
   assert.deepEqual((await service.get()).notifications, defaultNotificationSettings)
   const notifications = { enabled: false, soundEnabled: false, sound: 'custom' as const, volume: 35,
     customSound: { fileName: '12345678-1234-1234-1234-123456789abc.wav', name: '한글 음원.wav' } }
-  const defaults = { baseRef: 'HEAD', model: 'test-model', effort: 'high', startupScript: "echo '초기화'\nnpm install", startupAutoRun: false }
+  const defaults = { baseRef: 'HEAD', model: 'test-model', effort: 'high', startupScriptPath: 'scripts/startup.ps1', startupAutoRun: false }
   await Promise.all([service.updateNotifications(notifications), service.update(root, defaults)])
   const saved = await new SettingsService(file).get()
   assert.deepEqual(saved.notifications, notifications)
@@ -117,16 +117,34 @@ test('손상되거나 지원하지 않는 설정 파일을 오류로 표시하�
   }
 })
 
-test('여러 줄 Startup 스크립트와 자동 실행 설정을 UTF-8로 저장하고 잘못된 값을 거부한다', async () => {
+test('Startup 파일 경로와 자동 실행 설정을 UTF-8로 저장하고 잘못된 경로를 거부한다', async () => {
   const root = await mkdtemp(join(tmpdir(), 'lite-ide-startup-settings-'))
   const file = join(root, 'settings.json')
-  const defaults = { baseRef: 'HEAD', model: '', effort: '', startupScript: "echo '한글'\nnpm install", startupAutoRun: false }
+  const defaults = { baseRef: 'HEAD', model: '', effort: '', startupScriptPath: 'scripts/한글 startup.ps1', startupAutoRun: false }
   try {
     await new SettingsService(file).update(root, defaults)
     assert.deepEqual((await new SettingsService(file).get()).projects[pathKey(root)], defaults)
     assert.notEqual((await readFile(file))[0], 0xef)
-    for (const startupScript of [42, 'a'.repeat(30_001), '\0'])
-      assert.throws(() => validateDefaults({ ...defaults, startupScript }))
+    for (const startupScriptPath of [42, 'a'.repeat(4097), '\0', 'echo ok\nexit 0', '../outside.ps1', '/tmp/startup.sh', 'C:\\startup.ps1', 'C:startup.ps1', '\\\\server\\startup.ps1'])
+      assert.throws(() => validateDefaults({ ...defaults, startupScriptPath }))
+    assert.equal(validateDefaults({ ...defaults, startupScriptPath: ' scripts\\startup.ps1 ' }).startupScriptPath, 'scripts/startup.ps1')
     assert.throws(() => validateDefaults({ ...defaults, startupAutoRun: 'yes' }))
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('이전 Startup 명령은 복사할 수 있도록 보존하고 파일 경로로 해석하지 않는다', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'lite-ide-startup-legacy-'))
+  const file = join(root, 'settings.json')
+  const defaults = { baseRef: 'HEAD', model: '', effort: '', startupScript: "echo '한글'\nnpm install" }
+  try {
+    await writeFile(file, JSON.stringify({ schemaVersion: 1, projects: { [root]: defaults } }), 'utf8')
+    const service = new SettingsService(file)
+    const loaded = (await service.get()).projects[pathKey(root)]
+    assert.equal(loaded.startupScript, defaults.startupScript)
+    assert.equal(loaded.startupScriptPath, undefined)
+    await service.update(root, { ...loaded, startupScriptPath: 'scripts/startup.ps1' })
+    const saved = (await new SettingsService(file).get()).projects[pathKey(root)]
+    assert.equal(saved.startupScriptPath, 'scripts/startup.ps1')
+    assert.equal(saved.startupScript, defaults.startupScript)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
