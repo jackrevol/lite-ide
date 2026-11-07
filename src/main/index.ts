@@ -35,6 +35,7 @@ import {
 import { SettingsService, validateDefaults } from './settings-service'
 import { appInfo } from './app-info'
 import { AgentService } from './agent-service'
+import { prepareCodex } from './codex-update-service'
 import { TerminalService } from './terminal-service'
 import { NotificationService } from './notification-service'
 import { ResetAnnouncementService } from './reset-announcement-service'
@@ -245,6 +246,7 @@ app.whenReady().then(() => {
       if (window && !window.isDestroyed())
         window.webContents.send('codex:usage-changed')
     },
+    prepareCodex,
   )
   terminals = new TerminalService(
     join(app.getPath('userData'), 'terminal-resume.json'),

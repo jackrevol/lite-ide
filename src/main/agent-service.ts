@@ -53,16 +53,19 @@ export class AgentService {
   private file: string
   private emit: (session: AgentSession) => void
   private onUsageChanged: () => void
+  private prepareNewSession: () => Promise<unknown>
 
   constructor(
     file: string,
     emit: (session: AgentSession) => void,
     onDisconnect: (reason: string) => void = () => {},
     onUsageChanged: () => void = () => {},
+    prepareNewSession: () => Promise<unknown> = async () => {},
   ) {
     this.file = file
     this.emit = emit
     this.onUsageChanged = onUsageChanged
+    this.prepareNewSession = prepareNewSession
     this.loaded = this.load()
     this.client.onMessage = (message) => this.handle(message)
     this.client.onDisconnect = (reason) => {
@@ -514,6 +517,8 @@ export class AgentService {
     ])
     this.publish(session)
     try {
+      if (!session.threadId) await this.prepareNewSession()
+      if (this.closed) throw new Error('앱이 종료 중입니다.')
       await this.client.start()
       if (!session.threadId || !this.loadedThreads.has(session.threadId)) {
         const result = await this.client.request<{ thread: { id: string } }>(

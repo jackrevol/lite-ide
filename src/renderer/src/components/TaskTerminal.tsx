@@ -72,6 +72,7 @@ export function TaskTerminal({
   const [attempt, setAttempt] = useState(0)
   const [error, setError] = useState('')
   const [exited, setExited] = useState<number | null>(null)
+  const [starting, setStarting] = useState(true)
 
   useEffect(() => {
     if (terminal.current) terminal.current.options.theme = palette(theme)
@@ -87,6 +88,7 @@ export function TaskTerminal({
     let modifiedEnter: string | undefined
     setError('')
     setExited(null)
+    setStarting(true)
     searchIndex.current = -1
     setSearchResult({ index: 0, count: 0 })
     const term = new Terminal({
@@ -261,6 +263,7 @@ export function TaskTerminal({
       })
       .then((snapshot) => {
         if (disposed) return
+        setStarting(false)
         ready = { ...snapshot }
         term.resize(snapshot.cols, snapshot.rows)
         output.write(snapshot.output)
@@ -273,7 +276,10 @@ export function TaskTerminal({
         if (!ready.running) setExited(ready.exitCode ?? 0)
         if (visible.current && !document.querySelector('dialog[open]')) term.focus()
       })
-      .catch(report)
+      .catch((cause: unknown) => {
+        if (!disposed) setStarting(false)
+        report(cause)
+      })
     return () => {
       disposed = true
       host.current?.removeAttribute('data-terminal-ready')
@@ -326,6 +332,9 @@ export function TaskTerminal({
             입력 가져오기
           </button>
         </div>
+      )}
+      {starting && task.terminalKind === 'codex' && (
+        <div className="terminal-starting" role="status">Codex 업데이트 확인 및 터미널 시작 중…</div>
       )}
       <div className="terminal-host" ref={host} aria-label="작업 터미널" />
       {(error || exited !== null) && (

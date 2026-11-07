@@ -6,6 +6,52 @@ import { tmpdir } from 'node:os'
 import { AgentService } from './agent-service.ts'
 import type { AgentSession } from '../shared/types.ts'
 
+test('새 대화는 업데이트 완료 후 시작하고 기존 대화의 후속 입력은 업데이트하지 않는다', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'lite-agent-update-'))
+  const calls: string[] = []
+  let finish!: () => void
+  let entered!: () => void
+  const preparing = new Promise<void>((resolve) => { entered = resolve })
+  const updating = new Promise<void>((resolve) => { finish = resolve })
+  const service = new AgentService(join(directory, 'sessions.json'), () => {}, undefined, undefined,
+    async () => { calls.push('update'); entered(); await updating })
+  t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }) })
+  service.client.start = async () => { calls.push('connect') }
+  service.client.request = async <T>(method: string) => {
+    calls.push(method)
+    return (method === 'thread/start' ? { thread: { id: 'thread' } } : { turn: { id: 'turn' } }) as T
+  }
+  const input = { sessionId: 'session', workspace: directory, text: '새 작업' }
+  const sending = service.send(input)
+  await preparing
+  assert.deepEqual(calls, ['update'])
+  finish()
+  await sending
+  assert.deepEqual(calls, ['update', 'connect', 'thread/start', 'turn/start'])
+  service.client.onMessage({ method: 'turn/completed', params: { threadId: 'thread', turn: { id: 'turn', status: 'completed' } } })
+  await service.send({ ...input, text: '이어서 작업' })
+  assert.equal(calls.filter((call) => call === 'update').length, 1)
+})
+
+test('업데이트를 기다리다 앱이 종료되면 Codex 연결을 다시 시작하지 않는다', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'lite-agent-update-close-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  let finish!: () => void
+  let entered!: () => void
+  const preparing = new Promise<void>((resolve) => { entered = resolve })
+  const updating = new Promise<void>((resolve) => { finish = resolve })
+  const service = new AgentService(join(directory, 'sessions.json'), () => {}, undefined, undefined,
+    async () => { entered(); await updating })
+  service.client.start = async () => { assert.fail('종료 후 연결하면 안 됩니다.') }
+  const sending = service.send({ sessionId: 'session', workspace: directory, text: '새 작업' })
+  const rejected = assert.rejects(sending, /앱이 종료 중/)
+  await preparing
+  await service.close()
+  finish()
+  await rejected
+  await service.close()
+})
+
 test('Worktree 삭제는 UI에 없는 daemon 세션과 하위 cwd·자식을 종료하고 다른 작업은 보존한다', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'lite-ide-release-'))
   const service = new AgentService(join(directory, 'sessions.json'), () => {})
