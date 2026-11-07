@@ -433,7 +433,6 @@
 }
 .session-dot.running {
   background: #75a8ec;
-  animation: pulse 1.8s infinite;
 }
 .session-dot.completed,
 .connection-dot.online {
@@ -914,10 +913,33 @@
   overflow-y: auto;
   padding: 0 8px;
 }
-.changes-content.with-preview {
-  flex: 0 1 32%;
-  min-height: 80px;
-}
+.file-tree, .file-tree ul { list-style: none; margin: 0; padding: 0; }
+.file-tree .file-row { gap: 6px; padding-top: 7px; padding-bottom: 7px; }
+.file-tree .tree-chevron { flex: 0 0 12px !important; }
+.file-tree .tree-name { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.file-tree .file-row > svg { flex-shrink: 0; }
+.file-tree .file-row > .file-status { flex: 0 0 auto; }
+.agent-tab-item { display: flex; position: relative; flex-shrink: 0; }
+.agent-tab-item:has(.tab-close) [role='tab'] { padding-right: 28px; }
+.tab-close { position: absolute; right: 5px; top: 10px; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 3px; color: var(--muted-foreground); }
+.tab-close:hover { background: var(--accent); }
+.task-terminal-slot { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; }
+[hidden] { display: none !important; }
+.main-diff { margin-top: 0 !important; border-top: 0 !important; }
+.main-diff pre { font-size: 12px !important; }
+.startup-panel { flex-shrink: 0; border-bottom: 1px solid var(--border); font-size: 11px; }
+.startup-heading { display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; gap: 10px; }
+.startup-heading button { display: flex; align-items: center; gap: 6px; padding: 3px; color: var(--muted-foreground); }
+.startup-heading .startup-toggle { flex: 1; min-width: 0; text-align: left; }
+.startup-details { padding: 4px 16px 12px; }
+.startup-details p { line-height: 1.7; margin: 6px 0; }
+.startup-details pre { margin: 8px 0; max-height: 180px; overflow: auto; padding: 10px; background: var(--sidebar); font: 11px/1.6 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.startup-details small { color: var(--subtle); overflow-wrap: anywhere; }
+.startup-blocked { overflow: auto; min-height: 0; flex: 1; }
+.startup-blocked .startup-details pre { max-height: none; min-height: 120px; }
+.startup-auto-label { display: flex !important; flex-direction: row !important; align-items: center; gap: 8px; }
+.startup-auto-label input { width: auto; }
+.settings-content textarea { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 5px; background: var(--background); color: var(--foreground); font: 12px/1.6 var(--font-mono); resize: vertical; }
 .file-row {
   display: flex;
   width: 100%;

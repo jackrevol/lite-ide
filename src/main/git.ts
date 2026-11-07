@@ -87,7 +87,7 @@ export async function inspectRepository(
       'status',
       '--porcelain=v1',
       '-z',
-      '--untracked-files=normal',
+      '--untracked-files=all',
     ]),
     git(directory, ['worktree', 'list', '--porcelain', '-z']).catch(() =>
       git(directory, [

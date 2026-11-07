@@ -4,10 +4,19 @@ import type {
   AppUpdateState,
   DesktopApi,
   TerminalEvent,
+  StartupSnapshot,
 } from '../shared/types'
 
 const api: DesktopApi = {
   platform: process.platform,
+  runStartup: (project, workspace, automatic) => ipcRenderer.invoke('startup:run', project, workspace, automatic),
+  stopStartup: (workspace) => ipcRenderer.invoke('startup:stop', workspace),
+  startupSnapshot: (workspace) => ipcRenderer.invoke('startup:snapshot', workspace),
+  onStartup: (listener) => {
+    const receive = (_event: Electron.IpcRendererEvent, snapshot: StartupSnapshot) => listener(snapshot)
+    ipcRenderer.on('startup:event', receive)
+    return () => { ipcRenderer.removeListener('startup:event', receive) }
+  },
   openTerminal: (input) => ipcRenderer.invoke('terminal:open', input),
   writeTerminal: (id, data) => ipcRenderer.invoke('terminal:write', id, data),
   resizeTerminal: (id, cols, rows) =>

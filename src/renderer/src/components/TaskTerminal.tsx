@@ -11,12 +11,16 @@ export function TaskTerminal({
   theme,
   onStatus,
   onDraftUsed,
+  active = true,
 }: {
   task: WorkspaceTask
   theme: string
   onStatus: (snapshot: TerminalSnapshot) => void
   onDraftUsed: () => void
+  active?: boolean
 }) {
+  const visible = useRef(active)
+  visible.current = active
   const host = useRef<HTMLDivElement>(null)
   const terminal = useRef<Terminal | null>(null)
   const callbacks = useRef({ onStatus, onDraftUsed })
@@ -41,7 +45,7 @@ export function TaskTerminal({
       fontFamily: '"Cascadia Code", "SFMono-Regular", Consolas, monospace',
       fontSize: 13,
       lineHeight: 1.35,
-      cursorBlink: true,
+      cursorBlink: false,
       scrollback: 10000,
       theme: palette(theme),
       screenReaderMode: true,
@@ -122,10 +126,13 @@ export function TaskTerminal({
       if (disposed || !host.current?.clientWidth || !host.current.clientHeight)
         return
       fit.fit()
-      if (ready?.running)
+      if (ready?.running && (ready.cols !== term.cols || ready.rows !== term.rows)) {
+        ready.cols = term.cols
+        ready.rows = term.rows
         void window.desktop
           .resizeTerminal(task.id, term.cols, term.rows)
           .catch(report)
+      }
     }
     const observer = new ResizeObserver(() => {
       if (resizeTimer) clearTimeout(resizeTimer)
@@ -178,7 +185,7 @@ export function TaskTerminal({
         host.current?.setAttribute('data-terminal-ready', 'true')
         callbacks.current.onStatus({ ...ready })
         if (!ready.running) setExited(ready.exitCode ?? 0)
-        if (!document.querySelector('dialog[open]')) term.focus()
+        if (visible.current && !document.querySelector('dialog[open]')) term.focus()
       })
       .catch(report)
     return () => {

@@ -34,6 +34,7 @@ import { SettingsService, validateDefaults } from './settings-service'
 import { appInfo } from './app-info'
 import { AgentService } from './agent-service'
 import { TerminalService } from './terminal-service'
+import { StartupService } from './startup-service'
 import { cloneRepository, validateCloneInput } from './clone'
 import { UpdateService } from './update-service'
 import { installAfterExit, takeInstallError } from './update-installer'
@@ -50,9 +51,11 @@ const workspaces = new Set<string>()
 const deletedWorkspaces = new Set<string>()
 const cloneDirectories = new Set<string>()
 let cloning = false
+let creatingWorktrees = 0
 let window: BrowserWindow | null = null
 let agents: AgentService | undefined
 let terminals: TerminalService | undefined
+let startups: StartupService | undefined
 let updates: UpdateService | undefined
 let windowTheme: 'light' | 'dark' = 'dark'
 const titleBarHeight = 43
@@ -86,6 +89,9 @@ app.whenReady().then(() => {
   const settings = new SettingsService(
     join(app.getPath('userData'), 'settings.json'),
   )
+  startups = new StartupService(join(app.getPath('userData'), 'startup-runs.json'), (snapshot) => {
+    if (window && !window.isDestroyed()) window.webContents.send('startup:event', snapshot)
+  })
   ipcMain.handle('settings:get', () => settings.get())
   ipcMain.handle('app:info', () => appInfo(app.isPackaged, app.getVersion()))
   ipcMain.handle('app:info-copy', () => {
@@ -183,6 +189,7 @@ app.whenReady().then(() => {
       throw new Error('업데이트 설치를 시작하고 있습니다.')
     const workspace = requireWorkspace(input?.workspace)
     await requireLinkedWorktree(workspace)
+    await startups!.requireReady(workspace)
     if (
       (await agents!.all()).some(
         (session) =>
@@ -215,6 +222,29 @@ app.whenReady().then(() => {
     requireTerminalSender(event)
     return terminals!.snapshot(id)
   })
+  ipcMain.handle('startup:snapshot', async (event, path: string) => {
+    requireTerminalSender(event)
+    await startups!.ready()
+    return startups!.snapshot(requireWorkspace(path))
+  })
+  ipcMain.handle('startup:run', async (event, projectPath: string, path: string, automatic?: boolean) => {
+    requireTerminalSender(event)
+    if (automatic !== undefined && typeof automatic !== 'boolean') throw new Error('잘못된 Startup 실행 옵션입니다.')
+    if (updates?.snapshot().status === 'installing') throw new Error('업데이트 설치를 시작하고 있습니다.')
+    const directory = await requireProject(projectPath)
+    const workspace = requireWorkspace(path)
+    const repository = await inspectRepository(directory)
+    if (!repository.worktrees.some((tree) => pathKey(tree.path) === pathKey(workspace)))
+      throw new Error('이 프로젝트에 연결된 Worktree를 선택해 주세요.')
+    await requireLinkedWorktree(workspace)
+    const defaults = (await settings.get()).projects[pathKey(directory)]
+    if (updates?.snapshot().status === 'installing') throw new Error('업데이트 설치를 시작하고 있습니다.')
+    return startups!.run(workspace, defaults?.startupScript ?? '', automatic)
+  })
+  ipcMain.handle('startup:stop', (event, path: string) => {
+    requireTerminalSender(event)
+    return startups!.stop(requireWorkspace(path))
+  })
   updates = new UpdateService({
     version: app.isPackaged
       ? app.getVersion()
@@ -232,9 +262,11 @@ app.whenReady().then(() => {
     beforeInstall: async () => {
       if (cloning)
         throw new Error('저장소 복제를 마친 후 설치해 주세요.')
+      if (creatingWorktrees) throw new Error('Worktree 생성을 마친 후 설치해 주세요.')
     },
     openInstaller: async (path, sha256) => {
       await restoredTerminals
+      await startups!.stopAll()
       await terminals!.prepareForUpdate()
       window?.webContents.session.flushStorageData()
       try {
@@ -293,6 +325,7 @@ app.whenReady().then(() => {
       throw new Error('업데이트 설치를 시작하고 있습니다.')
     const workspace = requireWorkspace(input?.workspace)
     await requireLinkedWorktree(workspace)
+    await startups!.requireReady(workspace)
     return agents!.send({ ...input, workspace })
   })
   ipcMain.handle('codex:interrupt', (_event, id: string) =>
@@ -337,11 +370,21 @@ app.whenReady().then(() => {
   ipcMain.handle(
     'worktree:create',
     async (_event, path: string, branch: string, baseRef?: string) => {
+      creatingWorktrees++
+      try {
       const directory = requireWorkspace(path)
+      if (updates?.snapshot().status === 'installing') throw new Error('업데이트 설치를 시작하고 있습니다.')
+      const defaults = (await settings.get()).projects[pathKey(directory)]
+      await startups!.ready()
       const tree = await createWorktree(directory, branch, baseRef)
       const worktreePath = resolve(tree.path)
       workspaces.add(worktreePath)
+      if (defaults?.startupAutoRun !== false && defaults?.startupScript?.trim())
+        await startups!.initialize(worktreePath, defaults.startupScript).catch(() => {
+          // 생성된 Worktree는 반환하고, 미완료 상태는 작업 화면에서 복구합니다.
+        })
       return { ...tree, path: worktreePath }
+      } finally { creatingWorktrees-- }
     },
   )
   ipcMain.handle(
@@ -378,7 +421,7 @@ app.whenReady().then(() => {
           (await inspectRepository(workspace)).totalChanges > 0
         )
           throw new Error('변경 사항을 삭제하려면 확인이 필요합니다.')
-        return terminals!.removeWorkspace(workspace, async () => {
+        return startups!.removeWorkspace(workspace, () => terminals!.removeWorkspace(workspace, async () => {
           const result = await removeWorktree(
             directory,
             workspace,
@@ -391,7 +434,7 @@ app.whenReady().then(() => {
             if (pathKey(path) === pathKey(workspace)) workspaces.delete(path)
           }
           return result
-        })
+        }))
       })
     },
   )
@@ -436,6 +479,7 @@ app.whenReady().then(() => {
     await terminals!.restoreAfterUpdate(async (workspace) => {
       const directory = requireWorkspace(workspace)
       await requireLinkedWorktree(directory)
+      await startups!.requireReady(directory)
     })
   })
   async function requireProject(path: string) {
@@ -612,7 +656,7 @@ app.on('before-quit', (event) => {
   void (async () => {
     // 터미널의 세션 ID를 저장한 뒤 관찰 연결을 닫습니다.
     try {
-      await terminals?.close()
+      await Promise.allSettled([startups?.close(), terminals?.close()])
     } finally {
       await agents.close()
     }

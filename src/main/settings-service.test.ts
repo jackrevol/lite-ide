@@ -90,3 +90,17 @@ test('손상되거나 지원하지 않는 설정 파일을 오류로 표시하�
     await rm(root, { recursive: true, force: true })
   }
 })
+
+test('여러 줄 Startup 스크립트와 자동 실행 설정을 UTF-8로 저장하고 잘못된 값을 거부한다', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'lite-ide-startup-settings-'))
+  const file = join(root, 'settings.json')
+  const defaults = { baseRef: 'HEAD', model: '', effort: '', startupScript: "echo '한글'\nnpm install", startupAutoRun: false }
+  try {
+    await new SettingsService(file).update(root, defaults)
+    assert.deepEqual((await new SettingsService(file).get()).projects[pathKey(root)], defaults)
+    assert.notEqual((await readFile(file))[0], 0xef)
+    for (const startupScript of [42, 'a'.repeat(30_001), '\0'])
+      assert.throws(() => validateDefaults({ ...defaults, startupScript }))
+    assert.throws(() => validateDefaults({ ...defaults, startupAutoRun: 'yes' }))
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
