@@ -1803,6 +1803,21 @@ dialog::backdrop {
   grid-template-columns: 1fr 1fr;
   gap: 12px;
 }
+.notification-settings-panel { margin-top: 24px; }
+.notification-settings-panel .dialog-actions { flex-wrap: wrap; }
+.notification-settings {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+.notification-settings .notification-toggle {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.notification-settings input[type='checkbox'] { width: auto; }
+.notification-settings input[type='range'] { padding: 0; }
 .settings-dialog {
   width: 680px;
   max-width: calc(100vw - 32px);

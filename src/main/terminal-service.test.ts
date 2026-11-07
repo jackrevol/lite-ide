@@ -7,6 +7,43 @@ import type { IPty } from 'node-pty'
 import { TerminalService, type PtyFactory } from './terminal-service.ts'
 import { ProcessService, type ProcessRecord } from './process-service.ts'
 import type { TerminalEvent } from '../shared/types.ts'
+import type { AttentionNotification } from './notification-service.ts'
+
+test('선택하지 않은 Codex 터미널도 OSC9를 수신하고 셸 출력은 알리지 않는다', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'lite-terminal-attention-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const sends: ((text: string) => void)[] = []
+  const launches: string[][] = []
+  const factory: PtyFactory = (_file, args) => {
+    launches.push(args as string[])
+    let exit = (_event: { exitCode: number }) => {}
+    return { onData: (receive: (text: string) => void) => { sends.push(receive); return { dispose() {} } },
+      onExit: (receive: typeof exit) => { exit = receive; return { dispose() {} } },
+      write() {}, resize() {}, kill: () => exit({ exitCode: 0 }),
+    } as unknown as IPty
+  }
+  const attention: AttentionNotification[] = []
+  const service = new TerminalService(join(directory, 'resume.json'), () => {}, factory, async () => '/codex',
+    undefined, undefined, undefined, (event) => attention.push(event))
+  t.after(() => service.close())
+  const input = { taskId: 'one', workspace: join(directory, 'one'), kind: 'codex' as const, cols: 80, rows: 24 }
+  await service.open(input)
+  await service.open({ ...input, taskId: 'background', workspace: join(directory, 'background') })
+  sends[1]('\x1b]9;Quest'); sends[1]('ion: reply?\x07')
+  assert.equal(attention[0].taskId, 'background')
+  assert.equal(attention[0].kind, 'question')
+  assert.equal(service.snapshot('background')!.output, '\x1b]9;Question: reply?\x07')
+  assert.doesNotThrow(() => structuredClone(service.snapshot('background')))
+  assert.ok(launches[0].includes('tui.notifications=["approval-requested","plan-mode-prompt","async-question"]'))
+  assert.ok(launches[0].includes('tui.notification_method="osc9"'))
+  assert.ok(launches[0].includes('tui.notification_condition="always"'))
+  await service.open({ ...input, kind: 'shell' })
+  sends[2]('\x1b]9;Question: shell?\x07')
+  assert.equal(attention.length, 1)
+  service.write('background', '1')
+  sends[1]('\x1b]9;Question: reply?\x07')
+  assert.equal(attention.length, 2)
+})
 
 test('터미널은 작업 경로당 하나이며 입력을 에코하지 않고 전환 시 이전 프로세스를 종료한다', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'lite-terminal-'))

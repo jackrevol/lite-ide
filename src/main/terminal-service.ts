@@ -4,6 +4,8 @@ import { dirname } from 'node:path'
 import { findCodex } from './codex-client.ts'
 import { pathKey } from './git.ts'
 import { ProcessService, type TerminalProcessRoot } from './process-service.ts'
+import { CodexNotificationParser } from './codex-notification-parser.ts'
+import type { AttentionNotification } from './notification-service.ts'
 import type {
   TerminalEvent,
   TerminalOpen,
@@ -16,6 +18,7 @@ type RunningTerminal = TerminalSnapshot & {
   input: TerminalOpen
   process?: pty.IPty
   exited?: Promise<void>
+  notificationParser?: CodexNotificationParser
 }
 export type PtyFactory = typeof pty.spawn
 
@@ -36,6 +39,7 @@ export class TerminalService {
   private processes: ProcessService
   private resolveThread?: (input: TerminalOpen, resuming: boolean) => Promise<string | undefined>
   private interruptThread?: (threadId: string) => Promise<void>
+  private attention?: (event: AttentionNotification) => void
 
   constructor(
     file: string,
@@ -45,6 +49,7 @@ export class TerminalService {
     resolveThread?: (input: TerminalOpen, resuming: boolean) => Promise<string | undefined>,
     interruptThread?: (threadId: string) => Promise<void>,
     processes = new ProcessService(),
+    attention?: (event: AttentionNotification) => void,
   ) {
     this.file = file
     this.emit = emit
@@ -53,6 +58,7 @@ export class TerminalService {
     this.resolveThread = resolveThread
     this.interruptThread = interruptThread
     this.processes = processes
+    this.attention = attention
     this.loaded = Promise.all([
       readFile(file, 'utf8')
         .then((data) => {
@@ -79,7 +85,7 @@ export class TerminalService {
   snapshot(id: string): TerminalSnapshot | null {
     const terminal = this.terminals.get(id)
     if (!terminal) return null
-    const { process: _process, exited: _exited, input: _input, ...snapshot } = terminal
+    const { process: _process, exited: _exited, input: _input, notificationParser: _parser, ...snapshot } = terminal
     return snapshot
   }
 
@@ -88,6 +94,10 @@ export class TerminalService {
       [...this.terminals.values()].some((terminal) => terminal.running) ||
       this.opening.size > 0
     )
+  }
+
+  hasRunningCodex(workspace: string) {
+    return [...this.terminals.values()].some((terminal) => terminal.running && terminal.kind === 'codex' && pathKey(terminal.workspace) === pathKey(workspace))
   }
 
   async open(input: TerminalOpen): Promise<TerminalSnapshot> {
@@ -169,6 +179,12 @@ export class TerminalService {
           'tui.alternate_screen="always"',
           '--config',
           'tui.fullscreen_transcript=true',
+          '--config',
+          'tui.notifications=["approval-requested","plan-mode-prompt","async-question"]',
+          '--config',
+          'tui.notification_method="osc9"',
+          '--config',
+          'tui.notification_condition="always"',
           '--cd',
           input.workspace,
           '--dangerously-bypass-approvals-and-sandbox',
@@ -228,7 +244,13 @@ export class TerminalService {
     terminal.pid = child.pid
     terminal.startedAt = Date.now()
     this.terminals.set(input.taskId, terminal)
+    let attentionSequence = 0
+    if (input.kind === 'codex') terminal.notificationParser = new CodexNotificationParser((kind) => {
+      this.attention?.({ taskId: input.taskId, workspace: input.workspace, kind,
+        source: 'terminal', identity: `${terminal.generation}:${++attentionSequence}` })
+    })
     const data = child.onData((chunk) => {
+      terminal.notificationParser?.feed(chunk)
       terminal.output = (terminal.output + chunk).slice(-outputLimit)
       this.emit({
         taskId: input.taskId,
@@ -345,6 +367,7 @@ export class TerminalService {
     if (!terminal?.process || !terminal.running)
       throw new Error('터미널이 종료되었습니다. 다시 연결해 주세요.')
     terminal.process.write(data)
+    if (data) terminal.notificationParser?.answered()
   }
 
   resize(id: string, cols: number, rows: number) {

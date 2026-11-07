@@ -495,6 +495,25 @@ try {
   assert.equal(await page.getByText('서브에이전트 작업 설명', { exact: true }).count(), 1)
   assert.equal(await workTabs.getByRole('tab', { name: /다른 워크트리 세션/ }).count(), 0)
   assert.equal(await page.getByLabel('세션 추가 지시').count(), 0)
+  // OS 토스트를 띄우지 않고 같은 클릭 이벤트로 작업·세션 선택을 검증합니다.
+  await app.evaluate(({ BrowserWindow }, workspace) => {
+    BrowserWindow.getAllWindows()[0].webContents.send('notifications:click', { workspace, sessionId: 'ui-session' })
+  }, first.path)
+  await page.getByText('실제 세션 본문 표시', { exact: true }).waitFor()
+  await app.evaluate(({ BrowserWindow }, target) => {
+    BrowserWindow.getAllWindows()[0].webContents.send('notifications:click', target)
+  }, { workspace: second.path, taskId: second.id })
+  await until(() => page.evaluate((id) => JSON.parse(localStorage.getItem('lite-ide.workspace.v3')).taskId === id, second.id), '알림 클릭 작업 전환')
+  await readyTerminal()
+  await app.evaluate(({ BrowserWindow }, target) => {
+    BrowserWindow.getAllWindows()[0].webContents.send('notifications:click', target)
+  }, { workspace: first.path, taskId: first.id })
+  await until(() => page.evaluate((id) => JSON.parse(localStorage.getItem('lite-ide.workspace.v3')).taskId === id, first.id), '알림 클릭 원래 작업 복원')
+  await readyTerminal()
+  await app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0].webContents.send('notifications:click', { workspace: '/deleted-workspace', taskId: 'deleted-task' })
+  })
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('lite-ide.workspace.v3')).taskId), first.id)
   await workTabs.getByRole('tab', { name: /관찰 세션/ }).click()
   await page.getByText('실제 세션 본문 표시', { exact: true }).waitFor()
   await workTabs.getByRole('tab', { name: new RegExp(first.name) }).click()
@@ -619,6 +638,26 @@ try {
   await page.screenshot({ path: 'artifacts/workspace-terminal-compact.png' })
   await page.keyboard.press('Control+,')
   const settings = page.getByRole('dialog', { name: '설정', exact: true })
+  await settings.getByRole('tab', { name: '일반', exact: true }).click()
+  const notificationToggle = settings.getByRole('checkbox', { name: '데스크톱 알림 사용', exact: true })
+  await notificationToggle.uncheck()
+  await settings.getByRole('combobox', { name: '알림음', exact: true }).selectOption('glass')
+  await settings.getByRole('slider', { name: '알림음 볼륨', exact: true }).evaluate((input) => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '35')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await settings.getByRole('button', { name: '미리듣기', exact: true }).click()
+  await settings.getByRole('status').filter({ hasText: '선택한 알림음을' }).waitFor()
+  const beforeCancel = await page.evaluate(() => window.desktop.getSettings())
+  await settings.getByRole('button', { name: '음원 파일 선택', exact: true }).click()
+  assert.deepEqual(await page.evaluate(() => window.desktop.getSettings()), beforeCancel)
+  await settings.getByRole('button', { name: '알림 설정 저장', exact: true }).click()
+  await settings.getByRole('status').filter({ hasText: '알림 설정을 저장' }).waitFor()
+  await settings.getByRole('checkbox', { name: '데스크톱 알림 사용', exact: true }).scrollIntoViewIfNeeded()
+  await page.screenshot({ path: 'artifacts/notification-settings.png' })
+  const notificationSettings = await page.evaluate(() => window.desktop.getSettings())
+  assert.deepEqual(notificationSettings.notifications, { enabled: false, soundEnabled: true, sound: 'glass', volume: 35 })
+  assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), 1)
   await settings
     .getByRole('tab', { name: '프로그램 정보', exact: true })
     .click()
@@ -630,6 +669,11 @@ try {
   await settings.getByRole('button', { name: '닫기', exact: true }).click()
   await page.getByRole('button', { name: 'Codex 터미널', exact: true }).click()
   await waitOutput(first.id, 'fixture · resume')
+  assert.deepEqual((await page.evaluate(() => window.desktop.getSettings())).notifications,
+    { enabled: false, soundEnabled: true, sound: 'glass', volume: 35 })
+  await command('/question')
+  await waitOutput(first.id, 'QUESTION_WAITING')
+  assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), 1)
   await app.close()
   app = await launch()
   page = await app.firstWindow()
@@ -638,6 +682,8 @@ try {
   await page.getByRole('heading', { name: '통합 작업', exact: true }).waitFor()
   await waitOutput(first.id, 'fixture · resume')
   assert.equal((await tasks()).length, 1)
+  assert.deepEqual((await page.evaluate(() => window.desktop.getSettings())).notifications,
+    { enabled: false, soundEnabled: true, sound: 'glass', volume: 35 })
   assert.equal((await tasks())[0].path, first.path)
   // Git에서 이미 제거된 작업을 재시작 후에도 보존하고, 파일을 건드리지 않고 정리합니다.
   await createDraftTask()

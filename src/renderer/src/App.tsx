@@ -133,6 +133,18 @@ export function App() {
   useEffect(() => window.desktop.onSession((session) => {
     setSessions((previous) => ({ ...previous, [session.id]: session }))
   }), [])
+  useEffect(() => {
+    const activate = (target: import('../../shared/types').NotificationTarget) => {
+      const task = state.tasks.find((item) => item.id === target.taskId || samePath(item.path, target.workspace))
+      if (!task) return
+      setSelectedTabs((tabs) => ({ ...tabs, [task.id]: target.sessionId ? `session-${target.sessionId}` : task.id }))
+      setState((previous) => ({ ...previous, project: task.project, taskId: task.id }))
+      setShowSettings(false)
+    }
+    const unsubscribe = window.desktop.onNotificationClick(activate)
+    if (ready) void window.desktop.takePendingNotification().then((target) => { if (target) activate(target) }).catch(() => {})
+    return unsubscribe
+  }, [ready, state.tasks])
   useEffect(() => window.desktop.onTerminal((event) => {
     if (event.type !== 'exit') return
     setTerminals((previous) => {

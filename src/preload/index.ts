@@ -25,6 +25,16 @@ const api: DesktopApi = {
     }
   },
   getSettings: () => ipcRenderer.invoke('settings:get'),
+  updateNotificationSettings: (settings) => ipcRenderer.invoke('settings:notifications-update', settings),
+  chooseNotificationSound: () => ipcRenderer.invoke('notifications:choose-sound'),
+  previewNotificationSound: (settings) => ipcRenderer.invoke('notifications:preview', settings),
+  notificationStatus: () => ipcRenderer.invoke('notifications:status'),
+  takePendingNotification: () => ipcRenderer.invoke('notifications:take-pending'),
+  onNotificationClick: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, target: import('../shared/types').NotificationTarget) => listener(target)
+    ipcRenderer.on('notifications:click', handler)
+    return () => { ipcRenderer.removeListener('notifications:click', handler) }
+  },
   updateProjectSettings: (path, defaults) =>
     ipcRenderer.invoke('settings:project-update', path, defaults),
   resetProjectSettings: (path) =>

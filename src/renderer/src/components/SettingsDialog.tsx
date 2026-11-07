@@ -9,6 +9,7 @@ import type {
 import { Button } from './ui/button'
 import { UpdatePanel } from './UpdatePanel'
 import { BaseBranchSelect, useBranches } from './BaseBranchSelect'
+import { NotificationSettingsPanel } from './NotificationSettingsPanel'
 
 export const projectSettingsKey = (path: string) =>
   window.desktop.platform === 'win32' ? path.toLowerCase() : path
@@ -182,6 +183,8 @@ export function SettingsDialog({
                 <option value="light">라이트</option>
               </select>
             </label>
+            {settings && <NotificationSettingsPanel initial={settings.notifications}
+              onSaved={(notifications) => setSettings({ ...settings, notifications })} />}
             <h3>앱 업데이트</h3>
             <UpdatePanel />
           </>

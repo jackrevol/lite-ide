@@ -6,6 +6,7 @@ import {
   ipcMain,
   nativeTheme,
   net,
+  Notification,
   shell,
 } from 'electron'
 import { basename, isAbsolute, join, relative, resolve } from 'node:path'
@@ -34,6 +35,7 @@ import { SettingsService, validateDefaults } from './settings-service'
 import { appInfo } from './app-info'
 import { AgentService } from './agent-service'
 import { TerminalService } from './terminal-service'
+import { NotificationService } from './notification-service'
 import { cloneRepository, validateCloneInput } from './clone'
 import { UpdateService } from './update-service'
 import { installAfterExit, takeInstallError } from './update-installer'
@@ -44,6 +46,8 @@ import type {
   TerminalOpen,
   DeleteTaskOptions,
   StopProcessInput,
+  NotificationSettings,
+  NotificationTarget,
 } from '../shared/types'
 
 const projects = new Set<string>()
@@ -55,6 +59,12 @@ let window: BrowserWindow | null = null
 let agents: AgentService | undefined
 let terminals: TerminalService | undefined
 let updates: UpdateService | undefined
+let audioWindow: BrowserWindow | null = null
+let audioReady: Promise<void> | undefined
+let audioPlayback = Promise.resolve()
+const activeNotifications = new Set<Notification>()
+let pendingNotificationTarget: NotificationTarget | undefined
+let notificationRendererReady = false
 let windowTheme: 'light' | 'dark' = 'dark'
 const titleBarHeight = 43
 const iconDirectory = app.isPackaged
@@ -79,6 +89,7 @@ function requireWorkspace(value: unknown): string {
 }
 
 app.setName('Lite IDE')
+if (process.platform === 'win32') app.setAppUserModelId('dev.jackrevol.liteide')
 app.setPath('userData', join(app.getPath('appData'), 'lite-ide'))
 if (process.env.LITE_IDE_HEADLESS === '1' && process.env.LITE_IDE_TEST_DATA)
   app.setPath('userData', process.env.LITE_IDE_TEST_DATA)
@@ -87,6 +98,90 @@ app.whenReady().then(() => {
   const settings = new SettingsService(
     join(app.getPath('userData'), 'settings.json'),
   )
+  const notifications = new NotificationService(join(app.getPath('userData'), 'notification-sounds'),
+    () => settings.get(), {
+      supported: () => Notification.isSupported(),
+      show: (title, body, click) => {
+        const notification = new Notification({ title, body, silent: true })
+        activeNotifications.add(notification)
+        notification.on('close', () => activeNotifications.delete(notification))
+        notification.on('failed', () => activeNotifications.delete(notification))
+        notification.on('click', click)
+        notification.show()
+      },
+      play: (dataUrl, volume) => {
+        const operation = audioPlayback.catch(() => {}).then(async () => {
+        if (quitting) return
+        if (!audioWindow || audioWindow.isDestroyed()) {
+          audioWindow = new BrowserWindow({ show: false, focusable: false, skipTaskbar: true, width: 1, height: 1,
+            webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false,
+              autoplayPolicy: 'no-user-gesture-required', backgroundThrottling: false } })
+          audioWindow.on('closed', () => { audioWindow = null; audioReady = undefined })
+          audioWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+          audioWindow.webContents.on('will-navigate', (event) => event.preventDefault())
+          audioReady = audioWindow.loadURL('data:text/html,' + encodeURIComponent(
+            '<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; media-src data:"><audio></audio>'))
+        }
+        await audioReady
+        if (!audioWindow || audioWindow.isDestroyed()) throw new Error('알림음 재생 창이 닫혔습니다.')
+        await audioWindow.webContents.executeJavaScript(`(async () => {
+          const audio = document.querySelector('audio'); audio.pause();
+          clearTimeout(window.stopAudio); clearTimeout(window.startAudio);
+          audio.src = ${JSON.stringify(dataUrl)}; audio.volume = ${volume};
+          try {
+            await Promise.race([audio.play(), new Promise((_, reject) => { window.startAudio = setTimeout(() => reject(new Error('음원 재생 시간이 초과되었습니다.')), 5000) })]);
+            window.stopAudio = setTimeout(() => { audio.pause(); audio.removeAttribute('src'); audio.load(); }, 5000);
+          } catch (error) {
+            audio.pause(); audio.removeAttribute('src'); audio.load(); throw error;
+          } finally { clearTimeout(window.startAudio); }
+        })()`)
+          .catch(() => { throw new Error('알림음을 재생할 수 없습니다. 다른 음원 파일을 선택해 주세요.') })
+        })
+        audioPlayback = operation
+        return operation
+      },
+      activate: (target) => {
+        if (process.env.LITE_IDE_HEADLESS === '1') return
+        pendingNotificationTarget = target
+        if (!window || window.isDestroyed()) createWindow()
+        else {
+          if (window.isMinimized()) window.restore()
+          window.show(); window.focus()
+          if (notificationRendererReady) {
+            window.webContents.send('notifications:click', target)
+            pendingNotificationTarget = undefined
+          }
+        }
+      },
+    })
+  // 시작 시 저장된 음원만 남기므로 선택 취소·저장 실패 시 기존 파일이 유지됩니다.
+  const soundsReady = notifications.cleanupSounds().catch(() => {})
+  ipcMain.handle('settings:notifications-update', async (event, value: NotificationSettings) => {
+    requireTerminalSender(event)
+    await soundsReady
+    return settings.updateNotifications(value)
+  })
+  ipcMain.handle('notifications:status', (event) => { requireTerminalSender(event); return notifications.status() })
+  ipcMain.handle('notifications:take-pending', (event) => {
+    requireTerminalSender(event)
+    notificationRendererReady = true
+    const target = pendingNotificationTarget ?? null
+    pendingNotificationTarget = undefined
+    return target
+  })
+  ipcMain.handle('notifications:preview', (event, value: NotificationSettings) => {
+    requireTerminalSender(event)
+    return notifications.preview(value)
+  })
+  ipcMain.handle('notifications:choose-sound', async (event) => {
+    requireTerminalSender(event)
+    await soundsReady
+    if (process.env.LITE_IDE_HEADLESS === '1') return null
+    const selected = await dialog.showOpenDialog(window!, { title: '사용자 알림음 선택',
+      properties: ['openFile'], filters: [{ name: '음원 파일', extensions: ['wav', 'mp3', 'ogg'] }] })
+    if (selected.canceled || !selected.filePaths[0]) return null
+    return notifications.importSound(selected.filePaths[0])
+  })
   ipcMain.handle('settings:get', () => settings.get())
   ipcMain.handle('app:info', () => appInfo(app.isPackaged, app.getVersion()))
   ipcMain.handle('app:info-copy', () => {
@@ -118,6 +213,7 @@ app.whenReady().then(() => {
   agents = new AgentService(
     join(app.getPath('userData'), 'sessions.json'),
     (session) => {
+      notifications.observeSession(session, terminals?.hasRunningCodex(session.workspace))
       if (window && !window.isDestroyed())
         window.webContents.send('codex:session', session)
     },
@@ -171,6 +267,8 @@ app.whenReady().then(() => {
       if (turn?.status === 'inProgress')
         await agents!.client.request('turn/interrupt', { threadId, turnId: turn.id })
     },
+    undefined,
+    (event) => notifications.notify(event),
   )
   let restoredTerminals = Promise.resolve()
   function requireTerminalSender(event: Electron.IpcMainInvokeEvent) {
@@ -565,11 +663,12 @@ app.whenReady().then(() => {
 
   createWindow()
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (!window || window.isDestroyed()) createWindow()
   })
 })
 
 function createWindow(): void {
+  notificationRendererReady = false
   window = new BrowserWindow({
     width: 1320,
     height: 850,
@@ -602,8 +701,10 @@ function createWindow(): void {
   if (process.platform !== 'darwin') window.removeMenu()
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event) => event.preventDefault())
+  window.webContents.on('did-start-loading', () => { notificationRendererReady = false })
   window.on('closed', () => {
     window = null
+    if (process.platform !== 'darwin') audioWindow?.destroy()
   })
   if (process.env.ELECTRON_RENDERER_URL)
     void window.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -620,6 +721,7 @@ app.on('before-quit', (event) => {
   event.preventDefault()
   quitting = true
   updates?.cancel()
+  audioWindow?.destroy()
   void (async () => {
     // 터미널의 세션 ID를 저장한 뒤 관찰 연결을 닫습니다.
     try {

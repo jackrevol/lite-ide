@@ -14,6 +14,9 @@ function run(command) {
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { windowsHide: true, stdio: 'ignore' })
     process.stdout.write(`CHILD_PID:${child.pid}\r\n`)
     child.on('exit', () => process.stdout.write(`CHILD_EXIT:${child.pid}\r\n`))
+  } else if (command === '/question') {
+    process.stdout.write('\x1b]9;Question: fixture reply?\x07')
+    process.stdout.write('QUESTION_WAITING\r\n')
   } else if (command === '/help')
     process.stdout.write(
       'Commands: /help /model /status /slow /exit · ! shell\r\n',

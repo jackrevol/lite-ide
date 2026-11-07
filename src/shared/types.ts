@@ -109,6 +109,12 @@ export interface DesktopApi {
   stopProcess?(input: StopProcessInput): Promise<WorkspaceProcessSnapshot>
   onTerminal(listener: (event: TerminalEvent) => void): () => void
   getSettings(): Promise<AppSettings>
+  updateNotificationSettings(settings: NotificationSettings): Promise<AppSettings>
+  chooseNotificationSound(): Promise<CustomNotificationSound | null>
+  previewNotificationSound(settings: NotificationSettings): Promise<void>
+  notificationStatus(): Promise<{ supported: boolean }>
+  onNotificationClick(listener: (target: NotificationTarget) => void): () => void
+  takePendingNotification(): Promise<NotificationTarget | null>
   updateProjectSettings(
     projectPath: string,
     defaults: ProjectDefaults,
@@ -175,6 +181,24 @@ export interface ProjectDefaults {
 export interface AppSettings {
   schemaVersion: 1
   projects: Record<string, ProjectDefaults>
+  notifications: NotificationSettings
+}
+export type NotificationSound = 'chime' | 'bell' | 'glass' | 'pulse' | 'gentle' | 'custom'
+export interface CustomNotificationSound {
+  fileName: string
+  name: string
+}
+export interface NotificationSettings {
+  enabled: boolean
+  soundEnabled: boolean
+  sound: NotificationSound
+  volume: number
+  customSound?: CustomNotificationSound
+}
+export interface NotificationTarget {
+  workspace: string
+  taskId?: string
+  sessionId?: string
 }
 export interface AppInfo {
   name: string
