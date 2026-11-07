@@ -10,7 +10,17 @@ let input = '',
 const prompt = () => process.stdout.write('codex> ')
 function run(command) {
   if (command === '/exit') process.exit(0)
-  if (command === '/child') {
+  if (command === '/cursor-fragment') {
+    process.stdout.write('\x1b[5')
+    setTimeout(() => { process.stdout.write(' q\x1b[?12;25hCURSOR_DONE:/cursor-fragment\r\n'); prompt() }, 40)
+    return
+  }
+  if (command.startsWith('/cursor-')) {
+    const sequences = { '/cursor-block': '\x1b[1 q', '/cursor-underline': '\x1b[3 q', '/cursor-bar': '\x1b[5 q', '/cursor-enable': '\x1b[?12;25h', '/cursor-hide': '\x1b[?25l', '/cursor-show': '\x1b[?25h', '/cursor-position': '\x1b7\x1b[2;4H', '/cursor-restore': '\x1b8' }
+    const marker = `CURSOR_DONE:${command}\r\n`
+    const sequence = sequences[command] ?? ''
+    process.stdout.write(command === '/cursor-position' || command === '/cursor-restore' ? marker + sequence : sequence + marker)
+  } else if (command === '/child') {
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { windowsHide: true, stdio: 'ignore' })
     process.stdout.write(`CHILD_PID:${child.pid}\r\n`)
     child.on('exit', () => process.stdout.write(`CHILD_EXIT:${child.pid}\r\n`))

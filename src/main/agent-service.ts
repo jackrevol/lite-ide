@@ -825,9 +825,10 @@ export class AgentService {
           session.observationError = this.terminalExitWarning(session)
       }
       // 앱 연결이 없는 동안 생성된 자식도 저장된 협업 이벤트에서 복원합니다.
+      const knownThreads = new Set([...this.sessions.values()].map((item) => item.threadId))
       for (const turn of list(thread.turns))
         for (const item of list(record(turn).items))
-          this.trackSubagents(session, record(item))
+          this.trackSubagents(session, record(item), knownThreads)
       this.publish(session, false)
     })()
       .catch((error: unknown) => {
@@ -904,9 +905,14 @@ export class AgentService {
     if (session.requests.length) session.status = 'waiting'
   }
 
-  private trackSubagents(parent: AgentSession, item: Record<string, unknown>) {
+  private trackSubagents(parent: AgentSession, item: Record<string, unknown>, knownThreads?: ReadonlySet<string | undefined>) {
+    // 과거 협업 기록은 미발견 자식만 복원하고 직접 관측한 현재 상태를 되돌리지 않습니다.
+    const discover = (threadId: string) => {
+      if (knownThreads?.has(threadId)) return undefined
+      return this.discoverSubagent(parent, threadId)
+    }
     if (item.type === 'subAgentActivity') {
-      const child = this.discoverSubagent(parent, string(item.agentThreadId))
+      const child = discover(string(item.agentThreadId))
       if (!child) return
       child.nickname = string(item.agentPath) || child.nickname
       child.title = child.nickname || child.title
@@ -924,7 +930,7 @@ export class AgentService {
         ...Object.keys(states),
       ])
       for (const threadId of ids) {
-        const child = this.discoverSubagent(parent, threadId)
+        const child = discover(threadId)
         if (!child) continue
         if (item.tool === 'spawnAgent') {
           child.task = string(item.prompt) || child.task

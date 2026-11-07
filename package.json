@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck && electron-vite build",
     "start": "electron-vite preview",
-    "test": "node --experimental-strip-types --test src/main/git.test.ts src/main/settings-service.test.ts src/main/startup-service.test.ts src/main/agent-service.test.ts src/main/subagent-service.test.ts src/main/codex-client.test.ts src/main/update-service.test.ts src/main/update-installer.test.ts src/renderer/src/lib/workspace-state.test.ts src/renderer/src/lib/file-tree.test.ts src/main/terminal-service.test.ts src/main/process-service.test.ts src/renderer/src/lib/workspace-sessions.test.ts src/main/codex-notification-parser.test.ts src/main/notification-service.test.ts",
+    "test": "node --experimental-strip-types --test src/main/git.test.ts src/main/settings-service.test.ts src/main/startup-service.test.ts src/main/agent-service.test.ts src/main/subagent-service.test.ts src/main/codex-client.test.ts src/main/update-service.test.ts src/main/update-installer.test.ts src/renderer/src/lib/workspace-state.test.ts src/renderer/src/lib/file-tree.test.ts src/renderer/src/lib/steady-cursor.test.ts src/main/terminal-service.test.ts src/main/process-service.test.ts src/renderer/src/lib/workspace-sessions.test.ts src/main/codex-notification-parser.test.ts src/main/notification-service.test.ts",
     "test:ui": "node scripts/check-ui.mjs",
     "test:codex": "node scripts/check-codex.mjs",
     "build:icons": "electron scripts/build-icons.cjs",

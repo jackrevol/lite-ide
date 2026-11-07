@@ -41,7 +41,7 @@ git('add', 'newer.txt')
 git('-c', 'user.name=UI Test', '-c', 'user.email=test@example.invalid',
   'commit', '-m', 'newer fixture')
 await mkdir('artifacts', { recursive: true })
-const launch = () =>
+const launch = (environment = {}) =>
   electron.launch({
     args: [resolve('out/main/index.js')],
     env: {
@@ -51,6 +51,7 @@ const launch = () =>
       LITE_IDE_TEST_CODEX: resolve('scripts/fixtures/codex-server.mjs'),
       LITE_IDE_TEST_TERMINAL: resolve('scripts/fixtures/codex-terminal.mjs'),
       LITE_IDE_TEST_NODE: process.execPath,
+      ...environment,
     },
   })
 let app = await launch()
@@ -203,6 +204,22 @@ try {
   page = await app.firstWindow()
   observeErrors(page)
   page.setDefaultTimeout(15000)
+  if (process.argv.includes('--cursor-only') || process.argv.includes('--compact-only')) {
+    const task = await setupFocusedTerminal()
+    if (process.argv.includes('--compact-only')) {
+      await command('/child')
+      await waitOutput(task.id, 'CHILD_PID:')
+      await page.getByRole('button', { name: '프로세스', exact: true }).click()
+      await page.locator('.process-table').waitFor()
+      await checkCompactProcessLayout(task)
+    } else {
+      await checkRemoteCursor()
+      await checkMiddleInsertion(task)
+    }
+    assert.deepEqual(errors, [])
+    assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible()), false)
+    console.log('focused 숨김 UI 검증 통과')
+  } else {
   await page
     .getByRole('heading', { name: '작업 터미널을 시작하세요' })
     .waitFor()
@@ -433,10 +450,8 @@ try {
   await page.getByLabel('터미널 검색어').fill(unique)
   await page.waitForFunction(() => document.querySelector('.terminal-search-count')?.textContent.includes('1 / 1'))
   await page.getByLabel('터미널 검색어').press('Escape')
-  const oldCols = (await snapshot(first.id)).cols
-  await page.getByRole('button', { name: '터미널 글자 확대', exact: true }).click()
-  await until(async () => (await snapshot(first.id)).cols < oldCols, '터미널 확대에 맞춰 PTY 크기 갱신')
-  await page.getByRole('button', { name: /글자 크기 .*기본값으로 복원/ }).click()
+  await checkRemoteCursor()
+  await checkMiddleInsertion(first)
   // 출력이 진행되는 동안 새로 붙어도 스냅샷과 이벤트를 중복 렌더링하지 않습니다.
   await page.reload()
   await readyTerminal()
@@ -547,7 +562,8 @@ try {
     .getByRole('textbox', { name: '작업 이름', exact: true })
     .fill('통합 작업')
   await rename.getByRole('button', { name: '저장', exact: true }).click()
-  await page.getByRole('heading', { name: '통합 작업', exact: true }).waitFor()
+  await page.getByRole('tab', { name: '통합 작업', exact: true }).waitFor()
+  assert.equal(await page.locator('.startup-panel, .agent-heading, .terminal-toolbar').count(), 0)
   assert.equal(
     (await tasks()).find((task) => task.id === first.id).name,
     '통합 작업',
@@ -555,7 +571,7 @@ try {
   assert.equal(await page.getByRole('tab', { name: /통합 작업/ }).count(), 1)
   await page.screenshot({ path: 'artifacts/workspace-terminal.png' })
   // 일반 셸은 동일한 작업 폴더에서 실제 명령을 실행합니다.
-  await page.getByRole('button', { name: '셸 터미널', exact: true }).click()
+  await taskAction(first, '셸 터미널')
   await until(
     async () => (await snapshot(first.id))?.kind === 'shell',
     '셸 전환',
@@ -731,7 +747,7 @@ try {
     JSON.parse(await readFile('package.json', 'utf8')).version,
   )
   await settings.getByRole('button', { name: '닫기', exact: true }).click()
-  await page.getByRole('button', { name: 'Codex 터미널', exact: true }).click()
+  await taskAction(first, 'Codex 터미널')
   await waitOutput(first.id, 'fixture · resume')
   assert.deepEqual((await page.evaluate(() => window.desktop.getSettings())).notifications,
     { enabled: false, soundEnabled: true, sound: 'glass', volume: 35 })
@@ -744,7 +760,7 @@ try {
   observeErrors(page)
   page.setDefaultTimeout(15000)
   await readyTerminal()
-  await page.getByRole('heading', { name: '통합 작업', exact: true }).waitFor()
+  await page.getByRole('tab', { name: '통합 작업', exact: true }).waitFor()
   await waitOutput(first.id, 'fixture · resume')
   assert.equal((await tasks()).length, 1)
   assert.deepEqual((await page.evaluate(() => window.desktop.getSettings())).notifications,
@@ -772,6 +788,7 @@ try {
   assert.equal(await readFile(join(stale.path, '보존.txt'), 'utf8'), '남아 있는 파일')
   assert.ok(git('branch', '--list', stale.branch).trim())
   await checkStartupFlow()
+  await checkPeriodicTabs()
   assert.deepEqual(errors, [])
   assert.equal(
     await app.evaluate(({ BrowserWindow }) =>
@@ -782,6 +799,7 @@ try {
   console.log(
     'UI 검증 통과: 프로젝트/탭 +·단축키 생성 창·취소 시 작업/Worktree 보존, 기준 브랜치 기본값 저장·작업별 변경·실제 생성 커밋 확인, 실제 PTY 셸 명령, Codex 터미널 명령·Ctrl+C, 입력/재연결 출력 중복 방지, 탭 전환과 백그라운드 출력, 작업·Worktree 단일 이름/삭제, 변경 사항 1회 확인 삭제·취소 시 보존·프로세스 종료·브랜치 삭제, 재시작 복원, 패널 조절·960px·라이트 테마·타이틀바·설정·diff. 창을 숨김 상태로 유지했습니다.',
   )
+  }
 } catch (error) {
   if (page && !page.isClosed()) {
     await page.screenshot({ path: 'artifacts/workspace-terminal-failure.png' })
@@ -851,6 +869,11 @@ async function checkStartupFlow() {
   await page.locator('.task-row').and(page.getByTitle(original.path, { exact: true })).click()
   await until(async () => (await startup(successful))?.status === 'completed', 'Startup 성공')
   await waitOutput(successful.id, 'FIRST_PROMPT_Startup 성공')
+  await page.locator('.task-row').and(page.getByTitle(successful.path, { exact: true })).click()
+  await readyTerminal()
+  await waitScreen('FIRST_PROMPT_Startup 성공')
+  assert.equal(await page.locator('.startup-panel, .agent-heading, .terminal-toolbar').count(), 0)
+  await page.screenshot({ path: 'artifacts/terminal-clean.png' })
   assert.ok((await readFile(join(successful.path, 'startup-ready.txt'), 'utf8')).includes('설치 완료'))
   // 실패한 초기화는 에이전트 호출 없이 로그와 재시도 경로를 제공합니다.
   await setScript(win ? "Write-Output 'STARTUP_FAILED'; exit 7" : "printf 'STARTUP_FAILED\\n'; exit 7")
@@ -864,7 +887,7 @@ async function checkStartupFlow() {
   page = await app.firstWindow()
   observeErrors(page)
   page.setDefaultTimeout(15000)
-  await page.getByRole('heading', { name: 'Startup 실패', exact: true }).waitFor()
+  await page.getByRole('tab', { name: 'Startup 실패', exact: true }).waitFor()
   await page.getByText(/초기화가 완료되지 않아 에이전트를 시작하지 않았습니다/).waitFor()
   assert.equal((await startup(failed)).status, 'stopped')
   await assertBlocked(failed)
@@ -872,6 +895,7 @@ async function checkStartupFlow() {
   await page.getByRole('button', { name: 'Startup 실행', exact: true }).click()
   await readyTerminal()
   await waitOutput(failed.id, 'FIRST_PROMPT_Startup 실패')
+  assert.equal(await page.locator('.startup-panel').count(), 0)
   assert.match((await startup(failed)).output, /LATEST_SCRIPT_RECOVERED/)
   // 자동 실행을 꺼 둔 프로젝트는 기존처럼 바로 에이전트를 시작합니다.
   await setScript(win ? 'Start-Sleep -Seconds 60' : 'sleep 60', false)
@@ -937,7 +961,8 @@ async function checkBackgroundRefresh(task) {
 }
 
 async function checkCompactProcessLayout(task) {
-  assert.equal(await page.locator('.startup-panel').count(), 1)
+  assert.equal(await page.locator('.startup-panel').count(), 0)
+  assert.equal(await page.locator('.agent-heading, .terminal-toolbar').count(), 0)
   assert.equal(await page.locator('.process-panel').count(), 1)
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(960, 600))
   try {
@@ -962,7 +987,190 @@ async function checkCompactProcessLayout(task) {
     await waitOutput(task.id, 'COMPACT_PROCESS_INPUT_OK')
     await waitScreen('COMPACT_PROCESS_INPUT_OK')
     await page.screenshot({ path: 'artifacts/process-panel-compact.png' })
+    if (process.argv.includes('--compact-only')) {
+      for (const theme of ['light', 'dark']) {
+        const nextThemeButton = theme === 'light' ? '라이트 테마' : '다크 테마'
+        await page.getByRole('button', { name: nextThemeButton, exact: true }).click()
+        await until(async () => page.evaluate((theme) => {
+          const viewport = document.querySelector('.task-terminal-slot:not([hidden]) .xterm-viewport')
+          return getComputedStyle(viewport).backgroundColor === (theme === 'dark' ? 'rgb(24, 24, 27)' : 'rgb(255, 255, 255)')
+        }, theme), `${theme} 터미널 viewport 배경`)
+        console.log('TERMINAL VIEWPORT', theme, await page.locator('.task-terminal-slot:not([hidden]) .xterm-viewport').evaluate((element) => getComputedStyle(element).backgroundColor))
+        await page.screenshot({ path: `artifacts/process-panel-compact-${theme}.png` })
+      }
+    }
+  } catch (cause) {
+    console.error('COMPACT METRICS', await page.evaluate(() => Object.fromEntries(['.agent-task-content', '.task-terminal-slot:not([hidden])', '.task-terminal-slot:not([hidden]) .task-terminal', '.task-terminal-slot:not([hidden]) .terminal-host', '.task-terminal-slot:not([hidden]) .xterm', '.task-terminal-slot:not([hidden]) .xterm-screen', '.process-panel'].map((selector) => {
+      const element = document.querySelector(selector)
+      const rect = element?.getBoundingClientRect()
+      const style = element && getComputedStyle(element)
+      return [selector, rect && { top: rect.top, bottom: rect.bottom, height: rect.height, cssHeight: style.height, minHeight: style.minHeight, padding: style.padding, flex: style.flex }]
+    }))))
+    await page.screenshot({ path: 'artifacts/process-panel-compact-failure.png' })
+    throw cause
   } finally {
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1320, 850))
+  }
+}
+
+async function checkPeriodicTabs() {
+  const task = (await tasks())[0]
+  await page.locator('.task-row').and(page.getByTitle(task.path, { exact: true })).click()
+  await app.close()
+  app = await launch({ LITE_IDE_FIXTURE_TAB_POLLING: '1' })
+  page = await app.firstWindow()
+  observeErrors(page)
+  page.setDefaultTimeout(15000)
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(960, 600))
+  await readyTerminal()
+  const childTab = page.getByRole('tab', { name: '서브 · 완료한 현재 검증 담당', exact: true })
+  await childTab.waitFor()
+  await childTab.click()
+  await until(async () => childTab.locator('.tab-running-dot.inactive').count(), '완료한 자식 탭 초기 관찰')
+  await app.evaluate(({ ipcMain }) => {
+    globalThis.periodicSessionsHandler = ipcMain._invokeHandlers.get('codex:sessions')
+    globalThis.periodicSessionCalls = 0
+    ipcMain.removeHandler('codex:sessions')
+    ipcMain.handle('codex:sessions', async (event, ...args) => {
+      const result = await globalThis.periodicSessionsHandler(event, ...args)
+      if (args[0]) globalThis.periodicSessionCalls++
+      return result
+    })
+  })
+  try {
+    await page.evaluate(async () => {
+      globalThis.originalHidden = Object.getOwnPropertyDescriptor(document, 'hidden')
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => false })
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+      const list = document.querySelector('[role="tablist"][aria-label="작업 탭"]')
+      list.style.maxWidth = '280px'
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+      const read = () => ({
+        scrollLeft: list.scrollLeft, width: list.clientWidth, height: list.clientHeight, scrollWidth: list.scrollWidth,
+        tabs: [...list.querySelectorAll('[role="tab"]')].map((tab) => {
+          const rect = tab.getBoundingClientRect()
+          return { id: tab.id, label: tab.getAttribute('aria-label'), title: tab.title, selected: tab.getAttribute('aria-selected'), active: getComputedStyle(tab.querySelector('.tab-running-dot')).visibility === 'visible', x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+        }),
+      })
+      globalThis.readPeriodicTabs = read
+      globalThis.periodicTabBaseline = read()
+      globalThis.periodicTabNodes = [...list.querySelectorAll('[role="tab"]')]
+      globalThis.periodicTabSamples = [read()]
+      globalThis.periodicTabTimer = setInterval(() => globalThis.periodicTabSamples.push(read()), 50)
+      globalThis.periodicTabObserver = new MutationObserver(() => globalThis.periodicTabSamples.push(read()))
+      globalThis.periodicTabObserver.observe(list, { attributes: true, childList: true, subtree: true, characterData: true })
+    })
+    await until(() => app.evaluate(() => globalThis.periodicSessionCalls >= 2), '실제 4초 세션 주기 조회 2회')
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    const measured = await page.evaluate(() => {
+      clearInterval(globalThis.periodicTabTimer)
+      globalThis.periodicTabObserver.disconnect()
+      return { baseline: globalThis.periodicTabBaseline, samples: globalThis.periodicTabSamples, sameNodes: globalThis.periodicTabNodes.every((node) => node.isConnected) }
+    })
+    assert.equal(measured.sameNodes, true)
+    assert.ok(measured.baseline.scrollWidth > measured.baseline.width, '가로 스크롤이 있는 좁은 탭에서 검증합니다.')
+    for (const sample of measured.samples) assert.deepEqual(sample, measured.baseline, '주기 조회가 탭 이름·상태·크기·선택·스크롤을 바꾸지 않아야 합니다.')
+    // 정상적인 새 실행과 완료도 상태 표시만 바꾸고 다른 탭을 밀지 않습니다.
+    const child = await page.evaluate(async (path) => (await window.desktop.listSessions(path)).find((session) => session.threadId === 'polling-child'), task.path)
+    const geometry = (value) => ({ ...value, tabs: value.tabs.map(({ active, ...tab }) => tab) })
+    for (const status of ['running', 'completed']) {
+      await app.evaluate(({ BrowserWindow }, session) => BrowserWindow.getAllWindows()[0].webContents.send('codex:session', session), { ...child, status, updatedAt: Date.now() })
+      await until(async () => childTab.locator(status === 'running' ? '.tab-running-dot:not(.inactive)' : '.tab-running-dot.inactive').count(), `정상 상태 ${status} 표시`)
+      assert.deepEqual(geometry(await page.evaluate(() => globalThis.readPeriodicTabs())), geometry(measured.baseline))
+    }
+    await page.screenshot({ path: 'artifacts/periodic-tabs-stable.png' })
+    console.log('주기적 탭 회귀 통과: 실제 4초 polling 2회에서 이름·상태·DOM·위치·너비·선택·스크롤 고정, 정상 상태 변경 시에도 탭 폭 유지.')
+  } finally {
+    await page.evaluate(() => {
+      clearInterval(globalThis.periodicTabTimer)
+      globalThis.periodicTabObserver?.disconnect()
+      if (globalThis.originalHidden) Object.defineProperty(document, 'hidden', globalThis.originalHidden)
+      else delete document.hidden
+    })
+    await app.evaluate(({ ipcMain }) => { ipcMain.removeHandler('codex:sessions'); ipcMain.handle('codex:sessions', globalThis.periodicSessionsHandler); delete globalThis.periodicSessionsHandler })
+  }
+}
+
+async function checkRemoteCursor() {
+  const host = page.locator('.task-terminal-slot:not([hidden]) .terminal-host')
+  for (const [commandText, style] of [['/cursor-block', 'block'], ['/cursor-underline', 'underline'], ['/cursor-bar', 'bar'], ['/cursor-enable', 'bar'], ['/cursor-fragment', 'bar']]) {
+    await command(commandText)
+    await waitScreen(`CURSOR_DONE:${commandText}`)
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    await until(async () => host.locator(`.xterm-cursor-${style}`).count(), `원격 커서 ${style}`)
+    assert.equal(await host.locator('.xterm-cursor-blink').count(), 0)
+  }
+  await command('/cursor-position')
+  await waitScreen('CURSOR_DONE:/cursor-position')
+  await until(async () => host.evaluate((element) => {
+    const cursor = element.querySelector('.xterm-cursor')
+    const row = element.querySelector('.xterm-rows')?.children[1]
+    return !!cursor && !!row && Math.abs(cursor.getBoundingClientRect().top - row.getBoundingClientRect().top) < 1
+  }), '원격 커서 위치 보존')
+  await command('/cursor-restore')
+  await waitScreen('CURSOR_DONE:/cursor-restore')
+  await command('/cursor-hide')
+  await waitScreen('CURSOR_DONE:/cursor-hide')
+  await until(async () => await host.locator('.xterm-cursor').count() === 0, 'CLI 커서 숨김')
+  await command('/cursor-show')
+  await waitScreen('CURSOR_DONE:/cursor-show')
+  await until(async () => await host.locator('.xterm-cursor').count() === 1, 'CLI 커서 표시')
+  assert.equal(await host.locator('.xterm-cursor-blink').count(), 0)
+  console.log('커서 회귀 통과: 원격 모양·복합/분할 blink 요청에서도 고정, 위치 이동·숨김·표시 보존.')
+}
+
+async function setupFocusedTerminal() {
+  await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] }) }, project)
+  await page.evaluate(() => window.desktop.openProject())
+  await page.reload()
+  await page.locator('.project-name').filter({ hasText: '한글 project' }).waitFor()
+  await createDraftTask()
+  return (await tasks())[0]
+}
+
+async function checkMiddleInsertion(task) {
+  await app.evaluate(({ ipcMain }) => {
+    globalThis.middleInputHandler = ipcMain._invokeHandlers.get('terminal:write')
+    globalThis.middleInputWrites = []
+    ipcMain.removeHandler('terminal:write')
+    ipcMain.handle('terminal:write', (_event, id, data) => globalThis.middleInputWrites.push({ id, data }))
+  })
+  try {
+    for (const [keys, movement, modifiers] of [
+      [['ArrowLeft', 'ArrowLeft'], '\x1b[D\x1b[D', {}],
+      [['Home'], '\x1b[H', { shiftKey: true }],
+      [['ArrowLeft', 'ArrowLeft', 'ArrowRight'], '\x1b[D\x1b[D\x1b[C', { ctrlKey: true }],
+    ]) {
+      await app.evaluate(() => { globalThis.middleInputWrites = [] })
+      const input = page.locator('[aria-label="작업 터미널 입력"]:visible')
+      await input.evaluate((element) => { element.value = ''; element.setSelectionRange(0, 0) })
+      await input.focus()
+      await page.keyboard.type('abcd')
+      for (const key of keys) await page.keyboard.press(key)
+      await page.keyboard.type('X')
+      const caret = await input.evaluate((element) => ({ length: element.value.length, position: element.selectionStart }))
+      assert.equal(caret.position, caret.length, '숨겨진 textarea caret는 끝을 유지하고 실제 이동은 PTY에만 전달합니다.')
+      await input.evaluate(async (element, modifiers) => {
+        element.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' }))
+        element.setRangeText('한글', element.selectionStart, element.selectionEnd, 'end')
+        element.dispatchEvent(new CompositionEvent('compositionupdate', { bubbles: true, data: '한글' }))
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        element.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '한글' }))
+        element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', code: 'Enter', keyCode: 13, which: 13, ...modifiers }))
+        element.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13, which: 13, ...modifiers }))
+        await new Promise((resolve) => setTimeout(resolve, 30))
+      }, modifiers)
+      const enter = modifiers.shiftKey || modifiers.ctrlKey
+        ? process.platform === 'win32'
+          ? `\x1b[13;28;13;1;${modifiers.shiftKey ? 16 : 8};1_\x1b[13;28;13;0;${modifiers.shiftKey ? 16 : 8};1_`
+          : `\x1b[13;${modifiers.shiftKey ? 2 : 5}u`
+        : '\r'
+      const writes = await app.evaluate(() => globalThis.middleInputWrites)
+      assert.ok(writes.every((entry) => entry.id === task.id))
+      assert.equal(writes.map((entry) => entry.data).join(''), `abcd${movement}X한글${enter}`)
+    }
+    console.log('중간 입력 회귀 통과: Left/Home/Right는 PTY로 유지, ASCII·한글 삽입 후 Enter/Shift+Enter/Ctrl+Enter 손실·중복 없음.')
+  } finally {
+    await app.evaluate(({ ipcMain }) => { ipcMain.removeHandler('terminal:write'); ipcMain.handle('terminal:write', globalThis.middleInputHandler); delete globalThis.middleInputHandler })
   }
 }
