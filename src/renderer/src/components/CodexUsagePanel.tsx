@@ -16,6 +16,11 @@ const dateLabel = (seconds: number) =>
     hour12: false,
   })
 
+function expiryLabel(seconds: number) {
+  const date = new Date(seconds * 1000)
+  return `${date.getMonth() + 1}/${date.getDate()} 만료`
+}
+
 function windowLabel(minutes: number | null, index: number) {
   if (!minutes || minutes < 0) return index === 0 ? '기본 한도' : '추가 한도'
   if (minutes % 10080 === 0) return `${minutes / 10080}주`
@@ -240,6 +245,21 @@ export function CodexUsagePanel({
               {resetCredits
                 ? `${resetCredits.availableCount}개`
                 : '정보 미제공'}
+              {resetCredits && resetCredits.availableCount > 0 && (
+                <>
+                  {' · '}
+                  <span title={nearestCredit
+                    ? [nearestCredit.title, nearestCredit.expiresAt == null
+                      ? '만료 없음' : `${dateLabel(nearestCredit.expiresAt)} 만료`].filter(Boolean).join(' · ')
+                    : undefined}>
+                    {nearestCredit
+                      ? nearestCredit.expiresAt == null
+                        ? '만료 없음'
+                        : expiryLabel(nearestCredit.expiresAt)
+                      : '만료 정보 미제공'}
+                  </span>
+                </>
+              )}
             </strong>
           </div>
           {expanded && resetCredits && resetCredits.availableCount > 0 && (

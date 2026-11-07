@@ -1098,6 +1098,26 @@ async function checkCompactProcessLayout(task) {
     assert.equal(await details.getAttribute('aria-expanded'), 'false')
     assert.equal(await usage.locator('.usage-reset').count(), 0)
     await usage.getByText('남은 초기화권', { exact: true }).waitFor()
+    const nearestExpiry = await page.evaluate(async () => {
+      const result = await window.desktop.codexUsage()
+      const nearest = result.rateLimitResetCredits.credits.find((credit) => credit.id === 'nearest')
+      const date = new Date(nearest.expiresAt * 1000)
+      return {
+        compact: `${date.getMonth() + 1}/${date.getDate()} 만료`,
+        full: date.toLocaleString('ko-KR', {
+          month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+        }),
+      }
+    })
+    const creditsRow = usage.locator('.usage-credits .usage-row')
+    const expiry = creditsRow.locator('strong span')
+    assert.equal(await creditsRow.locator('strong').innerText(), `3개 · ${nearestExpiry.compact}`)
+    assert.equal(await expiry.getAttribute('title'), `먼저 만료되는 초기화권 · ${nearestExpiry.full} 만료`)
+    assert.equal(await creditsRow.evaluate((row) => {
+      const label = row.querySelector('span').getBoundingClientRect()
+      const value = row.querySelector('strong').getBoundingClientRect()
+      return Math.abs(label.y - value.y) < 2 && value.height < 20 && row.scrollWidth <= row.clientWidth
+    }), true, '초기화권 개수와 가장 가까운 만료일을 한 줄에 표시합니다.')
     const compactHeight = (await usage.boundingBox()).height
     assert.ok(compactHeight <= 190, `접힌 사용량 영역이 너무 큽니다: ${compactHeight}px`)
     await details.click()
@@ -1108,6 +1128,8 @@ async function checkCompactProcessLayout(task) {
     assert.equal(await page.getByRole('button', { name: '설정', exact: true }).isVisible(), true)
     await details.click()
     assert.equal(await usage.locator('.usage-reset').count(), 0)
+    assert.equal(await expiry.innerText(), nearestExpiry.compact)
+    assert.equal(await expiry.isVisible(), true)
     const density = await page.evaluate(() => {
       const list = document.querySelector('.project-list').getBoundingClientRect()
       const heading = document.querySelector('.changes-heading').getBoundingClientRect()
