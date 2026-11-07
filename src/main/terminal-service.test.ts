@@ -11,7 +11,6 @@ import type { AttentionNotification } from './notification-service.ts'
 
 test('선택하지 않은 Codex 터미널도 OSC9를 수신하고 셸 출력은 알리지 않는다', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'lite-terminal-attention-'))
-  t.after(() => rm(directory, { recursive: true, force: true }))
   const sends: ((text: string) => void)[] = []
   const launches: string[][] = []
   const factory: PtyFactory = (_file, args) => {
@@ -26,7 +25,10 @@ test('선택하지 않은 Codex 터미널도 OSC9를 수신하고 셸 출력은 
   const events: TerminalEvent[] = []
   const service = new TerminalService(join(directory, 'resume.json'), (event) => events.push(event), factory, async () => '/codex',
     undefined, undefined, undefined, (event) => attention.push(event))
-  t.after(() => service.close())
+  t.after(async () => {
+    await service.close()
+    await rm(directory, { recursive: true, force: true })
+  })
   const input = { taskId: 'one', workspace: join(directory, 'one'), kind: 'codex' as const, cols: 80, rows: 24 }
   await service.open(input)
   await service.open({ ...input, taskId: 'background', workspace: join(directory, 'background') })
