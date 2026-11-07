@@ -214,6 +214,18 @@ export class AgentService {
     return threads
   }
 
+  async latestWorkspaceThread(workspace: string): Promise<string | undefined> {
+    await this.client.start()
+    const threads = await this.listThreads({
+      cwd: workspace,
+      sortKey: 'updated_at',
+    })
+    return string(threads.find((thread) =>
+      string(thread.id) && !this.parentThreadId(thread) &&
+      pathKey(string(thread.cwd)) === pathKey(workspace),
+    )?.id) || undefined
+  }
+
   private async refreshObservedSession(
     session: AgentSession,
     metadata: Record<string, unknown>,
@@ -314,7 +326,6 @@ export class AgentService {
       await this.client.start()
       const threads = await this.listThreads({
         cwd: workspace,
-        sourceKinds: ['cli', 'appServer'],
         sortKey: 'updated_at',
       })
       for (const thread of threads) {

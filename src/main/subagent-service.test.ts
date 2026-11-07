@@ -661,9 +661,8 @@ test('daemon의 외부 appServer 관측과 앱 소유 실행을 구분하고 같
   const request = service.client.request.bind(service.client)
   service.client.request = async <T>(method: string, params: Record<string, unknown>) => {
     if (method === 'thread/list') {
-      assert.ok(Array.isArray(params.sourceKinds))
       if (!params.ancestorThreadId)
-        assert.deepEqual(params.sourceKinds, ['cli', 'appServer'])
+        assert.equal(params.sourceKinds, undefined)
       return { data: params.ancestorThreadId ? [] : [
         external, { ...external, id: 'parent-thread' },
       ] } as T

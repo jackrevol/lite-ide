@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import type { IPty } from 'node-pty'
 import { TerminalService, type PtyFactory } from './terminal-service.ts'
 import { ProcessService, type ProcessRecord } from './process-service.ts'
+import { pathKey } from './git.ts'
 import type { TerminalEvent } from '../shared/types.ts'
 import type { AttentionNotification } from './notification-service.ts'
 
@@ -44,6 +45,36 @@ test('하위 폴더 터미널 종료 실패는 Git 삭제를 차단하고 재시
   })
   assert.equal(removed, true)
   assert.equal(service.snapshot('nested'), null)
+})
+
+test('기존 대화를 찾지 못한 업데이트 복원은 새 대화를 열지 않고 재시도 기록을 보존한다', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'lite-terminal-missing-thread-'))
+  const file = join(directory, 'resume.json')
+  const input = { taskId: 'saved', workspace: directory, kind: 'codex' as const, cols: 80, rows: 24, prompt: '재전송하면 안 되는 요청' }
+  await writeFile(file, JSON.stringify([pathKey(directory)]), 'utf8')
+  await writeFile(file + '.update.json', JSON.stringify([input]), 'utf8')
+  const launches: string[][] = []
+  let threadId: string | undefined
+  const factory: PtyFactory = (_file, args) => {
+    launches.push(args as string[])
+    let exit = (_event: { exitCode: number }) => {}
+    return { onData: () => ({ dispose() {} }),
+      onExit: (callback: typeof exit) => { exit = callback; return { dispose() {} } },
+      kill: () => exit({ exitCode: 0 }), write() {}, resize() {},
+    } as unknown as IPty
+  }
+  const service = new TerminalService(file, () => {}, factory, async () => '/codex', async () => threadId)
+  t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }) })
+  await assert.rejects(service.open(input), /기존 Codex 대화를 찾지 못했습니다/)
+  await service.restoreAfterUpdate(async () => {})
+  assert.equal(launches.length, 0)
+  assert.deepEqual(JSON.parse(await readFile(file + '.update.json', 'utf8')), [input])
+  threadId = 'original-thread'
+  await service.restoreAfterUpdate(async () => {})
+  assert.deepEqual(launches[0].slice(0, 2), ['resume', threadId])
+  assert.ok(!launches[0].includes(input.prompt))
+  assert.deepEqual(JSON.parse(await readFile(file + '.update.json', 'utf8')), [])
+  assert.deepEqual(JSON.parse(await readFile(file + '.threads.json', 'utf8')), [[pathKey(directory), threadId]])
 })
 
 test('선택하지 않은 Codex 터미널도 OSC9를 수신하고 셸 출력은 알리지 않는다', async (t) => {

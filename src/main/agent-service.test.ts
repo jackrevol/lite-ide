@@ -76,6 +76,40 @@ test('daemon 종료 실패나 종료 후 남은 세션은 Git 삭제를 막고 �
   }
 })
 
+for (const source of ['vscode', 'future-source']) test(`${source} 유형을 제한하지 않고 기존 대화를 복원한다`, async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'lite-ide-daemon-source-'))
+  const service = new AgentService(join(directory, 'sessions.json'), () => {})
+  t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }) })
+  service.client.start = async () => {}
+  const root = {
+    id: 'daemon-thread', source, cwd: directory, updatedAt: 100,
+    status: { type: 'idle' },
+    turns: [{ id: 'saved-turn', status: 'completed', items: [
+      { id: 'saved-answer', type: 'agentMessage', text: '업데이트 전 대화' },
+    ] }],
+  }
+  service.client.request = async <T>(method: string, params: Record<string, unknown>) => {
+    if (method === 'thread/read') return { thread: root } as T
+    assert.equal(method, 'thread/list')
+    if (params.ancestorThreadId) return { data: [] } as T
+    assert.equal(params.sourceKinds, undefined)
+    if (!params.cursor) return { data: [
+      { ...root, id: 'other-workspace', cwd: join(directory, 'other') },
+      { ...root, id: 'child', parentThreadId: root.id },
+    ], nextCursor: 'page-two' } as T
+    return { data: [root], nextCursor: null } as T
+  }
+  assert.equal(await service.latestWorkspaceThread(directory), root.id)
+  await service.observeWorkspace(directory)
+  const sessions = await service.all()
+  assert.equal(sessions.length, 1)
+  assert.equal(sessions[0].threadId, root.id)
+  assert.equal(sessions[0].messages[0].text, '업데이트 전 대화')
+  assert.equal(sessions[0].canAcceptDirectInput, false)
+  service.client.request = async <T>() => ({ data: [] }) as T
+  assert.equal(await service.latestWorkspaceThread(directory), undefined)
+})
+
 test('재시작 후 실행 중인 세션을 다시 구독하고 요청을 재전송하지 않는다', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'lite-ide-reconnect-'))
   t.after(() => rm(directory, { recursive: true, force: true }))

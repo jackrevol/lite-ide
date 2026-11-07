@@ -254,19 +254,8 @@ app.whenReady().then(() => {
         process.env.LITE_IDE_HEADLESS === '1' && process.env.LITE_IDE_TEST_TERMINAL
       )
         return undefined
+      if (resuming) return agents!.latestWorkspaceThread(input.workspace)
       await agents!.client.start()
-      if (resuming) {
-        const result = await agents!.client.request<{ data: { id: string }[] }>(
-          'thread/list',
-          {
-            cwd: input.workspace,
-            sourceKinds: ['cli', 'appServer'],
-            sortKey: 'updated_at',
-            limit: 1,
-          },
-        )
-        if (result.data[0]) return result.data[0].id
-      }
       return undefined
     },
     async (threadId) => {

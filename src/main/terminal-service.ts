@@ -149,7 +149,7 @@ export class TerminalService {
     if (input.kind === 'codex') {
       binary = await this.codex()
       const key = pathKey(input.workspace)
-      const resuming = this.resumed.has(key) || !!input.threadId
+      const resuming = this.resumed.has(key) || !!input.threadId || this.threads.has(key)
       fixture =
         process.env.LITE_IDE_HEADLESS === '1' &&
         !!process.env.LITE_IDE_TEST_TERMINAL
@@ -172,8 +172,11 @@ export class TerminalService {
           // 실행 전에 정확한 ID를 저장해 재시작 시 다른 대화에 연결되지 않게 합니다.
           await this.persistResume()
           args.push('resume', threadId)
-        } else if (resuming && !this.resolveThread)
+        } else if (resuming) {
+          if (this.resolveThread)
+            throw new Error('기존 Codex 대화를 찾지 못했습니다. 새 대화를 시작하지 않았습니다. 연결을 확인한 뒤 다시 시도해 주세요.')
           args.push('resume', '--last')
+        }
         args.push(
           // 내부 실행으로 전환되면 PTY 종료 시 작업도 중단되므로 daemon 연결을 강제합니다.
           '--remote',
