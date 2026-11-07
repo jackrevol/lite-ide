@@ -37,6 +37,7 @@ import { appInfo } from './app-info'
 import { AgentService } from './agent-service'
 import { TerminalService } from './terminal-service'
 import { NotificationService } from './notification-service'
+import { ResetAnnouncementService } from './reset-announcement-service'
 import { StartupService } from './startup-service'
 import { cloneRepository, validateCloneInput } from './clone'
 import { UpdateService } from './update-service'
@@ -63,6 +64,7 @@ let agents: AgentService | undefined
 let terminals: TerminalService | undefined
 let startups: StartupService | undefined
 let updates: UpdateService | undefined
+let resetAnnouncements: ResetAnnouncementService | undefined
 let audioWindow: BrowserWindow | null = null
 let audioReady: Promise<void> | undefined
 let audioPlayback = Promise.resolve()
@@ -105,6 +107,14 @@ app.whenReady().then(() => {
   const settings = new SettingsService(
     join(app.getPath('userData'), 'settings.json'),
   )
+  resetAnnouncements = new ResetAnnouncementService((state) => {
+    if (window && !window.isDestroyed()) window.webContents.send('codex:reset-announcements', state)
+  }, (url, init) => net.fetch(url, init))
+  ipcMain.handle('codex:reset-announcements-status', (event) => {
+    requireTerminalSender(event)
+    return resetAnnouncements!.status()
+  })
+  if (process.env.LITE_IDE_HEADLESS !== '1') resetAnnouncements.start()
   const notifications = new NotificationService(join(app.getPath('userData'), 'notification-sounds'),
     () => settings.get(), {
       supported: () => Notification.isSupported(),
@@ -765,6 +775,7 @@ app.on('window-all-closed', () => {
 
 let quitting = false
 app.on('before-quit', (event) => {
+  resetAnnouncements?.close()
   if (quitting || !agents) return
   event.preventDefault()
   quitting = true

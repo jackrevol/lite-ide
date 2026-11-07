@@ -38,6 +38,12 @@ const api: DesktopApi = {
   chooseNotificationSound: () => ipcRenderer.invoke('notifications:choose-sound'),
   previewNotificationSound: (settings) => ipcRenderer.invoke('notifications:preview', settings),
   notificationStatus: () => ipcRenderer.invoke('notifications:status'),
+  resetAnnouncementStatus: () => ipcRenderer.invoke('codex:reset-announcements-status'),
+  onResetAnnouncements: (listener) => {
+    const receive = (_event: Electron.IpcRendererEvent, state: import('../shared/types').ResetAnnouncementState) => listener(state)
+    ipcRenderer.on('codex:reset-announcements', receive)
+    return () => { ipcRenderer.removeListener('codex:reset-announcements', receive) }
+  },
   takePendingNotification: () => ipcRenderer.invoke('notifications:take-pending'),
   onNotificationClick: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, target: import('../shared/types').NotificationTarget) => listener(target)

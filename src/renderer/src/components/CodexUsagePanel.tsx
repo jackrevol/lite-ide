@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
+import { ResetAnnouncementPanel } from './ResetAnnouncementPanel'
 import type {
   CodexStatus,
   CodexUsage,
@@ -249,6 +250,7 @@ export function CodexUsagePanel({
           )}
         </div>
       )}
+      <ResetAnnouncementPanel />
     </section>
   )
 }

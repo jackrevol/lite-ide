@@ -2065,6 +2065,34 @@ dialog::backdrop {
   margin-top: 12px;
   padding-top: 10px;
 }
+.usage-reset-news {
+  border-top: 1px solid var(--border);
+  margin-top: 10px;
+  padding-top: 10px;
+}
+.usage-reset-news .usage-empty { margin: 5px 0; }
+.usage-reset-news-item { margin-top: 8px; }
+.usage-reset-news-link,
+.usage-reset-news-source button {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  cursor: pointer;
+  font-size: 10px;
+  text-align: left;
+}
+.usage-reset-news-link { display: flex; flex-wrap: wrap; gap: 3px 8px; width: 100%; }
+.usage-reset-news-link > span:last-child { color: var(--muted-foreground); }
+.usage-reset-news button:hover { text-decoration: underline; }
+.usage-reset-news-source {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 8px;
+  color: var(--muted-foreground);
+  font-size: 9px;
+}
+.usage-reset-news-source button { font-size: inherit; }
 .project-dialog {
   width: 480px;
 }

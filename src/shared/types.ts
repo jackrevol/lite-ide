@@ -125,6 +125,8 @@ export interface DesktopApi {
   chooseNotificationSound(): Promise<CustomNotificationSound | null>
   previewNotificationSound(settings: NotificationSettings): Promise<void>
   notificationStatus(): Promise<{ supported: boolean }>
+  resetAnnouncementStatus(): Promise<ResetAnnouncementState>
+  onResetAnnouncements(listener: (state: ResetAnnouncementState) => void): () => void
   onNotificationClick(listener: (target: NotificationTarget) => void): () => void
   takePendingNotification(): Promise<NotificationTarget | null>
   updateProjectSettings(
@@ -219,6 +221,22 @@ export interface NotificationSettings {
   sound: NotificationSound
   volume: number
   customSound?: CustomNotificationSound
+}
+export interface ResetAnnouncement {
+  id: string
+  kind: 'announced' | 'hinted' | 'regular' | 'banked'
+  url: string
+  publishedAt: number
+  text: string
+  scheduledAt: number | null
+  scheduledDay: string | null
+  deliveredAt: number | null
+}
+export interface ResetAnnouncementState {
+  checkedAt: number | null
+  generatedAt: number | null
+  error: string | null
+  announcements: ResetAnnouncement[]
 }
 export interface NotificationTarget {
   workspace: string

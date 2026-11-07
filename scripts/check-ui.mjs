@@ -224,6 +224,7 @@ try {
     .getByRole('heading', { name: '작업 터미널을 시작하세요' })
     .waitFor()
   await checkTitlebar(page, app)
+  await checkResetAnnouncements()
   const widths = await panelWidths()
   await dragPanel('프로젝트 패널 크기 조절', 45)
   assert.ok((await panelWidths())[0] > widths[0] + 35)
@@ -854,6 +855,51 @@ try {
   throw error
 } finally {
   await app.close()
+}
+async function checkResetAnnouncements() {
+  const now = Date.now()
+  const news = page.getByLabel('초기화권 및 리셋 소식', { exact: true })
+  const url = 'https://x.com/thsottiaux/status/12345'
+  const banked = { id: 'banked', kind: 'banked', url, publishedAt: now - 86400000,
+    text: 'Banked 2/2', scheduledAt: null, scheduledDay: null, deliveredAt: null }
+  const plan = { ...banked, id: 'plan', kind: 'announced', publishedAt: now - 60000,
+    scheduledAt: now + 3600000 }
+  const state = { checkedAt: now, generatedAt: now, error: null, announcements: [plan, banked] }
+  async function publish(next) {
+    await app.evaluate(({ BrowserWindow }, state) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('codex:reset-announcements', state)
+    }, next)
+  }
+  await app.evaluate(({ shell }) => {
+    globalThis.originalResetOpen = shell.openExternal
+    shell.openExternal = async (url) => { globalThis.resetOpenedUrl = url }
+  })
+  try {
+    await publish(state)
+    await news.getByRole('button', { name: '리셋 예고 원문 보기', exact: true }).waitFor()
+    await news.getByRole('button', { name: '초기화권 지급 공지 원문 보기', exact: true }).click()
+    assert.equal(await app.evaluate(() => globalThis.resetOpenedUrl), url)
+    assert.equal(await news.getByText('예고 시각', { exact: false }).count(), 1)
+    assert.equal(await news.getByText('공지는 계정별 지급·초기화를 보장하지 않습니다.').count(), 1)
+    await page.screenshot({ path: 'artifacts/reset-announcements.png' })
+    await publish({ ...state, announcements: [{ ...plan, kind: 'hinted', scheduledAt: null, scheduledDay: '2026-11-08' }, banked] })
+    await news.getByText('예고 날짜 2026-11-08 · 시각·시간대 미제공 · 확정 예고 아님', { exact: true }).waitFor()
+    await publish({ ...state, error: 'HTTP 503' })
+    await news.getByText('공지 갱신 지연 · 예고 확인 불가').waitFor()
+    assert.equal(await news.getByRole('button', { name: '리셋 예고 원문 보기', exact: true }).count(), 0)
+    assert.equal(await news.getByRole('button', { name: '초기화권 지급 공지 원문 보기', exact: true }).count(), 1)
+    await publish({ ...state, generatedAt: now - 3600000 })
+    await news.getByText('공지 갱신 지연 · 예고 확인 불가').waitFor()
+    await publish({ ...state, announcements: [banked] })
+    await news.getByText('수집된 리셋 예고 없음', { exact: true }).waitFor()
+    assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible()), false)
+  } finally {
+    await app.evaluate(({ shell }) => {
+      shell.openExternal = globalThis.originalResetOpen
+      delete globalThis.originalResetOpen
+      delete globalThis.resetOpenedUrl
+    })
+  }
 }
 async function windowWrite(id, data) {
   await page.evaluate(
