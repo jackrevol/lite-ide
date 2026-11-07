@@ -900,7 +900,9 @@ export class AgentService {
     status: Record<string, unknown>,
   ) {
     if (status.type === 'active')
-      session.status = list(status.activeFlags).length ? 'waiting' : 'running'
+      session.status = list(status.activeFlags).some((flag) =>
+        flag === 'waitingOnApproval' || flag === 'waitingOnUserInput',
+      ) ? 'waiting' : 'running'
     else if (status.type === 'systemError') session.status = 'failed'
     if (session.requests.length) session.status = 'waiting'
   }

@@ -5,7 +5,7 @@ export function workspaceTaskStatus(
   workspace: string,
   platform: string,
   terminal?: TerminalSnapshot,
-): { state: 'running' | 'waiting' | 'completed' | 'disconnected'; label: string } {
+): { state: 'running' | 'waiting' | 'idle' | 'unknown' | 'completed' | 'disconnected'; label: string } {
   if (!terminal?.running || terminal.kind !== 'codex')
     return { state: 'disconnected', label: '연결 안 됨' }
   if (terminal.waitingForInput)
@@ -17,10 +17,13 @@ export function workspaceTaskStatus(
     .sort((a, b) => b.updatedAt - a.updatedAt)[0]
   if (root?.observationError)
     return { state: 'disconnected', label: '연결 안 됨 · 세션 상태 확인 실패' }
-  if (!root || root.status === 'idle')
-    return { state: 'waiting', label: '답변 대기 중' }
+  // 세션 미관측이나 일반 입력 대기는 질문·승인 요청의 근거가 아닙니다.
+  if (!root)
+    return { state: 'unknown', label: '상태 확인 중' }
   if (root.status === 'waiting' || root.requests.length)
     return { state: 'waiting', label: '답변 대기 중' }
+  if (root.status === 'idle')
+    return { state: 'idle', label: '입력 대기 중' }
   if (root.status === 'running')
     return { state: 'running', label: '작업 중' }
   return { state: 'completed', label: root.status === 'failed' ? '작업 실패'

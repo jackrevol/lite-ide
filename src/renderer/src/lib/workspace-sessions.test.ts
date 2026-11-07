@@ -40,7 +40,7 @@ test('작업 상태를 표시하며 터미널 연결 해제와 셸 전환은 과
   assert.equal(status({ ...terminal, waitingForInput: true }).state, 'waiting')
   for (const state of ['idle', 'waiting', 'completed', 'failed', 'interrupted'] as const) {
     const result = workspaceTaskStatus([{ ...root, status: state }], terminal.workspace, 'darwin', terminal)
-    assert.equal(result.state, ['idle', 'waiting'].includes(state) ? 'waiting' : 'completed')
+    assert.equal(result.state, state === 'idle' ? 'idle' : state === 'waiting' ? 'waiting' : 'completed')
     if (state === 'failed') assert.equal(result.label, '작업 실패')
     if (state === 'interrupted') assert.equal(result.label, '작업 중단')
   }
@@ -59,5 +59,18 @@ test('현재 부모 작업의 상태만 반영하며 자식과 과거 대화의 
     { state: 'completed', label: '작업 완료' })
   assert.equal(workspaceTaskStatus([{ ...root, observationError: 'offline' }], terminal.workspace, 'darwin', terminal).state, 'disconnected')
   assert.equal(workspaceTaskStatus([{ ...root, status: 'running', requests: [{ id: 'request', kind: 'questions', title: '질문', detail: '' }] }], terminal.workspace, 'darwin', terminal).state, 'waiting')
-  assert.equal(workspaceTaskStatus([], terminal.workspace, 'darwin', terminal).state, 'waiting')
+  assert.deepEqual(workspaceTaskStatus([], terminal.workspace, 'darwin', terminal),
+    { state: 'unknown', label: '상태 확인 중' })
+})
+
+test('질문 없는 초기 상태와 실행 상태를 답변 대기로 표시하지 않는다', () => {
+  const root = session('parent', terminal.workspace)
+  const status = (sessions: AgentSession[], value = terminal) =>
+    workspaceTaskStatus(sessions, terminal.workspace, 'darwin', value)
+  assert.equal(status([]).state, 'unknown')
+  assert.deepEqual(status([root]), { state: 'idle', label: '입력 대기 중' })
+  assert.deepEqual(status([{ ...root, status: 'running' }]), { state: 'running', label: '작업 중' })
+  assert.equal(status([root], { ...terminal, waitingForInput: true }).state, 'waiting')
+  assert.equal(status([{ ...root, requests: [{ id: 'q', kind: 'questions', title: '질문', detail: '' }] }]).state, 'waiting')
+  assert.equal(status([{ ...root, requests: [{ id: 'a', kind: 'approval', title: '승인', detail: '' }] }]).state, 'waiting')
 })

@@ -505,6 +505,9 @@ try {
   assert.equal((await terminalText()).split('BACKGROUND_ONCE').length - 1, 1)
   assert.equal((await snapshot(first.id)).generation, firstGeneration)
   await checkRepositoryFailure(first, second)
+  const firstDot = page.locator('.task-row').and(page.getByTitle(first.path, { exact: true })).locator('.session-dot')
+  const secondDot = page.locator('.task-row').and(page.getByTitle(second.path, { exact: true })).locator('.session-dot')
+  await until(async () => await firstDot.getAttribute('aria-label') === '상태 확인 중', '세션 관측 전 상태 표시')
   await app.evaluate(({ BrowserWindow }, { workspace, other }) => {
     const web = BrowserWindow.getAllWindows()[0].webContents
     const session = { workspace, title: '관찰 세션', id: 'ui-session', status: 'running', messages: [{ id: 'message', kind: 'assistant', text: '실제 세션 본문 표시' }], requests: [], updatedAt: Date.now(), canAcceptDirectInput: false }
@@ -512,12 +515,11 @@ try {
     web.send('codex:session', { ...session, id: 'ui-child', title: '검증 서브에이전트', parentSessionId: session.id, task: '서브에이전트 작업 설명', messages: [{ id: 'child-message', kind: 'assistant', text: '서브에이전트 실행 결과' }] })
     web.send('codex:session', { ...session, id: 'ui-other', title: '다른 워크트리 세션', workspace: other })
   }, { workspace: first.path, other: second.path })
-  const firstDot = page.locator('.task-row').and(page.getByTitle(first.path, { exact: true })).locator('.session-dot')
-  const secondDot = page.locator('.task-row').and(page.getByTitle(second.path, { exact: true })).locator('.session-dot')
   await until(async () => await firstDot.getAttribute('aria-label') === '작업 중', '작업 중 상태 표시')
   assert.equal(await firstDot.evaluate((dot) => getComputedStyle(dot).backgroundColor), 'rgb(108, 177, 123)')
   // 선택하지 않은 작업도 실시간 상태를 반영합니다.
   for (const [status, label, color] of [
+    ['idle', '입력 대기 중', null],
     ['waiting', '답변 대기 중', 'rgb(229, 189, 70)'],
     ['completed', '작업 완료', 'rgb(216, 132, 123)'],
     ['running', '작업 중', 'rgb(108, 177, 123)'],
@@ -530,7 +532,7 @@ try {
     }, { workspace: second.path, status })
     await until(async () => await secondDot.getAttribute('aria-label') === label, `백그라운드 작업 ${label}`)
     assert.equal(await secondDot.getAttribute('title'), label)
-    assert.equal(await secondDot.evaluate((dot) => getComputedStyle(dot).backgroundColor), color)
+    if (color) assert.equal(await secondDot.evaluate((dot) => getComputedStyle(dot).backgroundColor), color)
     assert.equal(await firstDot.getAttribute('aria-label'), '작업 중')
   }
   await windowWrite(second.id, '/question\r')

@@ -180,6 +180,28 @@ test('실행 중 추가 지시는 turn/steer로 전달하고 완료 후에는 �
   assert.equal(session.turnId, 'followup-turn')
 })
 
+test('명시적인 승인·입력 대기 플래그만 답변 대기로 처리한다', async (t) => {
+  const { child, notify, service } = await setup(t)
+  const session = await child()
+  for (const [activeFlags, expected] of [
+    [[], 'running'],
+    [['waitingOnApproval'], 'waiting'],
+    [[], 'running'],
+    [['waitingOnUserInput'], 'waiting'],
+    [['futureActivity'], 'running'],
+    [['futureActivity', 'waitingOnUserInput'], 'waiting'],
+  ] as const) {
+    notify('thread/status/changed', { threadId: session.threadId, status: { type: 'active', activeFlags } })
+    assert.equal(session.status, expected)
+  }
+  service.client.onMessage({ id: 'question', method: 'item/tool/requestUserInput',
+    params: { threadId: session.threadId, questions: [{ id: 'scope', question: '범위는?' }] } })
+  notify('thread/status/changed', { threadId: session.threadId, status: { type: 'active', activeFlags: [] } })
+  assert.equal(session.status, 'waiting')
+  notify('serverRequest/resolved', { threadId: session.threadId, requestId: 'question' })
+  assert.equal(session.status, 'running')
+})
+
 test('자식의 승인·질문을 처리하고 미처리 요청이 있으면 추가 지시를 막는다', async (t) => {
   const { service, child, replies } = await setup(t)
   const session = await child()
