@@ -1,9 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { basename, dirname, resolve } from 'node:path'
 import { pathKey, workspaceContains } from './git.ts'
 import type { StartupSnapshot } from '../shared/types.ts'
-import { resolveStartupScript } from './startup-script.ts'
+import { findGitBash, resolveStartupScript } from './startup-script.ts'
 
 type Execution = {
   snapshot: StartupSnapshot
@@ -60,7 +60,7 @@ export class StartupService {
     await writeFile(`${this.file}.tmp`, JSON.stringify({ attempted: [...this.attempted], required: [...this.required] }), 'utf8')
     await rename(`${this.file}.tmp`, this.file)
   }
-  async initialize(workspace: string, scriptPath: string) {
+  async initialize(workspace: string, scriptPath: string, projectRoot = workspace) {
     const initialize = this.queue.catch(() => {}).then(async () => {
       await this.loaded
       if (!scriptPath.trim()) return
@@ -69,9 +69,9 @@ export class StartupService {
     })
     this.queue = initialize
     await initialize
-    return this.run(workspace, scriptPath)
+    return this.run(workspace, scriptPath, false, projectRoot)
   }
-  run(workspace: string, scriptPath: string, automatic = false): Promise<StartupSnapshot | null> {
+  run(workspace: string, scriptPath: string, automatic = false, projectRoot = workspace): Promise<StartupSnapshot | null> {
     const operation = this.queue.catch(() => {}).then(async () => {
       await this.loaded
       const key = pathKey(workspace)
@@ -87,7 +87,14 @@ export class StartupService {
       if (this.closed || this.deleting.has(key)) throw new Error('작업을 종료 중입니다.')
       const snapshot: StartupSnapshot = { workspace, status: 'running', output: '', startedAt: Math.max(Date.now(), (existing?.startedAt ?? 0) + 1), revision: 0 }
       let scriptFile: string
-      try { scriptFile = await resolveStartupScript(workspace, scriptPath) }
+      const win = process.platform === 'win32'
+      let powershellScript = false
+      let shell: string
+      try {
+        scriptFile = await resolveStartupScript(workspace, scriptPath)
+        powershellScript = win && scriptFile.toLowerCase().endsWith('.ps1')
+        shell = powershellScript ? 'powershell.exe' : win ? await findGitBash() : process.env.SHELL || '/bin/sh'
+      }
       catch (error) {
         snapshot.status = 'failed'
         snapshot.error = String(error instanceof Error ? error.message : error)
@@ -96,14 +103,22 @@ export class StartupService {
         this.emit({ ...snapshot })
         return { ...snapshot }
       }
-      const win = process.platform === 'win32'
       const powershell = `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); $OutputEncoding = [Console]::OutputEncoding; $ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; $LASTEXITCODE = 0;\ntry {\n& '${scriptFile.replaceAll("'", "''")}'\nif ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n} catch { [Console]::Error.WriteLine($_.ToString()); exit 1 }`
       const env = { ...process.env }
       delete env.ELECTRON_RUN_AS_NODE
       if (win) for (const name of Object.keys(env)) if (name.toUpperCase() === 'PSMODULEPATH') delete env[name]
-      const child = spawn(win ? 'powershell.exe' : process.env.SHELL || '/bin/sh',
-        win ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-OutputFormat', 'Text', '-EncodedCommand', Buffer.from(powershell, 'utf16le').toString('base64')]
-          : ['-l', '-e', scriptFile],
+      const scriptPathValue = (path: string) => win && !powershellScript ? path.replaceAll('\\', '/') : path
+      env.SUPERSET_ROOT_PATH = scriptPathValue(projectRoot)
+      env.SUPERSET_WORKSPACE_PATH = scriptPathValue(workspace)
+      env.SUPERSET_WORKSPACE_NAME = basename(workspace)
+      if (win && !powershellScript) {
+        const pathKey = Object.keys(env).find((name) => name.toUpperCase() === 'PATH') ?? 'PATH'
+        env[pathKey] = [dirname(shell), resolve(dirname(shell), '../usr/bin'), env[pathKey] ?? ''].join(';')
+        env.HOME ??= process.env.USERPROFILE
+      }
+      const child = spawn(shell,
+        powershellScript ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-OutputFormat', 'Text', '-EncodedCommand', Buffer.from(powershell, 'utf16le').toString('base64')]
+          : win ? ['--noprofile', '--norc', '-e', scriptPathValue(scriptFile)] : ['-l', '-e', scriptFile],
         { cwd: workspace, env, windowsHide: true, detached: !win, stdio: ['ignore', 'pipe', 'pipe'] })
       let finish!: () => void
       const execution: Execution = { snapshot, process: child, stopping: false, exited: new Promise((resolve) => { finish = resolve }) }

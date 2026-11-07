@@ -288,7 +288,7 @@ export function SettingsDialog({
                     </select>
                   </label>
                   <h3>Startup 스크립트</h3>
-                  <p>스크립트 파일을 레포에 추가하고 커밋해 주세요. 새 Worktree 안의 파일을 작업 폴더에서 실행하며, 성공하면 Codex를 시작합니다. Windows는 .ps1, macOS는 .sh 파일을 사용합니다.</p>
+                  <p>스크립트 파일을 레포에 추가하고 커밋해 주세요. 새 Worktree 안의 파일을 작업 폴더에서 실행하며, 성공하면 Codex를 시작합니다. Windows는 .ps1 또는 .sh(Git Bash 필요), macOS는 .sh 파일을 사용합니다.</p>
                   <label>
                     레포 기준 스크립트 파일 경로
                     <input aria-label="Startup 스크립트 파일 경로" maxLength={4096} spellCheck={false} placeholder={window.desktop.platform === 'win32' ? 'scripts/startup.ps1' : 'scripts/startup.sh'} value={defaults.startupScriptPath ?? ''} onChange={(event) => setDefaults({ ...defaults, startupScriptPath: event.target.value })} />

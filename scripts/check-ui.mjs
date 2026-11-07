@@ -949,7 +949,31 @@ async function checkStartupFlow() {
   await until(async () => (await startup(stopped))?.status === 'stopped', 'Startup 중지')
   await assertBlocked(stopped)
   await page.screenshot({ path: 'artifacts/startup-stopped.png' })
-  console.log('Startup UI 검증 통과: 생성→초기화→성공 후 Codex 호출, 백그라운드 완료, 실패·중지 IPC 차단, 앱 복원 후 차단 유지, 최신 스크립트 재시도, 자동 실행 끔.')
+  // Superset 경로 변수는 자동 실행과 IPC를 통한 수동 재실행 모두에서 전달합니다.
+  const supersetPath = './.superset/setup.sh'
+  await mkdir(join(project, '.superset'), { recursive: true })
+  await writeFile(join(project, 'superset-source.txt'), 'Superset 원본 파일', 'utf8')
+  await writeFile(join(project, supersetPath), [
+    '#!/usr/bin/env sh', 'set -eu',
+    'cp "$SUPERSET_ROOT_PATH/superset-source.txt" "$SUPERSET_WORKSPACE_PATH/superset-ready.txt"',
+    'echo SUPERSET_DONE', '',
+  ].join(win ? '\r\n' : '\n'), 'utf8')
+  git('add', '.superset/setup.sh')
+  git('-c', 'user.name=UI Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'Superset fixture')
+  await page.evaluate(async ({ project, supersetPath }) => {
+    const key = window.desktop.platform === 'win32' ? project.toLowerCase() : project
+    const previous = (await window.desktop.getSettings()).projects[key]
+    await window.desktop.updateProjectSettings(project, { ...previous, startupScriptPath: supersetPath })
+  }, { project, supersetPath })
+  const superset = await create('Superset 초기화')
+  await until(async () => (await startup(superset))?.status === 'completed', 'Superset .sh 자동 실행')
+  await waitOutput(superset.id, 'FIRST_PROMPT_Superset 초기화')
+  assert.equal(await readFile(join(superset.path, 'superset-ready.txt'), 'utf8'), 'Superset 원본 파일')
+  await writeFile(join(project, 'superset-source.txt'), '수동 재실행 원본 파일', 'utf8')
+  await page.evaluate(({ project, path }) => window.desktop.runStartup(project, path), { project, path: superset.path })
+  await until(async () => (await startup(superset))?.status === 'completed', 'Superset .sh 수동 실행')
+  assert.equal(await readFile(join(superset.path, 'superset-ready.txt'), 'utf8'), '수동 재실행 원본 파일')
+  console.log('Startup UI 검증 통과: 생성→초기화→성공 후 Codex 호출, 백그라운드 완료, 실패·중지 IPC 차단, 앱 복원 후 차단 유지, 최신 스크립트 재시도, 자동 실행 끔, Superset .sh 자동·수동 실행.')
 }
 
 async function checkBackgroundRefresh(task) {

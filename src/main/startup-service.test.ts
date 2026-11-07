@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { setTimeout } from 'node:timers/promises'
 import { StartupService } from './startup-service.ts'
+import { findGitBash } from './startup-script.ts'
 import type { StartupSnapshot } from '../shared/types.ts'
 
 const win = process.platform === 'win32'
@@ -232,6 +233,114 @@ test('중지 시 Startup이 시작한 자식 프로세스도 종료한다', asyn
     assert.ok(childId, service.snapshot(workspace)?.output)
     await service.stop(workspace)
     assert.throws(() => process.kill(childId!, 0))
+  } finally {
+    if (childId) { try { process.kill(childId, 'SIGKILL') } catch {} }
+    await service.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('Git Bash는 Git 설치 경로에서 찾고 Windows의 WSL bash를 선택하지 않는다', { skip: !win }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'lite-ide-git-bash-'))
+  try {
+    const system = join(root, 'system32')
+    const git = join(root, 'custom Git 한글')
+    await mkdir(system)
+    await writeFile(join(system, 'bash.exe'), '', 'utf8')
+    await assert.rejects(findGitBash({ Path: system }), /Git Bash가 필요/)
+    await mkdir(join(git, 'cmd'), { recursive: true })
+    await mkdir(join(git, 'bin'))
+    await writeFile(join(git, 'cmd', 'git.exe'), '', 'utf8')
+    await writeFile(join(git, 'bin', 'bash.exe'), '', 'utf8')
+    assert.equal(await findGitBash({ Path: `${system};"${join(git, 'cmd')}"` }), join(git, 'bin', 'bash.exe'))
+    assert.equal(await findGitBash({ LOCALAPPDATA: root, ProgramFiles: root }).catch(() => null), null)
+    await mkdir(join(root, 'Git', 'usr', 'bin'), { recursive: true })
+    await writeFile(join(root, 'Git', 'usr', 'bin', 'bash.exe'), '', 'utf8')
+    assert.equal(await findGitBash({ ProgramFiles: root }), join(root, 'Git', 'usr', 'bin', 'bash.exe'))
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('.sh를 실행하고 Superset 원본·Worktree 경로로 파일을 복사하며 실패를 전달한다', async (t) => {
+  if (win) {
+    try { await findGitBash() }
+    catch { t.skip('Git Bash가 설치된 Windows에서 실행합니다.'); return }
+  }
+  const { root, workspace, service } = await fixture()
+  const project = join(root, "원본 ' $ project")
+  const path = ".superset 한글 ' $/setup.sh"
+  try {
+    await mkdir(project)
+    await mkdir(join(workspace, ".superset 한글 ' $"))
+    await writeFile(join(project, 'source.txt'), '원본 파일', 'utf8')
+    await writeFile(join(workspace, path), [
+      '#!/usr/bin/env sh', 'set -eu',
+      '[ "$PWD" = "$(cd "$SUPERSET_WORKSPACE_PATH" && pwd)" ]',
+      '[ "$SUPERSET_WORKSPACE_NAME" = "한글 workspace" ]',
+      'cp "$SUPERSET_ROOT_PATH/source.txt" "$SUPERSET_WORKSPACE_PATH/copied.txt"',
+      'echo "한글 완료: $0"', '',
+    ].join('\n'), 'utf8')
+    await service.initialize(workspace, `./${path}`, project)
+    const done = await finished(service, workspace)
+    assert.equal(done.status, 'completed', done.error ?? done.output)
+    assert.match(done.output, /한글 완료:/)
+    assert.ok(done.output.includes(path))
+    assert.equal(await readFile(join(workspace, 'copied.txt'), 'utf8'), '원본 파일')
+    await service.requireReady(workspace)
+    await writeFile(join(workspace, path), 'exit 7\n', 'utf8')
+    await service.run(workspace, path, false, project)
+    const failed = await finished(service, workspace)
+    assert.equal(failed.exitCode, 7, failed.error ?? failed.output)
+    await assert.rejects(service.requireReady(workspace), /성공적으로 완료/)
+  } finally {
+    await service.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('Git Bash로 CRLF 파일과 자식 스크립트를 수정 없이 실행한다', { skip: !win }, async (t) => {
+  try { await findGitBash() }
+  catch { t.skip('Git Bash가 설치된 Windows에서 실행합니다.'); return }
+  const { root, workspace, service } = await fixture()
+  const previous = process.env.SHELLOPTS
+  delete process.env.SHELLOPTS
+  const parent = '#!/usr/bin/env sh\r\nset -eu\r\n./child.sh\r\n'
+  const child = '#!/usr/bin/env sh\r\nset -eu\r\necho CRLF_CHILD_OK\r\n'
+  try {
+    await writeFile(join(workspace, 'setup.sh'), parent, 'utf8')
+    await writeFile(join(workspace, 'child.sh'), child, 'utf8')
+    await service.initialize(workspace, 'setup.sh')
+    const result = await finished(service, workspace)
+    assert.equal(result.status, 'completed', result.error ?? result.output)
+    assert.match(result.output, /CRLF_CHILD_OK/)
+    await service.requireReady(workspace)
+    assert.equal(await readFile(join(workspace, 'setup.sh'), 'utf8'), parent)
+    assert.equal(await readFile(join(workspace, 'child.sh'), 'utf8'), child)
+  } finally {
+    if (previous === undefined) delete process.env.SHELLOPTS
+    else process.env.SHELLOPTS = previous
+    await service.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('Git Bash Startup 중지 시 자식 프로세스도 종료한다', { skip: !win }, async (t) => {
+  try { await findGitBash() }
+  catch { t.skip('Git Bash가 설치된 Windows에서 실행합니다.'); return }
+  const { root, workspace, service } = await fixture()
+  let childId: number | undefined
+  try {
+    await writeFile(join(workspace, 'setup.sh'), `node -e 'console.log("CHILD:" + process.pid); setInterval(() => {}, 1000)'\n`, 'utf8')
+    await service.initialize(workspace, 'setup.sh')
+    for (let index = 0; index < 200; index++) {
+      const match = service.snapshot(workspace)?.output.match(/CHILD:(\d+)/)
+      if (match) { childId = Number(match[1]); break }
+      await setTimeout(30)
+    }
+    assert.ok(childId, service.snapshot(workspace)?.output)
+    await service.stop(workspace)
+    assert.equal(service.snapshot(workspace)?.status, 'stopped')
+    assert.throws(() => process.kill(childId!, 0))
+    await assert.rejects(service.requireReady(workspace), /성공적으로 완료/)
   } finally {
     if (childId) { try { process.kill(childId, 'SIGKILL') } catch {} }
     await service.close()
