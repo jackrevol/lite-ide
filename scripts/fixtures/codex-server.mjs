@@ -107,6 +107,9 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     return
   }
   switch (message.method) {
+    case 'thread/list':
+      reply({ data: [], nextCursor: null })
+      break
     case 'initialize':
       reply({ userAgent: 'fixture' })
       break

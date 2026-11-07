@@ -55,6 +55,13 @@ const launch = () =>
   })
 let app = await launch()
 let page
+const errors = []
+function observeErrors(page) {
+  page.on('pageerror', (error) => errors.push(error.message))
+  page.on('console', (message) => {
+    if (/same key|unique.*key|duplicate.*key/i.test(message.text())) errors.push(message.text())
+  })
+}
 const tasks = () =>
   page.evaluate(
     () => JSON.parse(localStorage.getItem('lite-ide.workspace.v3')).tasks,
@@ -194,9 +201,8 @@ async function checkTitlebar(page, app) {
 }
 try {
   page = await app.firstWindow()
+  observeErrors(page)
   page.setDefaultTimeout(15000)
-  const errors = []
-  page.on('pageerror', (error) => errors.push(error.message))
   await page
     .getByRole('heading', { name: '작업 터미널을 시작하세요' })
     .waitFor()
@@ -244,9 +250,46 @@ try {
     ),
     /Worktree/,
   )
-  await page.getByRole('button', { name: '설정', exact: true }).click()
+  await page.getByRole('button', { name: '한글 project 기준 브랜치 관리', exact: true }).click()
   const projectSettings = page.getByRole('dialog', { name: '설정', exact: true })
-  await projectSettings.getByRole('tab', { name: '프로젝트', exact: true }).click()
+  assert.equal(await projectSettings.getByRole('tab', { name: '프로젝트', exact: true })
+    .getAttribute('aria-selected'), 'true')
+  assert.equal(await projectSettings.getByRole('combobox', { name: '설정 프로젝트' })
+    .inputValue(), project)
+  const defaultBase = projectSettings.getByRole('combobox', { name: '기본 기준 브랜치', exact: true })
+  await until(() => defaultBase.isEnabled(), '기준 브랜치 로딩')
+  git('branch', 'refresh-base')
+  git('update-ref', 'refs/remotes/origin/refresh-base', baseCommit)
+  await projectSettings.getByRole('button', { name: '브랜치 목록 새로고침' }).click()
+  await until(() => defaultBase.isEnabled(), '기준 브랜치 새로고침')
+  await until(async () => await defaultBase.locator('option[value="refs/heads/refresh-base"]').count() === 1, '추가한 브랜치 반영')
+  assert.equal(await defaultBase.locator('optgroup[label="로컬 브랜치"] option[value="refs/heads/refresh-base"]').count(), 1)
+  assert.equal(await defaultBase.locator('optgroup[label="원격 브랜치"] option[value="refs/remotes/origin/refresh-base"]').count(), 1)
+  await defaultBase.selectOption('refs/heads/refresh-base')
+  git('branch', '-D', 'refresh-base')
+  await projectSettings.getByRole('button', { name: '브랜치 목록 새로고침' }).click()
+  await projectSettings.getByText('저장된 기준 브랜치가 없습니다. 사용할 브랜치를 다시 선택해 주세요.', { exact: true }).waitFor()
+  assert.equal(await projectSettings.getByRole('button', { name: '저장', exact: true }).isDisabled(), true)
+  // 조회 실패를 표시하고 새로고침으로 복구하며 편집 중인 선택은 보존합니다.
+  await app.evaluate(({ ipcMain }) => {
+    globalThis.originalBranches = ipcMain._invokeHandlers.get('repository:branches')
+    ipcMain.removeHandler('repository:branches')
+    ipcMain.handle('repository:branches', () => { throw new Error('BRANCH_LOAD_FAILURE') })
+  })
+  try {
+    await projectSettings.getByRole('button', { name: '브랜치 목록 새로고침' }).click()
+    await projectSettings.getByRole('alert').filter({ hasText: 'BRANCH_LOAD_FAILURE' }).waitFor()
+    assert.equal(await projectSettings.getByRole('button', { name: '저장', exact: true }).isDisabled(), true)
+    assert.equal(await defaultBase.inputValue(), 'refs/heads/refresh-base')
+  } finally {
+    await app.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler('repository:branches')
+      ipcMain.handle('repository:branches', globalThis.originalBranches)
+      delete globalThis.originalBranches
+    })
+  }
+  await projectSettings.getByRole('button', { name: '브랜치 목록 새로고침' }).click()
+  await until(() => defaultBase.isEnabled(), '브랜치 조회 실패 복구')
   await projectSettings
     .getByRole('combobox', { name: '기본 기준 브랜치', exact: true })
     .selectOption('refs/heads/settings-base')
@@ -265,6 +308,24 @@ try {
   assert.equal(await baseBranch.inputValue(), 'refs/heads/settings-base')
   assert.equal((await tasks()).length, 0)
   await baseBranch.selectOption('refs/heads/main')
+  await creation.getByRole('textbox', { name: '새 작업 이름', exact: true }).fill('작성 중인 작업')
+  await creation.getByRole('textbox', { name: '첫 요청', exact: true }).fill('입력 보존 확인')
+  await creation.getByRole('button', { name: '기본 기준 브랜치 관리', exact: true }).click()
+  await projectSettings.waitFor()
+  assert.equal(await projectSettings.getByRole('tab', { name: '프로젝트', exact: true })
+    .getAttribute('aria-selected'), 'true')
+  await projectSettings.getByRole('button', { name: '닫기', exact: true }).click()
+  assert.equal(await baseBranch.inputValue(), 'refs/heads/main')
+  assert.equal(await creation.getByRole('textbox', { name: '새 작업 이름', exact: true }).inputValue(), '작성 중인 작업')
+  assert.equal(await creation.getByRole('textbox', { name: '첫 요청', exact: true }).inputValue(), '입력 보존 확인')
+  git('branch', 'task-refresh-base', baseCommit)
+  await creation.getByRole('button', { name: '브랜치 목록 새로고침' }).click()
+  await until(() => baseBranch.isEnabled(), '새 작업 브랜치 새로고침')
+  await baseBranch.selectOption('refs/heads/task-refresh-base')
+  git('branch', '-D', 'task-refresh-base')
+  await creation.getByRole('button', { name: '브랜치 목록 새로고침' }).click()
+  await creation.getByText('저장된 기준 브랜치가 없습니다. 사용할 브랜치를 다시 선택해 주세요.', { exact: true }).waitFor()
+  assert.equal(await creation.getByRole('button', { name: '만들고 시작', exact: true }).isDisabled(), true)
   await creation.getByRole('button', { name: '취소', exact: true }).click()
   await creation.waitFor({ state: 'detached' })
   assert.equal(git('worktree', 'list', '--porcelain'), worktreesBefore)
@@ -313,6 +374,29 @@ try {
         )
       : [2, 5, 6].map((modifier) => `\x1b[13;${modifier}u`)
     assert.deepEqual(keys, [...sequences, '\r'].map((data) => ({ id: first.id, data })))
+    // IME 확정과 Enter가 같은 이벤트 루프에서 발생해도 한글을 먼저 한 번만 전송합니다.
+    for (const [modifiers, expected] of [
+      [{ shiftKey: true }, sequences[0]],
+      [{ ctrlKey: true }, sequences[1]],
+      [{}, '\r'],
+    ]) {
+      await app.evaluate(() => { globalThis.terminalKeyWrites = [] })
+      await page.getByLabel('작업 터미널 입력').evaluate(async (input, modifiers) => {
+        input.value = ''
+        input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' }))
+        input.dispatchEvent(new CompositionEvent('compositionupdate', { bubbles: true, data: '한글' }))
+        input.value = '한글'
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '한글' }))
+        input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', code: 'Enter', keyCode: 13, which: 13, ...modifiers }))
+        input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13, which: 13, ...modifiers }))
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }, modifiers)
+      const writes = await app.evaluate(() => globalThis.terminalKeyWrites)
+      assert.deepEqual(writes.filter((entry) => entry.data), [
+        { id: first.id, data: '한글' }, { id: first.id, data: expected },
+      ], '한글 확정 후 Enter 순서 및 마지막 글자 중복 방지')
+    }
   } finally {
     await app.evaluate(({ ipcMain }) => {
       ipcMain.removeHandler('terminal:write')
@@ -345,6 +429,14 @@ try {
   await page.keyboard.press('Control+c')
   await waitOutput(first.id, 'INTERRUPTED')
   assert.equal((await snapshot(first.id)).running, true)
+  await page.keyboard.press('Control+f')
+  await page.getByLabel('터미널 검색어').fill(unique)
+  await page.waitForFunction(() => document.querySelector('.terminal-search-count')?.textContent.includes('1 / 1'))
+  await page.getByLabel('터미널 검색어').press('Escape')
+  const oldCols = (await snapshot(first.id)).cols
+  await page.getByRole('button', { name: '터미널 글자 확대', exact: true }).click()
+  await until(async () => (await snapshot(first.id)).cols < oldCols, '터미널 확대에 맞춰 PTY 크기 갱신')
+  await page.getByRole('button', { name: /글자 크기 .*기본값으로 복원/ }).click()
   // 출력이 진행되는 동안 새로 붙어도 스냅샷과 이벤트를 중복 렌더링하지 않습니다.
   await page.reload()
   await readyTerminal()
@@ -388,15 +480,45 @@ try {
   }, project), 'refs/heads/settings-base')
   await windowWrite(first.id, 'BACKGROUND_ONCE\r')
   await waitOutput(first.id, 'BACKGROUND_ONCE')
-  await page
-    .getByRole('tablist', { name: '작업 탭' })
-    .getByRole('tab')
-    .nth(0)
-    .click()
+  const workTabs = page.getByRole('tablist', { name: '작업 탭' })
+  assert.equal(await workTabs.getByRole('tab').count(), 1)
+  assert.equal(await workTabs.getByRole('tab', { name: new RegExp(first.name) }).count(), 0)
+  // 다른 Worktree로의 이동은 사이드바에서 수행하며 탭에는 현재 작업만 남습니다.
+  await page.locator('.task-row').and(page.getByTitle(first.path, { exact: true })).click()
   await readyTerminal()
   await waitScreen('BACKGROUND_ONCE')
   assert.equal((await terminalText()).split('BACKGROUND_ONCE').length - 1, 1)
   assert.equal((await snapshot(first.id)).generation, firstGeneration)
+  await app.evaluate(({ BrowserWindow }, { workspace, other }) => {
+    const web = BrowserWindow.getAllWindows()[0].webContents
+    const session = { workspace, title: '관찰 세션', id: 'ui-session', status: 'running', messages: [{ id: 'message', kind: 'assistant', text: '실제 세션 본문 표시' }], requests: [], updatedAt: Date.now(), canAcceptDirectInput: false }
+    web.send('codex:session', session)
+    web.send('codex:session', { ...session, id: 'ui-child', title: '검증 서브에이전트', parentSessionId: session.id, task: '서브에이전트 작업 설명', messages: [{ id: 'child-message', kind: 'assistant', text: '서브에이전트 실행 결과' }] })
+    web.send('codex:session', { ...session, id: 'ui-other', title: '다른 워크트리 세션', workspace: other })
+  }, { workspace: first.path, other: second.path })
+  await workTabs.getByRole('tab', { name: /검증 서브에이전트/ }).click()
+  await page.getByText('서브에이전트 실행 결과', { exact: true }).waitFor()
+  assert.equal(await page.getByText('서브에이전트 작업 설명', { exact: true }).count(), 1)
+  assert.equal(await workTabs.getByRole('tab', { name: /다른 워크트리 세션/ }).count(), 0)
+  assert.equal(await page.getByLabel('세션 추가 지시').count(), 0)
+  await workTabs.getByRole('tab', { name: /관찰 세션/ }).click()
+  await page.getByText('실제 세션 본문 표시', { exact: true }).waitFor()
+  await workTabs.getByRole('tab', { name: new RegExp(first.name) }).click()
+  assert.equal((await snapshot(first.id)).generation, firstGeneration)
+  await command('/child')
+  await waitOutput(first.id, 'CHILD_PID:')
+  const childPid = Number((await snapshot(first.id)).output.match(/CHILD_PID:(\d+)/)[1])
+  await page.getByRole('button', { name: '프로세스', exact: true }).click()
+  await page.getByRole('button', { name: `프로세스 ${childPid} 종료`, exact: true }).waitFor()
+  const processes = await page.evaluate((path) => window.desktop.inspectProcesses(path), first.path)
+  assert.ok(processes.processes.some((process) => process.root && process.taskId === first.id))
+  assert.ok(processes.processes.every((process) => process.taskId === first.id))
+  await checkCompactProcessLayout(first)
+  await page.getByRole('button', { name: `프로세스 ${childPid} 종료`, exact: true }).click()
+  await page.getByRole('button', { name: '프로세스 종료 확인', exact: true }).click()
+  await waitOutput(first.id, `CHILD_EXIT:${childPid}`)
+  assert.equal((await snapshot(first.id)).running, true)
+  await page.locator('.process-panel-heading > button').first().click()
   await taskAction(first, '이름 변경')
   const rename = page.getByRole('dialog', {
     name: '작업 이름 변경',
@@ -469,18 +591,21 @@ try {
   await checkBackgroundRefresh(first)
   await page.screenshot({ path: 'artifacts/changes-diff.png' })
   await writeFile(join(second.path, 'dirty.txt'), '다른 Worktree 파일\n', 'utf8')
-  await page.getByRole('tab', { name: '단축키 작업', exact: true }).click()
+  await page.locator('.task-row').and(page.getByTitle(second.path, { exact: true })).click()
   await page.getByRole('button', { name: '변경 사항 새로고침' }).click()
   await page.getByRole('treeitem', { name: 'dirty.txt', exact: true }).click()
   await page.getByText('+다른 Worktree 파일', { exact: false }).waitFor()
-  assert.equal(await page.getByRole('tab', { name: 'dirty.txt', exact: true }).count(), 2)
-  await page.getByRole('tab', { name: 'dirty.txt', exact: true }).first().click()
+  assert.equal(await page.getByRole('tab', { name: 'dirty.txt', exact: true }).count(), 1)
+  await page.locator('.task-row').and(page.getByTitle(first.path, { exact: true })).click()
+  await page.getByRole('tab', { name: 'dirty.txt', exact: true }).click()
   await page.getByText('+보호할 파일', { exact: false }).waitFor()
   await page.getByRole('button', { name: '변경 내용 닫기', exact: true }).click()
   await readyTerminal()
   assert.equal((await snapshot(first.id)).generation, shellGeneration)
   await page.getByLabel('한글.ts 탭 닫기', { exact: true }).click()
+  await page.locator('.task-row').and(page.getByTitle(second.path, { exact: true })).click()
   await page.getByLabel('dirty.txt 탭 닫기', { exact: true }).click()
+  await page.locator('.task-row').and(page.getByTitle(first.path, { exact: true })).click()
   await rm(join(second.path, 'dirty.txt'))
   await taskAction({ ...first, name: '통합 작업' }, '작업 삭제')
   const deleting = page.getByRole('dialog', { name: '작업 삭제', exact: true })
@@ -557,6 +682,7 @@ try {
   await app.close()
   app = await launch()
   page = await app.firstWindow()
+  observeErrors(page)
   page.setDefaultTimeout(15000)
   await readyTerminal()
   await page.getByRole('heading', { name: '통합 작업', exact: true }).waitFor()
@@ -573,6 +699,7 @@ try {
   await app.close()
   app = await launch()
   page = await app.firstWindow()
+  observeErrors(page)
   page.setDefaultTimeout(15000)
   await page.getByText(/작업 경로를 사용할 수 없습니다/).first().waitFor()
   assert.equal((await tasks()).length, 2)
@@ -659,7 +786,8 @@ async function checkStartupFlow() {
   const successful = await create('Startup 성공')
   assert.equal((await startup(successful)).status, 'running')
   await assertBlocked(successful)
-  await page.getByRole('tab', { name: '통합 작업', exact: true }).click()
+  const original = (await tasks()).find((task) => task.name === '통합 작업')
+  await page.locator('.task-row').and(page.getByTitle(original.path, { exact: true })).click()
   await until(async () => (await startup(successful))?.status === 'completed', 'Startup 성공')
   await waitOutput(successful.id, 'FIRST_PROMPT_Startup 성공')
   assert.ok((await readFile(join(successful.path, 'startup-ready.txt'), 'utf8')).includes('설치 완료'))
@@ -673,6 +801,7 @@ async function checkStartupFlow() {
   await app.close()
   app = await launch()
   page = await app.firstWindow()
+  observeErrors(page)
   page.setDefaultTimeout(15000)
   await page.getByRole('heading', { name: 'Startup 실패', exact: true }).waitFor()
   await page.getByText(/초기화가 완료되지 않아 에이전트를 시작하지 않았습니다/).waitFor()
@@ -743,5 +872,36 @@ async function checkBackgroundRefresh(task) {
       for (const [channel, original] of globalThis.refreshHandlers) { ipcMain.removeHandler(channel); ipcMain.handle(channel, original) }
       delete globalThis.refreshHandlers
     })
+  }
+}
+
+async function checkCompactProcessLayout(task) {
+  assert.equal(await page.locator('.startup-panel').count(), 1)
+  assert.equal(await page.locator('.process-panel').count(), 1)
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(960, 600))
+  try {
+    await until(async () => page.evaluate(() => {
+      const host = document.querySelector('.task-terminal-slot:not([hidden]) .terminal-host')
+      const screen = host?.querySelector('.xterm-screen')
+      return !!screen && screen.getBoundingClientRect().bottom <= host.getBoundingClientRect().bottom + 1
+    }), '작은 창 터미널 행 맞춤')
+    const layout = await page.evaluate(() => {
+      const host = document.querySelector('.task-terminal-slot:not([hidden]) .terminal-host')
+      const screen = host.querySelector('.xterm-screen')
+      const process = document.querySelector('.process-panel')
+      const rect = (element) => { const value = element.getBoundingClientRect(); return { top: value.top, bottom: value.bottom, height: value.height } }
+      return { host: rect(host), screen: rect(screen), process: rect(process), viewport: innerHeight, footer: !!document.querySelector('.terminal-footer') }
+    })
+    assert.ok(layout.host.height >= 170, JSON.stringify(layout))
+    assert.ok(layout.screen.bottom <= layout.process.top + 1, JSON.stringify(layout))
+    assert.ok(layout.process.bottom <= layout.viewport + 1, JSON.stringify(layout))
+    assert.ok(layout.process.height <= 181, JSON.stringify(layout))
+    assert.equal(layout.footer, false)
+    await command('COMPACT_PROCESS_INPUT_OK')
+    await waitOutput(task.id, 'COMPACT_PROCESS_INPUT_OK')
+    await waitScreen('COMPACT_PROCESS_INPUT_OK')
+    await page.screenshot({ path: 'artifacts/process-panel-compact.png' })
+  } finally {
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1320, 850))
   }
 }

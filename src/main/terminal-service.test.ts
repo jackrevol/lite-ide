@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { IPty } from 'node-pty'
 import { TerminalService, type PtyFactory } from './terminal-service.ts'
+import { ProcessService, type ProcessRecord } from './process-service.ts'
 import type { TerminalEvent } from '../shared/types.ts'
 
 test('터미널은 작업 경로당 하나이며 입력을 에코하지 않고 전환 시 이전 프로세스를 종료한다', async () => {
@@ -199,5 +200,97 @@ test('복원할 작업 경로를 검증하고 실패한 세션만 다음 실행�
     await service.restoreAfterUpdate(async () => { throw new Error('사용할 수 없는 경로') })
     assert.equal(service.hasRunning(), false)
     assert.deepEqual(JSON.parse(await readFile(file + '.update.json', 'utf8')), [input])
+  } finally { await service.close() }
+})
+
+test('업데이트 복원은 Codex 자손을 보존하고 새 generation에 등록하며 명시적 중단은 세션부터 중단한다', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'lite-terminal-process-restore-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const file = join(directory, 'resume.json')
+  let records: ProcessRecord[] = []
+  let nextPid = 100
+  const actions: string[] = []
+  const record = (pid: number, ppid: number): ProcessRecord => ({
+    pid, ppid, identity: `process-${pid}`, startedAt: `process-${pid}`,
+    command: `codex ${pid}`, state: 'running',
+  })
+  const processes = new ProcessService(async () => records, async (process) => {
+    actions.push(`descendant:${process.pid}`)
+    records = records.filter((row) => row.pid !== process.pid)
+  })
+  const factory: PtyFactory = () => {
+    const pid = nextPid
+    nextPid += 100
+    records.push(record(pid, 1), record(pid + 1, pid))
+    let exit = (_event: { exitCode: number }) => {}
+    return {
+      pid,
+      onData: () => ({ dispose() {} }),
+      onExit: (callback: typeof exit) => { exit = callback; return { dispose() {} } },
+      kill: () => {
+        actions.push(`pty:${pid}`)
+        records = records.filter((row) => row.pid !== pid)
+        exit({ exitCode: 0 })
+      },
+      write() {},
+      resize() {},
+    } as unknown as IPty
+  }
+  const create = () => new TerminalService(
+    file, () => {}, factory, async () => '/codex', async () => 'same-thread',
+    async (threadId) => { actions.push(`interrupt:${threadId}`) }, processes,
+  )
+  const service = create()
+  const input = { taskId: 'restored', workspace: directory, kind: 'codex' as const, cols: 80, rows: 24 }
+  let restored: TerminalService | undefined
+  try {
+    const before = await service.open(input)
+    const oldRoot = (await service.inspectProcesses(directory)).processes.find((row) => row.root)!
+    assert.deepEqual((await service.inspectProcesses(directory)).processes.map((row) => row.pid), [100, 101])
+    await service.prepareForUpdate()
+    await service.close()
+    assert.deepEqual(actions, ['pty:100'])
+    assert.deepEqual((await processes.inspect(directory, [oldRoot])).processes, [])
+    restored = create()
+    await restored.restoreAfterUpdate(async () => {})
+    const after = restored.snapshot(input.taskId)!
+    assert.notEqual(after.generation, before.generation)
+    const snapshot = await restored.inspectProcesses(directory)
+    assert.deepEqual(snapshot.processes.map((row) => row.pid), [200, 201])
+    await assert.rejects(restored.stopProcess(oldRoot), /터미널/)
+    const newRoot = snapshot.processes.find((row) => row.root)!
+    await assert.rejects(restored.stopProcess({ ...newRoot, identity: 'old-identity' }), /소유/)
+    assert.deepEqual(actions, ['pty:100'])
+    await restored.stopProcess(newRoot)
+    assert.deepEqual(actions, ['pty:100', 'interrupt:same-thread', 'descendant:201', 'pty:200'])
+    assert.equal(restored.snapshot(input.taskId)?.running, false)
+    assert.deepEqual((await restored.inspectProcesses(directory)).processes, [])
+  } finally {
+    await restored?.close()
+    await service.close()
+  }
+})
+
+test('세션 중단을 기다리는 동안 PTY가 먼저 종료되어도 중복 종료하지 않는다', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'lite-terminal-interrupt-exit-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  let exit = (_event: { exitCode: number }) => {}
+  let kills = 0
+  const factory: PtyFactory = () => ({
+    onData: () => ({ dispose() {} }),
+    onExit: (callback: typeof exit) => { exit = callback; return { dispose() {} } },
+    kill: () => { kills++; exit({ exitCode: 0 }) },
+    write() {},
+    resize() {},
+  } as unknown as IPty)
+  const service = new TerminalService(
+    join(directory, 'resume.json'), () => {}, factory, async () => '/codex',
+    async () => 'thread', async () => { exit({ exitCode: 0 }) },
+  )
+  try {
+    await service.open({ taskId: 'one', workspace: directory, kind: 'codex', cols: 80, rows: 24 })
+    await service.stop('one')
+    assert.equal(kills, 0)
+    assert.equal(service.snapshot('one')?.running, false)
   } finally { await service.close() }
 })

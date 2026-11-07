@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { Code2, FileCode2, Plus, X } from 'lucide-react'
+import { Bot, Code2, FileCode2, Plus, Terminal, X } from 'lucide-react'
 
 export function TaskTabs({
   tasks,
@@ -8,7 +8,7 @@ export function TaskTabs({
   onAdd,
   onClose,
 }: {
-  tasks: { id: string; title: string; active: boolean; kind?: 'diff'; detail?: string }[]
+  tasks: { id: string; title: string; active: boolean; kind?: 'terminal' | 'session' | 'subagent' | 'diff'; detail?: string }[]
   selected?: string
   onSelect: (id: string) => void
   onAdd: () => void
@@ -61,10 +61,10 @@ export function TaskTabs({
                 [next]?.focus()
             }}
           >
-            {task.kind === 'diff' ? <FileCode2 size={13} /> : <Code2 size={13} />}
+            {task.kind === 'diff' ? <FileCode2 size={13} /> : task.kind === 'subagent' ? <Bot size={13} /> : task.kind === 'terminal' ? <Terminal size={13} /> : <Code2 size={13} />}
             <span>{task.title}</span>
             {task.active && (
-              <span className="tab-running-dot" aria-label="터미널 실행 중" />
+              <span className="tab-running-dot" aria-label="실행 중" />
             )}
           </button>
           {task.kind === 'diff' && <button className="tab-close" aria-label={`${task.title} 탭 닫기`} title="변경 내용 닫기" onClick={() => onClose?.(task.id)}><X size={12} /></button>}

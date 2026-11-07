@@ -37,6 +37,8 @@ test('스크립트 없는 작업은 즉시 시작하고 초기화 작업은 성�
     const first = await service.initialize(workspace, script)
     assert.equal(first?.status, 'running')
     await assert.rejects(service.requireReady(workspace), /성공적으로 완료/)
+    await assert.rejects(service.requireReady(join(workspace, 'nested')), /성공적으로 완료/)
+    await service.requireReady(workspace + '-other')
     const duplicate = await service.run(workspace, script)
     assert.equal(duplicate?.startedAt, first?.startedAt)
     const done = await finished(service, workspace)

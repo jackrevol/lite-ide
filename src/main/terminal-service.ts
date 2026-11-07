@@ -3,10 +3,12 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { findCodex } from './codex-client.ts'
 import { pathKey } from './git.ts'
+import { ProcessService, type TerminalProcessRoot } from './process-service.ts'
 import type {
   TerminalEvent,
   TerminalOpen,
   TerminalSnapshot,
+  StopProcessInput,
 } from '../shared/types.ts'
 
 const outputLimit = 2_000_000
@@ -31,6 +33,7 @@ export class TerminalService {
   private emit: (event: TerminalEvent) => void
   private spawn: PtyFactory
   private codex: () => Promise<string>
+  private processes: ProcessService
   private resolveThread?: (input: TerminalOpen, resuming: boolean) => Promise<string | undefined>
   private interruptThread?: (threadId: string) => Promise<void>
 
@@ -41,6 +44,7 @@ export class TerminalService {
     codex = findCodex,
     resolveThread?: (input: TerminalOpen, resuming: boolean) => Promise<string | undefined>,
     interruptThread?: (threadId: string) => Promise<void>,
+    processes = new ProcessService(),
   ) {
     this.file = file
     this.emit = emit
@@ -48,6 +52,7 @@ export class TerminalService {
     this.codex = codex
     this.resolveThread = resolveThread
     this.interruptThread = interruptThread
+    this.processes = processes
     this.loaded = Promise.all([
       readFile(file, 'utf8')
         .then((data) => {
@@ -220,6 +225,8 @@ export class TerminalService {
       env,
     })
     terminal.process = child
+    terminal.pid = child.pid
+    terminal.startedAt = Date.now()
     this.terminals.set(input.taskId, terminal)
     const data = child.onData((chunk) => {
       terminal.output = (terminal.output + chunk).slice(-outputLimit)
@@ -236,6 +243,7 @@ export class TerminalService {
         terminal.running = false
         terminal.exitCode = exitCode
         terminal.process = undefined
+        this.processes.forget(terminal.generation)
         this.emit({
           taskId: input.taskId,
           generation: terminal.generation,
@@ -248,6 +256,15 @@ export class TerminalService {
         resolve()
       })
     })
+    if (Number.isSafeInteger(child.pid) && child.pid > 0) {
+      await this.processes.register({
+        taskId: terminal.taskId,
+        generation: terminal.generation,
+        workspace: terminal.workspace,
+        pid: child.pid,
+      }).catch(() => {})
+      if (!terminal.running) this.processes.forget(terminal.generation)
+    }
     if (input.kind === 'codex') {
       this.resumed.add(pathKey(input.workspace))
       this.persistResume()
@@ -354,6 +371,13 @@ export class TerminalService {
         await this.interruptThread(threadId)
       }
     }
+    // 업데이트·앱 종료에서는 Codex daemon의 실행을 보존하고 PTY 연결만 닫습니다.
+    if (!preserveSession || terminal.kind !== 'codex') {
+      const root = this.processRoots().find((root) => root.generation === terminal.generation)
+      if (root)
+        await this.processes.stopDescendants(root, () => this.processRoots()).catch(() => {})
+    }
+    if (!terminal.process) return
     terminal.process.kill()
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
@@ -374,6 +398,44 @@ export class TerminalService {
     } finally {
       if (timer) clearTimeout(timer)
     }
+  }
+
+  private processRoots(workspace?: string): TerminalProcessRoot[] {
+    return [...this.terminals.values()].flatMap((terminal) =>
+      terminal.running && terminal.process && Number.isSafeInteger(terminal.pid) && terminal.pid! > 0 &&
+      (!workspace || pathKey(terminal.workspace) === pathKey(workspace))
+        ? [{ taskId: terminal.taskId, generation: terminal.generation, workspace: terminal.workspace, pid: terminal.pid! }]
+        : [],
+    )
+  }
+
+  inspectProcesses(workspace: string) {
+    return this.processes.inspect(workspace, this.processRoots(workspace))
+  }
+
+  async stopProcess(input: StopProcessInput) {
+    const root = this.processRoots(input.workspace).find((root) =>
+      root.taskId === input.taskId && root.generation === input.generation && root.pid === input.pid,
+    )
+    if (root) {
+      const snapshot = await this.inspectProcesses(input.workspace)
+      const selected = snapshot.processes.some((process) =>
+        process.root && process.generation === input.generation && process.pid === input.pid && process.identity === input.identity,
+      )
+      if (!selected) throw new Error('이 터미널 소유의 실행 중인 프로세스가 아닙니다. 목록을 새로 고쳐 주세요.')
+      if (this.terminals.get(input.taskId)?.generation !== input.generation)
+        throw new Error('터미널이 변경되었습니다. 목록을 새로 고쳐 주세요.')
+      // daemon을 종료하기 전에 Codex에 턴 중단을 전달합니다.
+      await this.stop(input.taskId)
+      return this.inspectProcesses(input.workspace)
+    }
+    await this.processes.stop(() => this.processRoots(input.workspace), input, async () => {
+      const terminal = this.terminals.get(input.taskId)
+      if (terminal?.generation !== input.generation)
+        throw new Error('터미널이 변경되었습니다. 목록을 새로 고쳐 주세요.')
+      await this.stop(input.taskId)
+    })
+    return this.inspectProcesses(input.workspace)
   }
 
   async removeWorkspace<T>(

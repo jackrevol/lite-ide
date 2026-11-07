@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { pathKey } from './git.ts'
+import { pathKey, workspaceContains } from './git.ts'
 import type { StartupSnapshot } from '../shared/types.ts'
 
 type Execution = {
@@ -51,7 +51,8 @@ export class StartupService {
   async requireReady(workspace: string) {
     await this.loaded
     await this.queue.catch(() => {})
-    if (this.required.has(pathKey(workspace))) throw new Error('Startup 스크립트가 성공적으로 완료된 후 에이전트를 시작할 수 있습니다.')
+    if ([...this.required].some((directory) => workspaceContains(directory, workspace)))
+      throw new Error('Startup 스크립트가 성공적으로 완료된 후 에이전트를 시작할 수 있습니다.')
   }
   private async save() {
     await mkdir(dirname(this.file), { recursive: true })

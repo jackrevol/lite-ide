@@ -44,6 +44,7 @@ import type {
   ProjectDefaults,
   TerminalOpen,
   DeleteTaskOptions,
+  StopProcessInput,
 } from '../shared/types'
 
 const projects = new Set<string>()
@@ -140,6 +141,10 @@ app.whenReady().then(() => {
     (event) => {
       if (window && !window.isDestroyed())
         window.webContents.send('terminal:event', event)
+      if (event.type === 'exit') {
+        const workspace = terminals?.snapshot(event.taskId)?.workspace
+        if (workspace) void agents?.terminalExited(workspace).catch(() => {})
+      }
     },
     undefined,
     undefined,
@@ -190,14 +195,7 @@ app.whenReady().then(() => {
     const workspace = requireWorkspace(input?.workspace)
     await requireLinkedWorktree(workspace)
     await startups!.requireReady(workspace)
-    if (
-      (await agents!.all()).some(
-        (session) =>
-          pathKey(session.workspace) === pathKey(workspace) &&
-          (!input.threadId || session.threadId !== input.threadId) &&
-          ['running', 'waiting'].includes(session.status),
-      )
-    )
+    if (await agents!.hasOwnedRunningSession(workspace, input.threadId))
       throw new Error('기존 실행을 중단한 뒤 터미널을 열어 주세요.')
     if (updates?.snapshot().status === 'installing')
       throw new Error('업데이트 설치를 시작하고 있습니다.')
@@ -244,6 +242,15 @@ app.whenReady().then(() => {
   ipcMain.handle('startup:stop', (event, path: string) => {
     requireTerminalSender(event)
     return startups!.stop(requireWorkspace(path))
+  })
+  ipcMain.handle('process:inspect', (event, workspace: string) => {
+    requireTerminalSender(event)
+    return terminals!.inspectProcesses(requireWorkspace(workspace))
+  })
+  ipcMain.handle('process:stop', (event, input: StopProcessInput) => {
+    requireTerminalSender(event)
+    const workspace = requireWorkspace(input?.workspace)
+    return terminals!.stopProcess({ ...input, workspace })
   })
   updates = new UpdateService({
     version: app.isPackaged
@@ -319,7 +326,11 @@ app.whenReady().then(() => {
   }
   ipcMain.handle('codex:status', () => agents!.status())
   ipcMain.handle('codex:usage', () => agents!.usage())
-  ipcMain.handle('codex:sessions', () => agents!.all())
+  ipcMain.handle('codex:sessions', async (_event, workspace?: string) => {
+    if (workspace !== undefined)
+      await agents!.observeWorkspace(requireWorkspace(workspace))
+    return agents!.all()
+  })
   ipcMain.handle('codex:send', async (_event, input: SendMessage) => {
     if (updates?.snapshot().status === 'installing')
       throw new Error('업데이트 설치를 시작하고 있습니다.')
@@ -334,7 +345,12 @@ app.whenReady().then(() => {
   ipcMain.handle('codex:subagent-inspect', (_event, id: string) =>
     agents!.inspectSubagent(id),
   )
-  ipcMain.handle('codex:subagent-send', (_event, id: string, text: string) => {
+  ipcMain.handle('codex:subagent-send', async (_event, id: string, text: string) => {
+    if (updates?.snapshot().status === 'installing')
+      throw new Error('업데이트 설치를 시작하고 있습니다.')
+    const session = (await agents!.all()).find((session) => session.id === id)
+    if (!session) throw new Error('세션을 찾을 수 없습니다.')
+    await startups!.requireReady(session.workspace)
     if (updates?.snapshot().status === 'installing')
       throw new Error('업데이트 설치를 시작하고 있습니다.')
     return agents!.sendSubagentMessage(id, text)

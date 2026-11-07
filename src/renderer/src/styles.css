@@ -923,7 +923,7 @@
 .agent-tab-item:has(.tab-close) [role='tab'] { padding-right: 28px; }
 .tab-close { position: absolute; right: 5px; top: 10px; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 3px; color: var(--muted-foreground); }
 .tab-close:hover { background: var(--accent); }
-.task-terminal-slot { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; }
+.task-terminal-slot { display: flex; flex: 1; min-width: 0; min-height: 260px; flex-direction: column; }
 [hidden] { display: none !important; }
 .main-diff { margin-top: 0 !important; border-top: 0 !important; }
 .main-diff pre { font-size: 12px !important; }
@@ -1698,6 +1698,7 @@ dialog::backdrop {
   min-width: 0;
 }
 .row-action,
+.project-base-branch,
 .project-new-task {
   display: grid;
   place-items: center;
@@ -1708,6 +1709,7 @@ dialog::backdrop {
   color: var(--muted-foreground);
 }
 .row-action:hover,
+.project-base-branch:hover,
 .project-new-task:hover {
   background: var(--accent);
   color: var(--foreground);
@@ -1777,6 +1779,24 @@ dialog::backdrop {
   padding: 0;
   margin: 0;
   min-width: 0;
+}
+.base-branch-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.base-branch-controls label {
+  flex: 1;
+  min-width: 0;
+}
+.base-branch-controls select {
+  width: 100%;
+}
+.base-branch-field p {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted-foreground);
 }
 .new-task-dialog label {
   display: grid;
@@ -2177,24 +2197,13 @@ dialog::backdrop {
 }
 .terminal-host {
   flex: 1;
-  min-height: 0;
+  min-height: 170px;
   min-width: 0;
   padding: 12px 10px 6px 14px;
   overflow: hidden;
 }
 .terminal-host .xterm {
   height: 100%;
-}
-.terminal-footer {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  flex-wrap: wrap;
-  flex-shrink: 0;
-  padding: 8px 12px;
-  border-top: 1px solid var(--border);
-  color: var(--subtle);
-  font: 10px/1.5 var(--font-mono);
 }
 .terminal-notice {
   display: flex;
@@ -2215,3 +2224,69 @@ dialog::backdrop {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+.terminal-slot, .session-tab-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.terminal-slot[hidden] { display: none; }
+.session-tab-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.session-tab-task {
+  max-height: 90px;
+  overflow: auto;
+  padding: 10px 14px;
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.session-tab-note, .session-observation-error, .session-tab-empty {
+  padding: 10px 14px;
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.session-tab-empty { flex: 1; }
+.session-tab-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid var(--border);
+}
+.session-tab-composer textarea {
+  flex: 1;
+  min-width: 0;
+  padding: 8px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.process-panel { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 28px; max-height: min(25vh, 180px); border-top: 1px solid var(--border); }
+.process-panel-heading { display: flex; flex-shrink: 0; justify-content: space-between; padding: 4px 10px; }
+.process-panel-heading > button:first-child { display: flex; align-items: center; gap: 7px; font-size: 11px; }
+.process-panel-heading > button:first-child span { color: var(--muted-foreground); }
+.process-panel-body { flex: 1; min-height: 0; overflow: auto; padding: 0 10px 8px; }
+.process-scope, .process-empty { font-size: 10px; color: var(--muted-foreground); margin: 5px 0 8px; }
+.process-table-scroll { overflow: auto; }
+.process-table { border-collapse: collapse; width: 100%; table-layout: fixed; font-size: 10px; }
+.process-table th { text-align: left; color: var(--muted-foreground); font-weight: 500; }
+.process-table th, .process-table td { padding: 5px; border-bottom: 1px solid var(--border); }
+.process-table th:first-child { width: 86px; }
+.process-table th:nth-child(3) { width: 68px; }
+.process-table th:last-child { width: 62px; }
+.process-table td small { display: block; color: var(--muted-foreground); font-size: 9px; }
+.process-table code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
+.process-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 0; font-size: 11px; }

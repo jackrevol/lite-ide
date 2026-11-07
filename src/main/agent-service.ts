@@ -1,4 +1,5 @@
 import { mkdir, readFile, rename, writeFile, stat } from 'node:fs/promises'
+import { createReadStream } from 'node:fs'
 import { dirname } from 'node:path'
 import { pathKey, workspaceContains } from './git.ts'
 import { CodexClient, type RpcMessage } from './codex-client.ts'
@@ -15,6 +16,12 @@ const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
 const string = (value: unknown) => (typeof value === 'string' ? value : '')
 const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : [])
+type RolloutState = {
+  offset: number
+  status?: AgentSession['status']
+  turnId?: string
+  updatedAt?: number
+}
 
 export class AgentService {
   readonly client = new CodexClient()
@@ -30,6 +37,14 @@ export class AgentService {
   private removalIntents = new Set<string>()
   private nextRequest = 0
   private inspections = new Map<string, Promise<void>>()
+  private observations = new Map<string, Promise<void>>()
+  private workspaceRemovalVersion = 0
+  private removedWorkspaceVersions = new Map<string, number>()
+  private terminalExitTimes = new Map<string, number>()
+  private externalThreads = new Set<string>()
+  private observedVersions = new Map<string, number>()
+  private rolloutStates = new Map<string, RolloutState>()
+  private closed = false
   private revisions = new Map<string, number>()
   private pendingUserMessages = new Map<
     string,
@@ -56,8 +71,14 @@ export class AgentService {
       this.requests.clear()
       for (const session of this.sessions.values()) {
         if (session.status === 'running' || session.status === 'waiting') {
-          session.status = 'failed'
-          session.error = reason
+          if (session.threadId && this.externalThreads.has(session.threadId)) {
+            session.observationError = reason
+            this.publish(session, false)
+            continue
+          }
+          // 연결만 끊겨도 daemon의 실행은 계속되므로 재구독 가능한 상태로 보존합니다.
+          session.status = 'interrupted'
+          session.observationError = reason
           session.requests = []
           this.publish(session)
         }
@@ -87,6 +108,14 @@ export class AgentService {
           session.status = 'interrupted'
         session.requests = []
         this.sessions.set(session.id, session)
+      }
+      // CLI 계층은 별도 프로세스가 소유하므로 재시작 후에도 읽기 전용으로 복원합니다.
+      for (const session of this.sessions.values()) {
+        if (!session.id.startsWith('cli-')) continue
+        for (const item of [session, ...this.descendants(session.id)]) {
+          if (item.threadId) this.externalThreads.add(item.threadId)
+          item.canAcceptDirectInput = false
+        }
       }
       for (const workspace of this.removalIntents) {
         const removed = await stat(workspace).then(
@@ -144,6 +173,223 @@ export class AgentService {
   async all() {
     await this.loaded
     return [...this.sessions.values()]
+  }
+
+  async hasOwnedRunningSession(workspace: string, exceptThreadId?: string) {
+    await this.loaded
+    const attached = exceptThreadId ? [...this.sessions.values()].find(
+      (session) => session.threadId === exceptThreadId,
+    ) : undefined
+    const attachedFamily = new Set(attached
+      ? [attached, ...this.descendants(attached.id)].map((session) => session.id)
+      : [])
+    return [...this.sessions.values()].some((session) =>
+      pathKey(session.workspace) === pathKey(workspace) &&
+      !attachedFamily.has(session.id) &&
+      !(session.threadId && this.externalThreads.has(session.threadId)) &&
+      ['running', 'waiting'].includes(session.status),
+    )
+  }
+
+  private parentThreadId(thread: Record<string, unknown>) {
+    const source = record(record(record(thread.source).subAgent).thread_spawn)
+    return string(thread.parentThreadId) || string(source.parent_thread_id)
+  }
+
+  private async listThreads(params: Record<string, unknown>) {
+    const threads: Record<string, unknown>[] = []
+    const cursors = new Set<string>()
+    let cursor: string | undefined
+    do {
+      const result = await this.client.request<{
+        data: Record<string, unknown>[]
+        nextCursor?: string | null
+      }>('thread/list', { ...params, limit: 100, ...(cursor ? { cursor } : {}) })
+      threads.push(...list(result.data).map(record))
+      cursor = string(result.nextCursor) || undefined
+      if (cursor && cursors.has(cursor))
+        throw new Error('Codex 세션 목록의 페이지 정보가 올바르지 않습니다.')
+      if (cursor) cursors.add(cursor)
+    } while (cursor)
+    return threads
+  }
+
+  private async refreshObservedSession(
+    session: AgentSession,
+    metadata: Record<string, unknown>,
+  ) {
+    if (
+      typeof metadata.updatedAt !== 'number' ||
+      this.observedVersions.get(session.threadId!) !== metadata.updatedAt ||
+      ['running', 'waiting'].includes(session.status) ||
+      session.observationError
+    )
+      await this.inspectSubagent(session.id)
+  }
+
+  async terminalExited(workspace: string) {
+    await this.loaded
+    if (this.closed) return
+    this.terminalExitTimes.set(pathKey(workspace), Date.now())
+    const roots = [...this.sessions.values()].filter(
+      (session) => !session.parentSessionId &&
+        pathKey(session.workspace) === pathKey(workspace),
+    )
+    for (const root of roots)
+      for (const session of [root, ...this.descendants(root.id)]) {
+        if (!session.threadId || !this.externalThreads.has(session.threadId) ||
+          !['running', 'waiting'].includes(session.status)) continue
+        session.observationError = this.terminalExitWarning(session)
+        this.publish(session, false)
+      }
+  }
+
+  private terminalExitWarning(session: AgentSession, activity = session.updatedAt) {
+    const visited = new Set<string>()
+    let current: AgentSession | undefined = session
+    while (current && !visited.has(current.id)) {
+      visited.add(current.id)
+      const exitedAt = this.terminalExitTimes.get(pathKey(current.workspace))
+      if (exitedAt !== undefined && activity <= exitedAt)
+        return '앱 터미널이 종료되었습니다. CLI 세션의 마지막 기록은 실행 중이며 현재 실행 여부는 확인할 수 없습니다.'
+      current = current.parentSessionId
+        ? this.sessions.get(current.parentSessionId) : undefined
+    }
+    return undefined
+  }
+
+  private async readRolloutState(thread: Record<string, unknown>) {
+    const path = string(thread.path)
+    if (!path) return undefined
+    const { size } = await stat(path)
+    let state = this.rolloutStates.get(path)
+    if (!state || size < state.offset) {
+      state = { offset: 0 }
+      this.rolloutStates.set(path, state)
+    }
+    if (size === state.offset) return state
+    // 완료된 줄까지만 소비하여 CLI가 쓰는 도중의 JSON과 UTF-8 문자를 보존합니다.
+    const stream = createReadStream(path, {
+      encoding: 'utf8', start: state.offset, end: size - 1,
+    })
+    let pending = ''
+    for await (const chunk of stream) {
+      pending += String(chunk)
+      let newline: number
+      while ((newline = pending.indexOf('\n')) >= 0) {
+        const line = pending.slice(0, newline)
+        pending = pending.slice(newline + 1)
+        state.offset += Buffer.byteLength(line, 'utf8') + 1
+        let entry: Record<string, unknown>
+        try { entry = record(JSON.parse(line)) } catch { continue }
+        const timestamp = Date.parse(string(entry.timestamp))
+        if (Number.isFinite(timestamp)) state.updatedAt = timestamp
+        if (entry.type !== 'event_msg') continue
+        const event = record(entry.payload)
+        const statuses: Record<string, AgentSession['status']> = {
+          task_started: 'running', task_complete: 'completed',
+          turn_aborted: 'interrupted',
+        }
+        if (!statuses[string(event.type)]) continue
+        state.status = statuses[string(event.type)]
+        state.turnId = string(event.turn_id) ||
+          string(record(event.turn_attribution).turn_id) || state.turnId
+      }
+    }
+    return state
+  }
+
+  async observeWorkspace(workspace: string): Promise<void> {
+    await this.loaded
+    if (this.closed || this.deletionBlocked(workspace, '')) return
+    const key = pathKey(workspace)
+    const pending = this.observations.get(key)
+    if (pending) return pending
+    const removalVersion = this.workspaceRemovalVersion
+    const cancelled = () => this.closed || this.deletionBlocked(workspace, '') ||
+      [...this.removedWorkspaceVersions].some(([root, version]) =>
+        version > removalVersion && workspaceContains(root, workspace),
+      )
+    const observation = (async () => {
+      await this.client.start()
+      const threads = await this.listThreads({
+        cwd: workspace,
+        sourceKinds: ['cli', 'appServer'],
+        sortKey: 'updated_at',
+      })
+      for (const thread of threads) {
+        if (cancelled()) return
+        const threadId = string(thread.id)
+        // 서버 필터를 신뢰하지 않고 부모 작업은 선택한 cwd와 정확히 일치시킵니다.
+        if (
+          !threadId || this.parentThreadId(thread) ||
+          pathKey(string(thread.cwd)) !== key
+        ) continue
+        let root = [...this.sessions.values()].find(
+          (item) => item.threadId === threadId,
+        )
+        if (root && !this.externalThreads.has(threadId)) continue
+        if (!root) {
+          root = {
+            id: `cli-${threadId}`,
+            threadId,
+            workspace,
+            title: string(thread.name) ||
+              string(thread.preview).split('\n')[0].slice(0, 100) || 'Codex 세션',
+            status: 'idle',
+            messages: [],
+            requests: [],
+            updatedAt: typeof thread.updatedAt === 'number'
+              ? thread.updatedAt * 1000 : Date.now(),
+          }
+          this.sessions.set(root.id, root)
+        }
+        this.externalThreads.add(threadId)
+        root.canAcceptDirectInput = false
+        await this.refreshObservedSession(root, thread)
+        if (cancelled()) return
+        const descendants = await this.listThreads({
+          ancestorThreadId: threadId,
+          sourceKinds: ['subAgent', 'subAgentThreadSpawn'],
+        })
+        // 목록의 순서와 무관하게 부모를 먼저 연결하며 관계가 불명확한 스레드는 제외합니다.
+        const unresolved = [...descendants]
+        let progress = true
+        while (progress && unresolved.length) {
+          if (cancelled()) return
+          progress = false
+          for (let index = unresolved.length - 1; index >= 0; index--) {
+            if (cancelled()) return
+            const metadata = unresolved[index]
+            const parentId = this.parentThreadId(metadata)
+            const parent = [root, ...this.descendants(root.id)].find(
+              (item) => item.threadId === parentId,
+            )
+            if (!parent) continue
+            unresolved.splice(index, 1)
+            progress = true
+            const child = this.discoverSubagent(parent, string(metadata.id))
+            if (!child) continue
+            this.externalThreads.add(child.threadId!)
+            child.canAcceptDirectInput = false
+            await this.refreshObservedSession(child, metadata)
+          }
+        }
+      }
+    })().catch((error: unknown) => {
+      if (cancelled()) return
+      for (const session of this.sessions.values()) {
+        if (
+          pathKey(session.workspace) !== key || !session.threadId ||
+          !this.externalThreads.has(session.threadId)
+        ) continue
+        session.observationError = error instanceof Error ? error.message : String(error)
+        this.publish(session, false)
+      }
+      throw error
+    }).finally(() => this.observations.delete(key))
+    this.observations.set(key, observation)
+    return observation
   }
 
   async status(): Promise<CodexStatus> {
@@ -213,6 +459,8 @@ export class AgentService {
     if (this.busy.has(input.sessionId))
       throw new Error('이미 작업을 시작하고 있습니다.')
     const previous = this.sessions.get(input.sessionId)
+    if (previous?.threadId && this.externalThreads.has(previous.threadId))
+      throw new Error('CLI 세션의 지시는 Codex 터미널에서 보내 주세요.')
     if (
       !previous?.parentSessionId &&
       [...this.sessions.values()].some(
@@ -300,6 +548,8 @@ export class AgentService {
 
   async interrupt(id: string) {
     const session = this.sessions.get(id)
+    if (session?.threadId && this.externalThreads.has(session.threadId))
+      throw new Error('CLI 세션은 Codex 터미널에서 중단해 주세요.')
     if (
       session?.parentSessionId &&
       (!session.turnId || !this.loadedThreads.has(session.threadId!))
@@ -362,14 +612,17 @@ export class AgentService {
     if (
       sessions.some(
         (item) =>
-          this.busy.has(item.id) ||
-          this.inspections.has(item.id) ||
-          this.deletingSessions.has(item.id) ||
-          ['running', 'waiting'].includes(item.status),
+          !(item.threadId && this.externalThreads.has(item.threadId)) && (
+            this.busy.has(item.id) ||
+            this.inspections.has(item.id) ||
+            this.deletingSessions.has(item.id) ||
+            ['running', 'waiting'].includes(item.status)
+          ),
       )
     )
       throw new Error('진행 중이거나 시작 중인 작업을 먼저 중단해 주세요.')
     this.deletingWorkspaces.add(key)
+    this.removedWorkspaceVersions.set(key, ++this.workspaceRemovalVersion)
     for (const session of sessions) this.deletingSessions.add(session.id)
     let warning: string | undefined
     try {
@@ -438,6 +691,7 @@ export class AgentService {
       (item) => item.threadId === threadId,
     )
     if (child && !child.parentSessionId) return undefined
+    if (child && child.parentSessionId !== parent.id) return undefined
     if (!child) {
       child = {
         id: `subagent-${threadId}`,
@@ -451,6 +705,10 @@ export class AgentService {
         updatedAt: Date.now(),
       }
       this.sessions.set(child.id, child)
+    }
+    if (parent.threadId && this.externalThreads.has(parent.threadId)) {
+      this.externalThreads.add(threadId)
+      child.canAcceptDirectInput = false
     }
     return child
   }
@@ -467,12 +725,18 @@ export class AgentService {
     session.task = session.task || string(thread.preview) || undefined
     if (typeof thread.canAcceptDirectInput === 'boolean')
       session.canAcceptDirectInput = thread.canAcceptDirectInput
+    if (session.threadId && this.externalThreads.has(session.threadId))
+      session.canAcceptDirectInput = false
   }
 
   async inspectSubagent(id: string): Promise<void> {
     await this.loaded
+    if (this.closed) throw new Error('앱이 종료 중입니다.')
     const session = this.sessions.get(id)
-    if (!session?.parentSessionId || !session.threadId)
+    if (
+      !session?.threadId ||
+      (!session.parentSessionId && !this.externalThreads.has(session.threadId))
+    )
       throw new Error('서브에이전트를 찾을 수 없습니다.')
     if (this.deletionBlocked(session.workspace, id))
       throw new Error('삭제 중인 Worktree의 작업은 제어할 수 없습니다.')
@@ -481,6 +745,7 @@ export class AgentService {
 
   async reconnectSessions() {
     await this.loaded
+    if (this.closed) return
     await Promise.allSettled(
       [...this.sessions.values()]
         .filter((session) => session.threadId && session.status === 'interrupted')
@@ -498,8 +763,17 @@ export class AgentService {
       const previousTurnId = session.turnId
       const { thread } = await this.client.request<{
         thread: Record<string, unknown>
-      }>('thread/resume', { threadId: session.threadId })
-      this.loadedThreads.add(session.threadId!)
+      }>(this.externalThreads.has(session.threadId!) ? 'thread/read' : 'thread/resume', {
+        threadId: session.threadId,
+        ...(this.externalThreads.has(session.threadId!) ? { includeTurns: true } : {}),
+      })
+      if (this.closed || this.deletionBlocked(session.workspace, id) ||
+        this.sessions.get(id) !== session) return
+      const rollout = this.externalThreads.has(session.threadId!)
+        ? await this.readRolloutState(thread) : undefined
+      if (this.closed || this.sessions.get(id) !== session) return
+      if (!this.externalThreads.has(session.threadId!))
+        this.loadedThreads.add(session.threadId!)
       this.updateSubagentMetadata(session, thread)
       // 조회 중 수신한 실시간 메시지와 상태가 과거 스냅샷으로 덮이지 않게 합니다.
       const unchanged = revision === this.revisions.get(id)
@@ -533,11 +807,32 @@ export class AgentService {
         if (lastTurn.status)
           session.error = string(record(lastTurn.error).message) || undefined
         this.applyThreadStatus(session, record(thread.status))
+        // 다른 app-server는 CLI의 미완료 턴을 interrupted로 복원하므로 원본 이벤트를 우선합니다.
+        if (rollout?.status && record(thread.status).type !== 'active') {
+          session.status = rollout.status
+          session.turnId = rollout.turnId || session.turnId
+        }
       }
       session.observationError = undefined
+      if (this.externalThreads.has(session.threadId!)) {
+        if (typeof thread.updatedAt === 'number') {
+          session.updatedAt = thread.updatedAt * 1000
+          this.observedVersions.set(session.threadId!, thread.updatedAt)
+        }
+        if (rollout?.updatedAt)
+          session.updatedAt = Math.max(session.updatedAt, rollout.updatedAt)
+        if (['running', 'waiting'].includes(session.status))
+          session.observationError = this.terminalExitWarning(session)
+      }
+      // 앱 연결이 없는 동안 생성된 자식도 저장된 협업 이벤트에서 복원합니다.
+      for (const turn of list(thread.turns))
+        for (const item of list(record(turn).items))
+          this.trackSubagents(session, record(item))
       this.publish(session, false)
     })()
       .catch((error: unknown) => {
+        if (this.closed || this.sessions.get(id) !== session ||
+          this.deletionBlocked(session.workspace, id)) return
         session.observationError =
           error instanceof Error ? error.message : String(error)
         this.publish(session, false)
@@ -962,7 +1257,9 @@ export class AgentService {
   }
 
   async close() {
+    this.closed = true
     this.client.stop()
+    await Promise.allSettled([...this.observations.values(), ...this.inspections.values()])
     if (this.saveTimer) clearTimeout(this.saveTimer)
     this.persist()
     await this.saveQueue.catch(() => {})

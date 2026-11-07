@@ -40,6 +40,35 @@ export interface TerminalSnapshot {
   cols: number
   rows: number
   exitCode?: number
+  pid?: number
+  startedAt?: number
+}
+export interface ManagedProcess {
+  taskId: string
+  generation: string
+  workspace: string
+  pid: number
+  ppid: number
+  command: string
+  identity: string
+  startedAt: string
+  state: string
+  root: boolean
+  canStop: boolean
+}
+export interface WorkspaceProcessSnapshot {
+  workspace: string
+  observedAt: number
+  scope: 'terminal-descendants'
+  processes: ManagedProcess[]
+  error?: string
+}
+export interface StopProcessInput {
+  workspace: string
+  taskId: string
+  generation: string
+  pid: number
+  identity: string
 }
 export type TerminalEvent =
   | {
@@ -80,6 +109,8 @@ export interface DesktopApi {
   resizeTerminal(taskId: string, cols: number, rows: number): Promise<void>
   closeTerminal(taskId: string): Promise<void>
   terminalSnapshot(taskId: string): Promise<TerminalSnapshot | null>
+  inspectProcesses?(workspace: string): Promise<WorkspaceProcessSnapshot>
+  stopProcess?(input: StopProcessInput): Promise<WorkspaceProcessSnapshot>
   onTerminal(listener: (event: TerminalEvent) => void): () => void
   getSettings(): Promise<AppSettings>
   updateProjectSettings(
@@ -112,7 +143,7 @@ export interface DesktopApi {
   codexStatus(): Promise<CodexStatus>
   codexUsage(): Promise<CodexUsage>
   onCodexUsageChanged(listener: () => void): () => void
-  listSessions(): Promise<AgentSession[]>
+  listSessions(workspace?: string): Promise<AgentSession[]>
   sendMessage(input: SendMessage): Promise<void>
   interruptSession(sessionId: string): Promise<void>
   inspectSubagent(sessionId: string): Promise<void>

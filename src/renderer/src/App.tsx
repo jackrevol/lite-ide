@@ -31,6 +31,9 @@ import { TaskTerminal } from './components/TaskTerminal'
 import { ChangedFilesTree } from './components/ChangedFilesTree'
 import { StartupPanel } from './components/StartupPanel'
 import { DiffView } from './components/DiffView'
+import { SessionTab } from './components/SessionTab'
+import { ProcessPanel } from './components/ProcessPanel'
+import { workspaceSessions } from './lib/workspace-sessions'
 import { AppUpdateButton } from './components/AppUpdateButton'
 import { NewTaskDialog } from './components/NewTaskDialog'
 import { SettingsDialog, projectSettingsKey } from './components/SettingsDialog'
@@ -41,6 +44,7 @@ import {
   type WorkspaceTask,
 } from './lib/workspace-state'
 import type {
+  AgentSession,
   CodexStatus,
   Project,
   ProjectDefaults,
@@ -104,12 +108,12 @@ export function App() {
   const [collapsed, setCollapsed] = useState<string[]>([])
   const [newTaskProject, setNewTaskProject] = useState<Project | null>(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [settingsProject, setSettingsProject] = useState('')
   const [defaults, setDefaults] = useState<ProjectDefaults>({
     baseRef: 'HEAD',
     model: '',
     effort: '',
   })
-  const [branches, setBranches] = useState<string[]>([])
   const [target, setTarget] = useState<{
     task: WorkspaceTask
     action: 'rename' | 'delete'
@@ -132,9 +136,6 @@ export function App() {
   const taskDialog = useRef<HTMLDialogElement>(null)
   const current = state.tasks.find((task) => task.id === state.taskId)
   const project = projects.find((item) => item.path === state.project)
-  const projectTasks = state.tasks.filter(
-    (task) => task.project === state.project,
-  )
   const selectedFile = current ? selectedFiles[current.path] ?? '' : ''
   const currentStartup = current ? startupSnapshots[current.path] : null
   const startupChecked = !!current && Object.hasOwn(startupSnapshots, current.path)
@@ -160,10 +161,57 @@ export function App() {
     }).catch((cause) => { if (!disposed) setError(errorText(cause)) })
     return () => { disposed = true }
   }, [current?.path, ready])
+  const [sessions, setSessions] = useState<Record<string, AgentSession>>({})
+  const [sessionError, setSessionError] = useState('')
+  const [selectedTabs, setSelectedTabs] = useState<Record<string, string>>({})
+  const [sessionDrafts, setSessionDrafts] = useState<Record<string, string>>({})
+  const visibleSessions = workspaceSessions(Object.values(sessions), current?.path ?? '', window.desktop.platform)
+  const selectedSession = visibleSessions.find((session) => `session-${session.id}` === selectedTabs[current?.id ?? ''])
+  const selectedTab = activeDiffId || (selectedSession ? `session-${selectedSession.id}` : current?.id)
   useEffect(() => {
-    if (current && ready && startupChecked && !startupBlocked && !activeDiff)
+    if (current && ready && startupChecked && !startupBlocked && !activeDiff && !selectedSession)
       setMountedTasks((previous) => previous.includes(current.id) ? previous : [...previous, current.id])
-  }, [current?.id, ready, startupChecked, startupBlocked, activeDiffId])
+  }, [current?.id, ready, startupChecked, startupBlocked, selectedTab])
+
+  useEffect(() => window.desktop.onSession((session) => {
+    setSessions((previous) => ({ ...previous, [session.id]: session }))
+  }), [])
+  useEffect(() => window.desktop.onTerminal((event) => {
+    if (event.type !== 'exit') return
+    setTerminals((previous) => {
+      const terminal = previous[event.taskId]
+      if (!terminal || terminal.generation !== event.generation) return previous
+      return { ...previous, [event.taskId]: { ...terminal, running: false, exitCode: event.exitCode } }
+    })
+  }), [])
+  useEffect(() => {
+    if (!ready || !current) return
+    let disposed = false
+    let pending = false
+    setSessionError('')
+    const inspect = async () => {
+      if (pending) return
+      pending = true
+      try {
+        const found = await window.desktop.listSessions(current.path)
+        if (!disposed) {
+          setSessions((previous) => {
+            const next = { ...previous }
+            for (const session of found) {
+              if (!next[session.id] || next[session.id].updatedAt <= session.updatedAt) next[session.id] = session
+            }
+            return next
+          })
+          setSessionError('')
+        }
+      } catch (cause) {
+        if (!disposed) setSessionError(errorText(cause))
+      } finally { pending = false }
+    }
+    void inspect()
+    const timer = setInterval(() => { if (!document.hidden) void inspect() }, 4000)
+    return () => { disposed = true; clearInterval(timer) }
+  }, [ready, current?.path])
 
   const reconnect = useCallback(async () => {
     setConnecting(true)
@@ -214,6 +262,7 @@ export function App() {
         )
         if (disposed) return
         setProjects(opened)
+        setSessions((previous) => ({ ...Object.fromEntries(legacy.map((session) => [session.id, session])), ...previous }))
         setRepositories(Object.fromEntries(snapshots))
         setState((previous) => {
           const tasks = previous.tasks
@@ -347,7 +396,10 @@ export function App() {
   }
   function closeDiff(id: string) {
     setDiffTabs((previous) => previous.filter((tab) => tab.id !== id))
-    if (activeDiffId === id) setActiveDiffId('')
+    if (activeDiffId === id) {
+      setActiveDiffId('')
+      if (current) setSelectedTabs((previous) => ({ ...previous, [current.id]: current.id }))
+    }
   }
   async function openProject() {
     setOpening(true)
@@ -365,10 +417,7 @@ export function App() {
     if (openingTask.current) return
     openingTask.current = true
     try {
-      const [settings, refs] = await Promise.all([
-        window.desktop.getSettings(),
-        window.desktop.listBranches(item.path),
-      ])
+      const settings = await window.desktop.getSettings()
       setDefaults(
         settings.projects[projectSettingsKey(item.path)] ?? {
           baseRef: 'HEAD',
@@ -376,7 +425,6 @@ export function App() {
           effort: '',
         },
       )
-      setBranches(refs)
       setNewTaskProject(item)
     } catch (cause) {
       setError(errorText(cause))
@@ -384,6 +432,10 @@ export function App() {
       openingTask.current = false
     }
   }, [])
+  function manageBaseBranch(item: Project) {
+    setSettingsProject(item.path)
+    setShowSettings(true)
+  }
   async function createTask(task: WorkspaceTask) {
     setActiveDiffId('')
     autoStartTasks.current.set(task.path, task.id)
@@ -638,6 +690,14 @@ export function App() {
                         <span>{item.name}</span>
                       </button>
                       <button
+                        className="project-base-branch"
+                        aria-label={`${item.name} 기준 브랜치 관리`}
+                        title="새 Worktree의 기본 기준 브랜치 관리"
+                        onClick={() => manageBaseBranch(item)}
+                      >
+                        <GitBranch size={14} />
+                      </button>
+                      <button
                         className="project-new-task"
                         aria-label={`${item.name} 새 작업`}
                         title={`${item.name} 새 작업`}
@@ -731,21 +791,28 @@ export function App() {
               aria-label="작업 터미널 영역"
             >
               <TaskTabs
-                tasks={[...projectTasks.map((task) => ({
-                  id: task.id,
-                  title: task.name,
-                  active: !!terminals[task.id]?.running,
-                })), ...diffTabs.filter((tab) => tab.project === state.project).map((tab) => ({ id: tab.id, title: tab.path.split('/').at(-1)!, detail: `${state.tasks.find((task) => task.id === tab.taskId)?.name} · ${tab.path}`, active: false, kind: 'diff' as const }))]}
-                selected={activeDiffId || current?.id}
+                tasks={current ? [{
+                  id: current.id,
+                  title: current.name,
+                  active: !!terminals[current.id]?.running,
+                  kind: 'terminal' as const,
+                  detail: `${current.path} · 터미널`,
+                }, ...visibleSessions.map((session) => ({
+                  id: `session-${session.id}`,
+                  title: `${session.parentSessionId ? '서브 · ' : '세션 · '}${session.nickname || session.title}`,
+                  active: session.status === 'running' || session.status === 'waiting',
+                  kind: session.parentSessionId ? 'subagent' as const : 'session' as const,
+                  detail: [session.title, session.task, session.role, session.model].filter(Boolean).join('\n'),
+                })), ...diffTabs.filter((tab) => tab.taskId === current.id).map((tab) => ({ id: tab.id, title: tab.path.split('/').at(-1)!, detail: `${current.name} · ${tab.path}`, active: false, kind: 'diff' as const }))] : []}
+                selected={selectedTab}
                 onSelect={(id) => {
                   const tab = diffTabs.find((tab) => tab.id === id)
                   if (tab) {
-                    setState((previous) => ({ ...previous, project: tab.project, taskId: tab.taskId }))
                     setActiveDiffId(id)
                     return
                   }
-                  const task = state.tasks.find((task) => task.id === id)
-                  if (task) selectTask(task)
+                  setActiveDiffId('')
+                  if (current) setSelectedTabs((previous) => ({ ...previous, [current.id]: id }))
                 }}
                 onClose={closeDiff}
                 onAdd={() => void addTask()}
@@ -754,14 +821,14 @@ export function App() {
                 id="agent-task-content"
                 className="agent-task-content"
                 role="tabpanel"
-                aria-labelledby={activeDiffId || current ? `task-tab-${activeDiffId || current?.id}` : undefined}
+                aria-labelledby={selectedTab ? `task-tab-${selectedTab}` : undefined}
               >
                 <div className="agent-heading terminal-heading" hidden={!!activeDiff}>
                   <div className="heading-title">
                     <Terminal size={15} />
-                    <h1>{current?.name ?? '작업 터미널'}</h1>
+                    <h1>{selectedSession?.title ?? current?.name ?? '작업 터미널'}</h1>
                   </div>
-                  {current && (
+                  {current && !selectedSession && (
                     <div className="terminal-controls">
                       <button
                         aria-label="Codex 터미널"
@@ -820,13 +887,14 @@ export function App() {
                     </button>
                   </div>
                 )}
-                {current && !activeDiff && startupChecked && <StartupPanel key={current.path} workspace={current.path} project={current.project} snapshot={currentStartup ?? null} blocked={startupBlocked} onRun={() => { if (startupBlocked) autoStartTasks.current.set(current.path, current.id) }}
+                {sessionError && <div className="session-observation-error" role="status">세션 관찰 실패: {sessionError}</div>}
+                {current && !activeDiff && startupChecked && <StartupPanel key={`startup:${current.path}`} workspace={current.path} project={current.project} snapshot={currentStartup ?? null} blocked={startupBlocked} onRun={() => { if (startupBlocked) autoStartTasks.current.set(current.path, current.id) }}
                   onSnapshot={(snapshot) => receiveStartup(snapshot, snapshot.workspace)} onError={setError} />}
                 {state.tasks.filter((task) => mountedTasks.includes(task.id)).map((task) => (
-                  <div className="task-terminal-slot" key={task.id} hidden={task.id !== current?.id || !!activeDiff || startupBlocked}>
+                  <div className="task-terminal-slot" key={`terminal:${task.id}`} hidden={task.id !== current?.id || !!activeDiff || !!selectedSession || startupBlocked}>
                   <TaskTerminal
                     task={task}
-                    active={task.id === current?.id && !activeDiff && !startupBlocked}
+                    active={task.id === current?.id && !activeDiff && !selectedSession && !startupBlocked}
                     theme={theme}
                     onStatus={(snapshot) =>
                       setTerminals((previous) => ({
@@ -848,6 +916,11 @@ export function App() {
                   </div>
                 ))}
                 {activeDiff && <DiffView path={activeDiff.path} diff={diff} loading={diffLoading} onClose={() => closeDiff(activeDiff.id)} />}
+                {current && ready && !activeDiff && !startupBlocked && startupChecked && selectedSession && <SessionTab key={`session:${selectedSession.id}`} session={selectedSession}
+                  draft={sessionDrafts[selectedSession.id] ?? ''}
+                  setDraft={(value) => setSessionDrafts((previous) => ({ ...previous, [selectedSession.id]: typeof value === 'function' ? value(previous[selectedSession.id] ?? '') : value }))}
+                />}
+                {current && ready && !activeDiff && <ProcessPanel key={`processes:${current.path}`} workspace={current.path} />}
                 {!current && !activeDiff && (
                   <div className="welcome">
                     <div className="welcome-icon">
@@ -993,7 +1066,7 @@ export function App() {
           }
           initialEffort={defaults.effort}
           initialBaseRef={defaults.baseRef}
-          branches={branches}
+          onManageBaseBranch={() => manageBaseBranch(newTaskProject)}
           onCreate={createTask}
           onClose={() => setNewTaskProject(null)}
         />
@@ -1001,11 +1074,15 @@ export function App() {
       {showSettings && (
         <SettingsDialog
           projects={projects}
-          currentProject={state.project}
+          currentProject={settingsProject || state.project}
+          initialTab={settingsProject ? 'project' : 'general'}
           connection={connection}
           theme={theme}
           onTheme={setTheme}
-          onClose={() => setShowSettings(false)}
+          onClose={() => {
+            setShowSettings(false)
+            setSettingsProject('')
+          }}
         />
       )}
       <dialog
