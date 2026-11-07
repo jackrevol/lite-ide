@@ -107,6 +107,13 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     return
   }
   switch (message.method) {
+    case 'thread/loaded/list':
+      reply({ data: [...threads.keys()], nextCursor: null })
+      break
+    case 'thread/archive':
+      threads.delete(p.threadId)
+      reply({})
+      break
     case 'thread/list':
       if (process.env.LITE_IDE_FIXTURE_TAB_POLLING === '1') {
         if (!p.ancestorThreadId && p.cwd) {

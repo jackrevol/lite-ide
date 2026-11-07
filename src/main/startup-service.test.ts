@@ -198,6 +198,24 @@ test('중지 및 삭제 실패 후 초기화 gate와 중복 방지를 유지하�
   }
 })
 
+test('Worktree 삭제는 하위 폴더 Startup을 먼저 종료하고 재실행을 막는다', async () => {
+  const { root, workspace, service } = await fixture()
+  const nested = join(workspace, 'nested')
+  await mkdir(nested)
+  try {
+    const script = await saveScript(nested, win ? 'Start-Sleep -Seconds 60' : 'sleep 60')
+    await service.run(nested, script)
+    await service.removeWorkspace(workspace, async () => {
+      assert.equal(service.hasRunning(), false)
+      assert.equal(service.snapshot(nested)?.status, 'stopped')
+      await assert.rejects(service.run(nested, script), /삭제 중/)
+    })
+  } finally {
+    await service.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('서로 다른 Worktree의 동시 초기화와 빠른 완료 기록을 직렬 저장한다', async () => {
   const { root, workspace, file, service } = await fixture()
   const second = join(root, 'second')

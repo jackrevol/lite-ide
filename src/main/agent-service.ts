@@ -661,6 +661,69 @@ export class AgentService {
     }
   }
 
+  async releaseWorkspaceResources(workspace: string) {
+    await this.loaded
+    if (!this.deletingWorkspaces.has(pathKey(workspace)))
+      throw new Error('Worktree 삭제 중에만 실행 자원을 정리할 수 있습니다.')
+    await this.client.start()
+    const related = new Set<string>()
+    for (const session of this.sessions.values()) {
+      if (!workspaceContains(workspace, session.workspace)) continue
+      for (const item of [session, ...this.descendants(session.id)])
+        if (item.threadId) related.add(item.threadId)
+    }
+    const loadedTargets = async () => {
+      const ids = new Set<string>()
+      const cursors = new Set<string>()
+      let cursor: string | undefined
+      do {
+        const page = await this.client.request<{ data: string[]; nextCursor?: string | null }>(
+          'thread/loaded/list', { limit: 100, ...(cursor ? { cursor } : {}) },
+        )
+        if (!Array.isArray(page.data) || page.data.some((id) => typeof id !== 'string' || !id))
+          throw new Error('실행 중인 Codex 세션 목록을 확인할 수 없습니다.')
+        for (const id of page.data) ids.add(id)
+        cursor = page.nextCursor || undefined
+        if (cursor && cursors.has(cursor)) throw new Error('Codex 세션 목록의 페이지 정보가 올바르지 않습니다.')
+        if (cursor) cursors.add(cursor)
+      } while (cursor)
+      const threads: Record<string, unknown>[] = []
+      for (const threadId of ids) {
+        const { thread } = await this.client.request<{ thread: Record<string, unknown> }>(
+          'thread/read', { threadId, includeTurns: false },
+        )
+        if (!thread || thread.id !== threadId || !string(thread.cwd))
+          throw new Error('실행 중인 Codex 세션의 작업 경로를 확인할 수 없습니다.')
+        threads.push(thread)
+        if (workspaceContains(workspace, string(thread.cwd))) related.add(threadId)
+      }
+      // 아직 UI가 관찰하지 않은 CLI 세션과 다른 cwd에서 실행 중인 자식도 포함합니다.
+      let size: number
+      do {
+        size = related.size
+        for (const thread of threads)
+          if (related.has(this.parentThreadId(thread))) related.add(string(thread.id))
+      } while (related.size !== size)
+      return threads.filter((thread) => related.has(string(thread.id)))
+    }
+    let targets = await loadedTargets()
+    // 부모를 먼저 종료하면 실행 중인 내부 자식도 소유자를 통해 종료됩니다.
+    for (let remaining = targets.length; targets.length && remaining > 0; remaining--) {
+      const ids = new Set(targets.map((thread) => string(thread.id)))
+      const thread = targets.find((item) => !ids.has(this.parentThreadId(item))) ?? targets[0]
+      const threadId = string(thread.id)
+      // 턴 중단과 별개로 daemon이 보유한 백그라운드 터미널을 종료합니다.
+      await this.client.request('thread/backgroundTerminals/clean', { threadId })
+      // archive는 대화 기록을 보존하면서 daemon의 세션 종료 완료를 기다립니다.
+      await this.client.request('thread/archive', { threadId })
+      this.loadedThreads.delete(threadId)
+      targets = await loadedTargets()
+      if (targets.some((item) => item.id === threadId)) break
+    }
+    if (targets.length)
+      throw new Error('Codex 실행 자원이 아직 남아 있어 Worktree를 삭제하지 않았습니다. 다시 시도해 주세요.')
+  }
+
   private deletionBlocked(workspace: string, sessionId: string) {
     return (
       this.deletingSessions.has(sessionId) ||

@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { setTimeout as delay } from 'node:timers/promises'
 import type {
   ManagedProcess,
   StopProcessInput,
@@ -138,8 +139,20 @@ export class ProcessService {
 
   async stopDescendants(root: TerminalProcessRoot, roots: () => TerminalProcessRoot[]) {
     const identity = this.identities.get(root.generation)
-    if (!identity) return
+    if (!identity) throw new Error('터미널 프로세스의 소유권을 확인할 수 없어 삭제를 중단했습니다. 다시 연결해 주세요.')
+    const targets = this.owned([root], await this.read()).filter((row) => !row.root)
     await this.stop(roots, { ...root, identity }, async () => {})
+    // 종료 신호 전송만으로는 cwd 핸들이 해제되지 않습니다. 재부모화된 자손도 기다립니다.
+    const deadline = Date.now() + 5000
+    while (targets.length) {
+      const records = await this.read()
+      if (!targets.some((target) => records.some((row) =>
+        row.pid === target.pid && row.identity === target.identity && !row.state.startsWith('Z'),
+      ))) return
+      if (Date.now() >= deadline)
+        throw new Error('터미널 자식 프로세스가 아직 종료되지 않아 삭제를 중단했습니다. 다시 시도해 주세요.')
+      await delay(100)
+    }
   }
 }
 

@@ -533,6 +533,9 @@ app.whenReady().then(() => {
       const workspace = await resolveWorktreePath(
         options?.localOnly === true ? target : requireWorkspace(target),
       )
+      const preview = await inspectWorktreeDeletion(directory, workspace, [...projects])
+      if (preview.localOnly && options?.localOnly !== true)
+        throw new Error('Git 연결 상태가 변경되었습니다. 삭제 내용을 다시 확인해 주세요.')
       return agents!.removeWorkspace(workspace, async () => {
         if (
           options?.localOnly !== true &&
@@ -541,6 +544,8 @@ app.whenReady().then(() => {
         )
           throw new Error('변경 사항을 삭제하려면 확인이 필요합니다.')
         return startups!.removeWorkspace(workspace, () => terminals!.removeWorkspace(workspace, async () => {
+          if (options?.localOnly !== true)
+            await agents!.releaseWorkspaceResources(workspace)
           const result = await removeWorktree(
             directory,
             workspace,

@@ -2,7 +2,7 @@ import * as pty from 'node-pty'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { findCodex } from './codex-client.ts'
-import { pathKey } from './git.ts'
+import { pathKey, workspaceContains } from './git.ts'
 import { ProcessService, type TerminalProcessRoot } from './process-service.ts'
 import { CodexNotificationParser } from './codex-notification-parser.ts'
 import type { AttentionNotification } from './notification-service.ts'
@@ -107,7 +107,7 @@ export class TerminalService {
       !['codex', 'shell'].includes(input.kind)
     )
       throw new Error('올바른 작업을 선택해 주세요.')
-    if (this.deleting.has(pathKey(input.workspace)))
+    if ([...this.deleting].some((root) => workspaceContains(root, input.workspace)))
       throw new Error('삭제 중인 작업입니다.')
     const pending = this.opening.get(input.taskId)
     if (pending) {
@@ -410,7 +410,7 @@ export class TerminalService {
     if (!preserveSession || terminal.kind !== 'codex') {
       const root = this.processRoots().find((root) => root.generation === terminal.generation)
       if (root)
-        await this.processes.stopDescendants(root, () => this.processRoots()).catch(() => {})
+        await this.processes.stopDescendants(root, () => this.processRoots())
     }
     if (!terminal.process) return
     terminal.process.kill()
@@ -483,13 +483,15 @@ export class TerminalService {
     try {
       await Promise.allSettled([...this.opening.values()])
       for (const terminal of this.terminals.values())
-        if (pathKey(terminal.workspace) === key)
+        if (workspaceContains(workspace, terminal.workspace))
           await this.stop(terminal.taskId)
       const result = await remove()
       for (const [id, terminal] of this.terminals)
-        if (pathKey(terminal.workspace) === key) this.terminals.delete(id)
-      this.resumed.delete(key)
-      this.threads.delete(key)
+        if (workspaceContains(workspace, terminal.workspace)) this.terminals.delete(id)
+      for (const path of this.resumed)
+        if (workspaceContains(workspace, path)) this.resumed.delete(path)
+      for (const path of this.threads.keys())
+        if (workspaceContains(workspace, path)) this.threads.delete(path)
       this.persistResume()
       return result
     } finally {

@@ -76,7 +76,7 @@ export class StartupService {
       await this.loaded
       const key = pathKey(workspace)
       if (this.closed) throw new Error('앱이 종료 중입니다.')
-      if (this.deleting.has(key)) throw new Error('삭제 중인 작업입니다.')
+      if ([...this.deleting].some((root) => workspaceContains(root, workspace))) throw new Error('삭제 중인 작업입니다.')
       const existing = this.snapshot(workspace)
       if (existing?.status === 'running') return existing
       if (!scriptPath.trim() || (automatic && this.attempted.has(key))) return existing
@@ -84,7 +84,7 @@ export class StartupService {
       this.attempted.add(key)
       this.required.add(key)
       await this.save()
-      if (this.closed || this.deleting.has(key)) throw new Error('작업을 종료 중입니다.')
+      if (this.closed || [...this.deleting].some((root) => workspaceContains(root, workspace))) throw new Error('작업을 종료 중입니다.')
       const snapshot: StartupSnapshot = { workspace, status: 'running', output: '', startedAt: Math.max(Date.now(), (existing?.startedAt ?? 0) + 1), revision: 0 }
       let scriptFile: string
       const win = process.platform === 'win32'
@@ -197,9 +197,12 @@ export class StartupService {
     this.deleting.add(key)
     try {
       await this.queue.catch(() => {})
-      await this.stop(workspace)
+      for (const execution of this.executions.values())
+        if (workspaceContains(workspace, execution.snapshot.workspace))
+          await this.stop(execution.snapshot.workspace)
       const result = await action()
-      this.executions.delete(key)
+      for (const path of this.executions.keys())
+        if (workspaceContains(workspace, path)) this.executions.delete(path)
       return result
     } finally { this.deleting.delete(key) }
   }

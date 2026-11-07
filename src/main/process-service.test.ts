@@ -7,6 +7,26 @@ const row = (pid: number, ppid: number, identity = `start-${pid}`): ProcessRecor
   ({ pid, ppid, identity, startedAt: identity, command: `node ${pid}`, state: 'running' })
 const target = (pid: number) => ({ ...root, pid, identity: `start-${pid}` })
 
+test('자식 종료 요청 뒤 실제 프로세스가 사라질 때까지 기다린다', async () => {
+  let stopping = false
+  let checks = 0
+  const service = new ProcessService(async () => {
+    if (!stopping) return [row(10, 1), row(11, 10)]
+    checks++
+    return checks < 3 ? [row(10, 1), row(11, 1)] : [row(10, 1)]
+  }, async () => { stopping = true })
+  await service.register(root)
+  await service.stopDescendants(root, () => [root])
+  assert.ok(checks >= 3)
+})
+
+test('소유권 미확인과 자식 종료 오류를 삭제 성공으로 숨기지 않는다', async () => {
+  const service = new ProcessService(async () => [row(10, 1), row(11, 10)], async () => { throw new Error('종료 거부') })
+  await assert.rejects(service.stopDescendants(root, () => [root]), /소유권/)
+  await service.register(root)
+  await assert.rejects(service.stopDescendants(root, () => [root]), /종료 거부/)
+})
+
 test('프로세스 목록은 등록된 터미널 자손만 포함하고 다른 작업과 재사용 PID를 제외한다', async () => {
   let records = [row(10, 1), row(11, 10), row(12, 11), row(90, 1)]
   const service = new ProcessService(async () => records)

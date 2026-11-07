@@ -6,13 +6,15 @@ import {
   parseWorktrees,
   createWorktree,
   removeWorktree,
+  removeEmptyWorktreeDirectory,
   listBranches,
   requireLinkedWorktree,
   inspectWorktreeDeletion,
   inspectRepository,
 } from './git.ts'
 import { validateCloneInput } from './clone.ts'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
+import { once } from 'node:events'
 import {
   mkdtemp,
   mkdir,
@@ -21,9 +23,67 @@ import {
   stat,
   rm,
   realpath,
+  rmdir,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+
+test('Git 삭제 후 빈 폴더만 재시도하고 새로 생긴 파일은 보존한다', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'lite-ide-empty-worktree-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  let attempts = 0
+  await removeEmptyWorktreeDirectory(directory, async (path) => {
+    if (++attempts < 3) throw Object.assign(new Error('locked'), { code: 'EPERM' })
+    await rmdir(path)
+  })
+  assert.equal(attempts, 3)
+  await removeEmptyWorktreeDirectory(directory)
+  await mkdir(directory)
+  await writeFile(join(directory, 'keep.txt'), '보존', 'utf8')
+  await assert.rejects(removeEmptyWorktreeDirectory(directory))
+  assert.equal(await readFile(join(directory, 'keep.txt'), 'utf8'), '보존')
+})
+
+test('해제되지 않는 폴더 잠금은 제한 횟수 후 오류로 반환한다', async () => {
+  let attempts = 0
+  await assert.rejects(removeEmptyWorktreeDirectory('/unused', async () => {
+    attempts++
+    throw Object.assign(new Error('locked'), { code: 'EBUSY' })
+  }), /locked/)
+  assert.equal(attempts, 5)
+})
+
+test('Windows cwd 잠금으로 Git 등록만 해제되어도 잠금 해제 후 빈 폴더까지 정리한다', { skip: process.platform !== 'win32' }, async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'lite-ide-cwd-lock-')))
+  const tree = join(root, 'worktree')
+  const git = (...args: string[]) => execFileSync('git', ['-C', root, ...args], { windowsHide: true, encoding: 'utf8' })
+  let child: ReturnType<typeof spawn> | undefined
+  let exited: Promise<unknown> | undefined
+  try {
+    git('init', '--initial-branch=main')
+    git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-m', 'fixture')
+    git('worktree', 'add', '-b', 'locked-cwd', tree)
+    child = spawn(process.execPath, ['-e', `
+      const fs = require('node:fs');
+      process.stdout.write('ready');
+      const timer = setInterval(() => {
+        if (!fs.existsSync('.git')) {
+          clearInterval(timer);
+          setTimeout(() => process.exit(0), 600);
+        }
+      }, 10);
+    `], { cwd: tree, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
+    exited = once(child, 'exit')
+    await once(child.stdout!, 'data')
+    assert.deepEqual(await removeWorktree(root, tree), {})
+    assert.equal(await stat(tree).catch(() => null), null)
+    assert.equal(git('branch', '--list', 'locked-cwd').trim(), '')
+  } finally {
+    child?.kill()
+    await exited
+    await rm(root, { recursive: true, force: true })
+  }
+})
 
 test('Git 복제는 HTTPS와 SSH 주소 및 안전한 폴더 이름을 허용한다', () => {
   for (const url of [

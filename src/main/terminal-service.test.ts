@@ -9,6 +9,43 @@ import { ProcessService, type ProcessRecord } from './process-service.ts'
 import type { TerminalEvent } from '../shared/types.ts'
 import type { AttentionNotification } from './notification-service.ts'
 
+test('하위 폴더 터미널 종료 실패는 Git 삭제를 차단하고 재시도 후 삭제한다', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'lite-terminal-delete-'))
+  let refuse = true
+  const root: ProcessRecord = { pid: 100, ppid: 1, identity: 'root', startedAt: 'root', command: 'shell', state: 'running' }
+  const child: ProcessRecord = { ...root, pid: 101, ppid: 100, identity: 'child' }
+  let records = [root, child]
+  const processes = new ProcessService(async () => records, async () => {
+    if (refuse) throw new Error('자식 종료 실패')
+    records = [root]
+  })
+  let exit = (_event: { exitCode: number }) => {}
+  const factory: PtyFactory = () => ({
+    pid: 100,
+    onData: () => ({ dispose() {} }),
+    onExit: (callback: typeof exit) => { exit = callback; return { dispose() {} } },
+    kill: () => { records = []; exit({ exitCode: 0 }) },
+    write() {}, resize() {},
+  } as unknown as IPty)
+  const service = new TerminalService(join(directory, 'resume.json'), () => {}, factory, undefined, undefined, undefined, processes)
+  t.after(async () => { refuse = false; await service.close(); await rm(directory, { recursive: true, force: true }) })
+  const input = { taskId: 'nested', workspace: join(directory, 'nested'), kind: 'shell' as const, cols: 80, rows: 24 }
+  await service.open(input)
+  let removed = false
+  await assert.rejects(service.removeWorkspace(directory, async () => { removed = true }), /자식 종료 실패/)
+  assert.equal(removed, false)
+  assert.equal(service.snapshot('nested')?.running, true)
+  refuse = false
+  await service.removeWorkspace(directory, async () => {
+    assert.equal(service.snapshot('nested')?.running, false)
+    assert.deepEqual(records, [])
+    await assert.rejects(service.open(input), /삭제 중/)
+    removed = true
+  })
+  assert.equal(removed, true)
+  assert.equal(service.snapshot('nested'), null)
+})
+
 test('선택하지 않은 Codex 터미널도 OSC9를 수신하고 셸 출력은 알리지 않는다', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'lite-terminal-attention-'))
   const sends: ((text: string) => void)[] = []

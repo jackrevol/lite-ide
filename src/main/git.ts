@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { lstat, readFile, realpath } from 'node:fs/promises'
+import { lstat, readFile, realpath, rmdir } from 'node:fs/promises'
+import { setTimeout as delay } from 'node:timers/promises'
 import {
   basename,
   dirname,
@@ -313,6 +314,26 @@ export async function inspectWorktreeDeletion(
   }
 }
 
+export async function removeEmptyWorktreeDirectory(
+  target: string,
+  removeDirectory: (path: string) => Promise<void> = rmdir,
+): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      // Git이 지운 뒤 남긴 빈 폴더만 정리합니다. 새로 생긴 파일은 삭제하지 않습니다.
+      await removeDirectory(target)
+      return
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'ENOENT') return
+      if (attempt >= 4 || !['EBUSY', 'EPERM', 'EACCES'].includes(code ?? ''))
+        throw error
+      // Windows에서 종료한 프로세스의 디렉터리 핸들이 해제될 시간을 줍니다.
+      await delay(100 * (attempt + 1))
+    }
+  }
+}
+
 export async function removeWorktree(
   directory: string,
   target: string,
@@ -396,8 +417,12 @@ export async function removeWorktree(
       after.worktrees.some((tree) => pathKey(tree.path) === pathKey(canonicalTarget))
     )
       throw error
-    // Git 등록이 이미 해제된 부분 실패는 재시도 불가 상태로 남기지 않습니다.
-    warning = `Git 등록은 해제되었지만 폴더 삭제 중 오류가 발생했습니다. 남아 있는 폴더를 확인해 주세요. ${error instanceof Error ? error.message : String(error)}`
+    try {
+      await removeEmptyWorktreeDirectory(canonicalTarget)
+    } catch (cleanupError) {
+      // 파일이 남았거나 잠금이 계속되면 경로를 알려 수동으로 복구할 수 있게 합니다.
+      warning = `Git 등록은 해제되었지만 폴더를 삭제하지 못했습니다: ${canonicalTarget}\n이 폴더를 사용하는 터미널이나 프로그램을 닫고 남아 있는 폴더를 확인해 주세요. ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`
+    }
   }
   if (branch) {
     try {

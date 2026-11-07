@@ -6,6 +6,76 @@ import { tmpdir } from 'node:os'
 import { AgentService } from './agent-service.ts'
 import type { AgentSession } from '../shared/types.ts'
 
+test('Worktree 삭제는 UI에 없는 daemon 세션과 하위 cwd·자식을 종료하고 다른 작업은 보존한다', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'lite-ide-release-'))
+  const service = new AgentService(join(directory, 'sessions.json'), () => {})
+  t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }) })
+  const workspace = join(directory, 'target')
+  const threads = new Map([
+    ['child', { id: 'child', cwd: join(directory, 'elsewhere'), parentThreadId: 'root' }],
+    ['root', { id: 'root', cwd: workspace }],
+    ['nested', { id: 'nested', cwd: join(workspace, 'nested') }],
+    ['other', { id: 'other', cwd: workspace + '-other' }],
+  ])
+  const archived: string[] = []
+  const cleaned: string[] = []
+  service.client.start = async () => {}
+  service.client.request = async <T>(method: string, params: Record<string, unknown>) => {
+    if (method === 'thread/loaded/list') {
+      const ids = [...threads.keys()]
+      return (params.cursor ? { data: ids.slice(1) } : { data: ids.slice(0, 1), nextCursor: ids.length > 1 ? 'next' : null }) as T
+    }
+    const id = String(params.threadId)
+    if (method === 'thread/read') return { thread: threads.get(id) } as T
+    if (method === 'thread/backgroundTerminals/clean') {
+      cleaned.push(id)
+      return {} as T
+    }
+    assert.equal(method, 'thread/archive')
+    assert.ok(cleaned.includes(id))
+    archived.push(id)
+    threads.delete(id)
+    if (id === 'root') threads.delete('child')
+    return {} as T
+  }
+  await assert.rejects(service.releaseWorkspaceResources(workspace), /삭제 중에만/)
+  await service.removeWorkspace(workspace, async () => {
+    await service.releaseWorkspaceResources(workspace)
+    assert.deepEqual(archived, ['root', 'nested'])
+    assert.deepEqual(cleaned, ['root', 'nested'])
+    assert.deepEqual([...threads.keys()], ['other'])
+  })
+})
+
+test('daemon 종료 실패나 종료 후 남은 세션은 Git 삭제를 막고 로컬 기록을 보존한다', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'lite-ide-release-failure-'))
+  const file = join(directory, 'sessions.json')
+  await writeFile(file, JSON.stringify([{
+    id: 'session', threadId: 'thread', workspace: directory, title: '작업',
+    status: 'completed', messages: [], requests: [], updatedAt: Date.now(),
+  }]), 'utf8')
+  const service = new AgentService(file, () => {})
+  t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }) })
+  service.client.start = async () => {}
+  for (const failure of ['clean', 'archive', 'stillLoaded', 'invalidList']) {
+    service.client.request = async <T>(method: string) => {
+      if (method === 'thread/loaded/list') return (failure === 'invalidList' ? {} : { data: ['thread'] }) as T
+      if (method === 'thread/read') return { thread: { id: 'thread', cwd: directory } } as T
+      if (method === 'thread/backgroundTerminals/clean' && failure === 'clean') throw new Error('터미널 종료 실패')
+      if (method === 'thread/archive' && failure === 'archive') throw new Error('세션 종료 실패')
+      return {} as T
+    }
+    let removed = false
+    await assert.rejects(service.removeWorkspace(directory, async () => {
+      await service.releaseWorkspaceResources(directory)
+      removed = true
+    }))
+    assert.equal(removed, false)
+    assert.equal((await service.all()).length, 1)
+    assert.deepEqual(JSON.parse(await readFile(file, 'utf8')).removalIntents, [])
+  }
+})
+
 test('재시작 후 실행 중인 세션을 다시 구독하고 요청을 재전송하지 않는다', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'lite-ide-reconnect-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
