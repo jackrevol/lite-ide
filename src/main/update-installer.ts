@@ -98,6 +98,9 @@ while kill -0 "$pid" 2>/dev/null; do
   sleep 1
 done
 /usr/bin/codesign --verify --deep --strict "$staged"
+# 첫 실행을 허용한 앱의 자체 업데이트입니다. 검증한 새 앱의 다운로드 격리만 해제합니다.
+# 심볼릭 링크는 링크 자체를 처리해 앱 밖의 파일을 변경하지 않습니다.
+/usr/bin/xattr -drs com.apple.quarantine "$staged"
 /bin/mv "$target" "$backup"
 moved=1
 /bin/mv "$staged" "$target"

@@ -150,13 +150,21 @@ public class Fixture {
 )
 
 test(
-  'macOS 설치 도우미는 종료 후 검증된 앱을 교체하고 잘못된 앱은 교체하지 않는다',
+  'macOS 설치 도우미는 검증된 업데이트의 격리만 해제하고 변조된 앱은 교체하지 않는다',
   { skip: process.platform !== 'darwin' },
   async (t) => {
     const root = await mkdtemp(join(tmpdir(), 'lite-installer-'))
     t.after(() => rm(root, { recursive: true, force: true }))
     const target = join(root, '한글 Lite IDE.app')
-    for (const tamper of [false, true]) {
+    const quarantine = '0081;00000000;LiteIDEUpdateTest;'
+    const unrelated = join(root, '다른 다운로드.txt')
+    await writeFile(unrelated, 'unrelated', 'utf8')
+    await run('/usr/bin/xattr', ['-w', 'com.apple.quarantine', quarantine, unrelated])
+    for (const { tamper, quarantined } of [
+      { tamper: false, quarantined: false },
+      { tamper: false, quarantined: true },
+      { tamper: true, quarantined: true },
+    ]) {
       await mkdir(join(target, 'Contents', 'Resources'), { recursive: true })
       await writeFile(
         join(target, 'Contents', 'Resources', 'marker'),
@@ -179,6 +187,11 @@ test(
         'utf8',
       )
       await run('/usr/bin/codesign', ['--force', '--sign', '-', staged])
+      await run('/usr/bin/xattr', ['-w', 'dev.liteide.test', 'preserved', staged])
+      if (quarantined) {
+        // 앱 루트뿐 아니라 내부 파일에 남은 다운로드 격리도 처리해야 합니다.
+        await run('/usr/bin/xattr', ['-w', '-r', 'com.apple.quarantine', quarantine, staged])
+      }
       if (tamper)
         await writeFile(
           join(staged, 'Contents', 'Resources', 'marker'),
@@ -206,6 +219,11 @@ test(
         if (tamper) {
           await waitForFile(join(root, installErrorFile))
           assert.equal(
+            (await run('/usr/bin/xattr', ['-p', 'com.apple.quarantine', staged])).stdout.trim(),
+            quarantine,
+            '서명 검증에 실패한 앱은 격리를 해제하지 않아야 합니다.',
+          )
+          assert.equal(
             await readFile(
               join(target, 'Contents', 'Resources', 'marker'),
               'utf8',
@@ -230,7 +248,22 @@ test(
             ),
             'new',
           )
+          assert.doesNotMatch(
+            (await run('/usr/bin/xattr', ['-r', target])).stdout,
+            /com\.apple\.quarantine/,
+          )
+          assert.equal(
+            (await run('/usr/bin/xattr', ['-p', 'dev.liteide.test', target])).stdout.trim(),
+            'preserved',
+          )
+          await run('/usr/bin/codesign', ['--verify', '--deep', '--strict', target])
+          await run(join(target, 'Contents', 'MacOS', 'test'))
         }
+        assert.equal(
+          (await run('/usr/bin/xattr', ['-p', 'com.apple.quarantine', unrelated])).stdout.trim(),
+          quarantine,
+          '업데이트 앱 밖의 다운로드는 변경하지 않아야 합니다.',
+        )
         await delay(300)
       } finally {
         app.kill()

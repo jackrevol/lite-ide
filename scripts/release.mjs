@@ -56,7 +56,29 @@ if (command === 'metadata') {
     `${sums.join('\n')}\n`,
     'utf8',
   )
-  const notes = `main 커밋 ${sha}에서 자동 빌드했습니다.\n\n- Windows x64: .exe 설치 파일\n- macOS Apple Silicon: arm64.dmg\n- macOS Intel: x64.dmg\n- 파일 무결성: SHA256SUMS.txt\n\nGit과 Codex CLI가 필요합니다. 현재 배포 파일은 개발자 인증서 서명 및 Apple 공증을 적용하지 않았습니다.\n`
+  const notes = `main 커밋 ${sha}에서 자동 빌드했습니다.
+
+- Windows x64: .exe 설치 파일
+- macOS Apple Silicon: arm64.dmg
+- macOS Intel: x64.dmg
+- 파일 무결성: SHA256SUMS.txt
+
+Git과 Codex CLI가 필요합니다. 현재 배포 파일은 개발자 인증서 서명 및 Apple 공증을 적용하지 않았습니다.
+
+## macOS 첫 설치
+
+1. CPU에 맞는 DMG를 열고 Lite IDE.app을 쓰기 가능한 응용 프로그램(Applications) 폴더로 복사한 뒤 DMG를 추출합니다.
+2. 복사한 앱을 실행하고 Apple이 악성 코드 여부를 확인할 수 없다는 경고가 나오면 닫습니다.
+3. 이 저장소에서 받은 앱인지 확인한 뒤 **시스템 설정 → 개인정보 보호 및 보안 → 그래도 열기**에서 Lite IDE 실행을 허용합니다.
+
+자세한 절차: [Apple의 앱 실행 허용 안내](https://support.apple.com/ko-kr/102445)
+
+## 이후 업데이트
+
+새 버전이 있으면 앱 타이틀바의 **업데이트** 버튼을 사용해 주세요. 앱이 설치 파일을 다운로드하고 SHA-256·앱 ID·버전·코드 서명을 검증한 뒤 종료·교체·재실행합니다. 검증한 새 앱의 다운로드 격리 속성을 제거해 업데이트 후 같은 경고가 반복되는 것을 방지합니다.
+
+브라우저에서 DMG를 새로 받아 수동으로 설치하면 실행 허용이 다시 필요할 수 있습니다. 업데이트에 실패하면 기존 앱을 보존하거나 복구하며, 앱 설치 폴더에 쓰기 권한이 필요합니다.
+`
   await writeFile(join(directory, 'release-notes.md'), notes, 'utf8')
   // 재실행 시 공개된 릴리스는 변경하지 않고, 업로드가 중단된 경우만 이어서 처리합니다.
   let release

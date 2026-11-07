@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtemp, mkdir, readFile, rm, writeFile, symlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { setTimeout } from 'node:timers/promises'
@@ -17,7 +17,8 @@ async function saveScript(workspace: string, content: string) {
   return path
 }
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), 'lite-ide-startup-'))
+  // macOS의 /var와 /private/var 별칭을 로그인 셸의 PWD와 동일하게 비교합니다.
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'lite-ide-startup-')))
   const workspace = join(root, '한글 workspace')
   await mkdir(workspace)
   const file = join(root, 'startup.json')
