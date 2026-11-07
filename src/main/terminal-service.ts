@@ -1,7 +1,7 @@
 import * as pty from 'node-pty'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { findCodex } from './codex-client.ts'
+import { prepareCodex } from './codex-update-service.ts'
 import { pathKey, workspaceContains } from './git.ts'
 import { ProcessService, type TerminalProcessRoot } from './process-service.ts'
 import { CodexNotificationParser } from './codex-notification-parser.ts'
@@ -45,7 +45,7 @@ export class TerminalService {
     file: string,
     emit: (event: TerminalEvent) => void,
     spawn: PtyFactory = pty.spawn,
-    codex = findCodex,
+    codex = prepareCodex,
     resolveThread?: (input: TerminalOpen, resuming: boolean) => Promise<string | undefined>,
     interruptThread?: (threadId: string) => Promise<void>,
     processes = new ProcessService(),
