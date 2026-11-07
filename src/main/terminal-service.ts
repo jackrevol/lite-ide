@@ -373,8 +373,11 @@ export class TerminalService {
   resize(id: string, cols: number, rows: number) {
     const terminal = this.terminals.get(id)
     if (!terminal?.process) return
-    terminal.cols = dimension(cols, terminal.cols, 20, 500)
-    terminal.rows = dimension(rows, terminal.rows, 5, 200)
+    const nextCols = dimension(cols, terminal.cols, 20, 500)
+    const nextRows = dimension(rows, terminal.rows, 5, 200)
+    if (terminal.cols === nextCols && terminal.rows === nextRows) return
+    terminal.cols = nextCols
+    terminal.rows = nextRows
     terminal.process.resize(terminal.cols, terminal.rows)
   }
 

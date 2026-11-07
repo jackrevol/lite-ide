@@ -24,12 +24,16 @@ export function TaskTerminal({
   theme,
   onStatus,
   onDraftUsed,
+  active = true,
 }: {
   task: WorkspaceTask
   theme: string
   onStatus: (snapshot: TerminalSnapshot) => void
   onDraftUsed: () => void
+  active?: boolean
 }) {
+  const visible = useRef(active)
+  visible.current = active
   const host = useRef<HTMLDivElement>(null)
   const terminal = useRef<Terminal | null>(null)
   const resizeTerminal = useRef<() => void>(() => {})
@@ -148,7 +152,7 @@ export function TaskTerminal({
       fontFamily: '"Cascadia Code", "SFMono-Regular", Consolas, monospace',
       fontSize: fontSizeRef.current,
       lineHeight: 1.35,
-      cursorBlink: true,
+      cursorBlink: false,
       scrollback: 10000,
       theme: palette(theme),
       screenReaderMode: true,
@@ -258,10 +262,13 @@ export function TaskTerminal({
       if (disposed || !host.current?.clientWidth || !host.current.clientHeight)
         return
       fit.fit()
-      if (ready?.running)
+      if (ready?.running && (ready.cols !== term.cols || ready.rows !== term.rows)) {
+        ready.cols = term.cols
+        ready.rows = term.rows
         void window.desktop
           .resizeTerminal(task.id, term.cols, term.rows)
           .catch(report)
+      }
     }
     resizeTerminal.current = resize
     const observer = new ResizeObserver(() => {
@@ -317,7 +324,7 @@ export function TaskTerminal({
         host.current?.setAttribute('data-terminal-ready', 'true')
         callbacks.current.onStatus({ ...ready })
         if (!ready.running) setExited(ready.exitCode ?? 0)
-        if (!document.querySelector('dialog[open]')) term.focus()
+        if (visible.current && !document.querySelector('dialog[open]')) term.focus()
       })
       .catch(report)
     return () => {
@@ -413,20 +420,6 @@ export function TaskTerminal({
         </div>
       )}
       {message && <div className="terminal-action-message" role="status">{message}</div>}
-      <div className="terminal-footer">
-        <span>
-          {task.terminalKind === 'codex'
-            ? 'Codex CLI · / 명령어 · ! 셸 명령'
-            : window.desktop.platform === 'win32'
-              ? 'PowerShell'
-              : '로그인 셸'}
-        </span>
-        <span>
-          {task.terminalKind === 'codex' &&
-            'Enter 전송 · Shift+Enter 줄바꿈 · Ctrl+Enter 대기열 · '}
-          Ctrl+C 중단 · Ctrl+Shift+C/V 복사·붙여넣기
-        </span>
-      </div>
     </div>
   )
 }

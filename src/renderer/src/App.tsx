@@ -4,7 +4,6 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
-  FileCode2,
   FolderOpen,
   GitBranch,
   GitCompareArrows,
@@ -29,6 +28,9 @@ import { SidebarActionMenu } from './components/SidebarActionMenu'
 import { WorkspacePanels } from './components/WorkspacePanels'
 import { TaskTabs } from './components/TaskTabs'
 import { TaskTerminal } from './components/TaskTerminal'
+import { ChangedFilesTree } from './components/ChangedFilesTree'
+import { StartupPanel } from './components/StartupPanel'
+import { DiffView } from './components/DiffView'
 import { SessionTab } from './components/SessionTab'
 import { ProcessPanel } from './components/ProcessPanel'
 import { workspaceSessions } from './lib/workspace-sessions'
@@ -48,6 +50,7 @@ import type {
   ProjectDefaults,
   RepositorySnapshot,
   TerminalSnapshot,
+  StartupSnapshot,
   WorktreeDeletionPreview,
 } from '../../shared/types'
 
@@ -59,6 +62,8 @@ const emptyRepository: RepositorySnapshot = {
 }
 const errorText = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause)
+const sameRepository = (a: RepositorySnapshot, b: RepositorySnapshot) =>
+  JSON.stringify(a) === JSON.stringify(b)
 const samePath = (a: string, b: string) => {
   const normalize = (path: string) =>
     (window.desktop.platform === 'win32'
@@ -89,9 +94,15 @@ export function App() {
   const [theme, setTheme] = useState(
     () => localStorage.getItem('lite-ide.theme') ?? 'dark',
   )
-  const [selectedFile, setSelectedFile] = useState('')
-  const [diff, setDiff] = useState('')
-  const [diffLoading, setDiffLoading] = useState(false)
+  const [diffTabs, setDiffTabs] = useState<{ id: string; taskId: string; path: string; workspace: string; project: string }[]>([])
+  const [activeDiffId, setActiveDiffId] = useState('')
+  const [selectedFiles, setSelectedFiles] = useState<Record<string, string>>({})
+  const activeDiff = diffTabs.find((tab) => tab.id === activeDiffId)
+  const [startupSnapshots, setStartupSnapshots] = useState<Record<string, StartupSnapshot | null>>({})
+  const [mountedTasks, setMountedTasks] = useState<string[]>([])
+  const [diffCache, setDiffCache] = useState<Record<string, string>>({})
+  const diff = activeDiff ? diffCache[activeDiff.id] ?? '' : ''
+  const diffLoading = !!activeDiff && !Object.hasOwn(diffCache, activeDiff.id)
   const [fileQuery, setFileQuery] = useState('')
   const [search, setSearch] = useState('')
   const [collapsed, setCollapsed] = useState<string[]>([])
@@ -117,18 +128,50 @@ export function App() {
     {},
   )
   const openingTask = useRef(false)
+  const autoStartTasks = useRef(new Map<string, string>())
+  const startupStateRef = useRef<Record<string, StartupSnapshot | null>>({})
+  const repositoryDirectory = useRef('')
   const managementRequest = useRef(0)
   const searchDialog = useRef<HTMLDialogElement>(null)
   const taskDialog = useRef<HTMLDialogElement>(null)
   const current = state.tasks.find((task) => task.id === state.taskId)
   const project = projects.find((item) => item.path === state.project)
+  const selectedFile = current ? selectedFiles[current.path] ?? '' : ''
+  const currentStartup = current ? startupSnapshots[current.path] : null
+  const startupChecked = !!current && Object.hasOwn(startupSnapshots, current.path)
+  const startupBlocked = !!currentStartup && currentStartup.status !== 'completed'
+
+  const receiveStartup = useCallback((snapshot: StartupSnapshot | null, workspace: string) => {
+    const existing = startupStateRef.current[workspace]
+    if (existing && (!snapshot || existing.startedAt > snapshot.startedAt || (existing.startedAt === snapshot.startedAt && existing.revision > snapshot.revision))) return
+    startupStateRef.current = { ...startupStateRef.current, [workspace]: snapshot }
+    setStartupSnapshots(startupStateRef.current)
+    const taskId = autoStartTasks.current.get(workspace)
+    if (taskId && (!snapshot || snapshot.status === 'completed')) {
+      autoStartTasks.current.delete(workspace)
+      setMountedTasks((previous) => previous.includes(taskId) ? previous : [...previous, taskId])
+    }
+  }, [])
+  useEffect(() => window.desktop.onStartup((snapshot) => receiveStartup(snapshot, snapshot.workspace)), [receiveStartup])
+  useEffect(() => {
+    if (!current || !ready) return
+    let disposed = false
+    void window.desktop.startupSnapshot(current.path).then((snapshot) => {
+      if (!disposed) receiveStartup(snapshot, current.path)
+    }).catch((cause) => { if (!disposed) setError(errorText(cause)) })
+    return () => { disposed = true }
+  }, [current?.path, ready])
   const [sessions, setSessions] = useState<Record<string, AgentSession>>({})
   const [sessionError, setSessionError] = useState('')
   const [selectedTabs, setSelectedTabs] = useState<Record<string, string>>({})
   const [sessionDrafts, setSessionDrafts] = useState<Record<string, string>>({})
   const visibleSessions = workspaceSessions(Object.values(sessions), current?.path ?? '', window.desktop.platform)
   const selectedSession = visibleSessions.find((session) => `session-${session.id}` === selectedTabs[current?.id ?? ''])
-  const selectedTab = selectedSession ? `session-${selectedSession.id}` : current?.id
+  const selectedTab = activeDiffId || (selectedSession ? `session-${selectedSession.id}` : current?.id)
+  useEffect(() => {
+    if (current && ready && startupChecked && !startupBlocked && !activeDiff && !selectedSession)
+      setMountedTasks((previous) => previous.includes(current.id) ? previous : [...previous, current.id])
+  }, [current?.id, ready, startupChecked, startupBlocked, selectedTab])
 
   useEffect(() => window.desktop.onSession((session) => {
     setSessions((previous) => ({ ...previous, [session.id]: session }))
@@ -137,6 +180,7 @@ export function App() {
     const activate = (target: import('../../shared/types').NotificationTarget) => {
       const task = state.tasks.find((item) => item.id === target.taskId || samePath(item.path, target.workspace))
       if (!task) return
+      setActiveDiffId('')
       setSelectedTabs((tabs) => ({ ...tabs, [task.id]: target.sessionId ? `session-${target.sessionId}` : task.id }))
       setState((previous) => ({ ...previous, project: task.project, taskId: task.id }))
       setShowSettings(false)
@@ -281,15 +325,21 @@ export function App() {
     const directory = current?.path || project?.path
     if (!ready || !directory) {
       setRepository(emptyRepository)
+      repositoryDirectory.current = ''
       return
     }
     let disposed = false
-    setLoading(true)
+    // 배경 갱신 중에는 기존 트리와 선택·접힘·스크롤을 그대로 유지합니다.
+    if (repositoryDirectory.current !== directory) {
+      repositoryDirectory.current = directory
+      setLoading(true)
+    }
     void window.desktop
       .inspectRepository(directory)
       .then((snapshot) => {
         if (disposed) return
-        setRepository(current ? snapshot : emptyRepository)
+        const next = current ? snapshot : emptyRepository
+        setRepository((previous) => sameRepository(previous, next) ? previous : next)
         if (snapshot.isGitRepository)
           setState((previous) => {
             let changed = false
@@ -302,12 +352,12 @@ export function App() {
             return changed ? { ...previous, tasks } : previous
           })
         if (project)
-          setRepositories((previous) => ({
-            ...previous,
+          setRepositories((previous) => {
             // 손상된 작업 경로의 빈 결과로 프로젝트 Worktree 목록을 덮어쓰지 않습니다.
-            [project.path]: snapshot.isGitRepository
-              ? snapshot : previous[project.path] ?? emptyRepository,
-          }))
+            const next = snapshot.isGitRepository ? snapshot : previous[project.path] ?? emptyRepository
+            return previous[project.path] && sameRepository(previous[project.path], next)
+              ? previous : { ...previous, [project.path]: next }
+          })
       })
       .catch((cause) => {
         if (!disposed) setError(errorText(cause))
@@ -322,40 +372,53 @@ export function App() {
     }
   }, [ready, current?.path, project?.path, refresh])
   useEffect(() => {
-    setSelectedFile('')
-    setDiff('')
-  }, [current?.path])
-  useEffect(() => {
-    if (!current || !selectedFile) return
+    if (!activeDiff) return
     let disposed = false
-    setDiffLoading(true)
     void window.desktop
-      .readDiff(current.path, selectedFile)
+      .readDiff(activeDiff.workspace, activeDiff.path)
       .then((value) => {
-        if (!disposed) setDiff(value)
+        if (!disposed) {
+          setDiffCache((previous) => previous[activeDiff.id] === value ? previous : { ...previous, [activeDiff.id]: value })
+        }
       })
       .catch((cause) => {
-        if (!disposed) setDiff(errorText(cause))
-      })
-      .finally(() => {
-        if (!disposed) setDiffLoading(false)
+        if (!disposed) {
+          const message = errorText(cause)
+          setDiffCache((previous) => previous[activeDiff.id] === message ? previous : { ...previous, [activeDiff.id]: message })
+        }
       })
     return () => {
       disposed = true
     }
-  }, [current?.path, selectedFile, refresh])
+  }, [activeDiffId, refresh])
 
   function selectTask(task: WorkspaceTask) {
+    setActiveDiffId('')
     setState((previous) => ({
       ...previous,
       project: task.project,
       taskId: task.id,
     }))
   }
+  function openDiff(path: string) {
+    if (!current) return
+    const id = `diff:${current.id}:${path}`
+    setDiffTabs((previous) => previous.some((tab) => tab.id === id) ? previous : [...previous, { id, taskId: current.id, path, workspace: current.path, project: current.project }])
+    setActiveDiffId(id)
+    setSelectedFiles((previous) => ({ ...previous, [current.path]: path }))
+  }
+  function closeDiff(id: string) {
+    setDiffTabs((previous) => previous.filter((tab) => tab.id !== id))
+    if (activeDiffId === id) {
+      setActiveDiffId('')
+      if (current) setSelectedTabs((previous) => ({ ...previous, [current.id]: current.id }))
+    }
+  }
   async function openProject() {
     setOpening(true)
   }
   function projectOpened(opened: Project) {
+    setActiveDiffId('')
     setProjects((previous) =>
       previous.some((item) => samePath(item.path, opened.path))
         ? previous
@@ -387,6 +450,8 @@ export function App() {
     setShowSettings(true)
   }
   async function createTask(task: WorkspaceTask) {
+    setActiveDiffId('')
+    autoStartTasks.current.set(task.path, task.id)
     setState((previous) => ({
       tasks: previous.tasks.some((item) => item.id === task.id)
         ? previous.tasks
@@ -395,6 +460,8 @@ export function App() {
       taskId: task.id,
     }))
     setRefresh((value) => value + 1)
+    const snapshot = await window.desktop.startupSnapshot(task.path)
+    receiveStartup(snapshot, task.path)
   }
   const addTask = useCallback(
     async (requested?: Project) => {
@@ -487,6 +554,8 @@ export function App() {
           { discardChanges: true, localOnly: deletionPreview?.localOnly === true },
         )
         if (result.warning) setError(result.warning)
+        setDiffTabs((previous) => previous.filter((tab) => tab.taskId !== target.task.id))
+        if (activeDiff?.taskId === target.task.id) setActiveDiffId('')
         setState((previous) => ({
           ...previous,
           tasks: previous.tasks.filter((task) => task.id !== target.task.id),
@@ -616,7 +685,8 @@ export function App() {
                       <button
                         className="project-name"
                         title={item.path}
-                        onClick={() =>
+                        onClick={() => {
+                          setActiveDiffId('')
                           setState((previous) => ({
                             ...previous,
                             project: item.path,
@@ -627,7 +697,7 @@ export function App() {
                                   task.id === previous.taskId,
                               )?.id ?? '',
                           }))
-                        }
+                        }}
                       >
                         <FolderOpen size={14} />
                         <span>{item.name}</span>
@@ -746,11 +816,18 @@ export function App() {
                   active: session.status === 'running' || session.status === 'waiting',
                   kind: session.parentSessionId ? 'subagent' as const : 'session' as const,
                   detail: [session.title, session.task, session.role, session.model].filter(Boolean).join('\n'),
-                }))] : []}
+                })), ...diffTabs.filter((tab) => tab.taskId === current.id).map((tab) => ({ id: tab.id, title: tab.path.split('/').at(-1)!, detail: `${current.name} · ${tab.path}`, active: false, kind: 'diff' as const }))] : []}
                 selected={selectedTab}
                 onSelect={(id) => {
+                  const tab = diffTabs.find((tab) => tab.id === id)
+                  if (tab) {
+                    setActiveDiffId(id)
+                    return
+                  }
+                  setActiveDiffId('')
                   if (current) setSelectedTabs((previous) => ({ ...previous, [current.id]: id }))
                 }}
+                onClose={closeDiff}
                 onAdd={() => void addTask()}
               />
               <div
@@ -759,7 +836,7 @@ export function App() {
                 role="tabpanel"
                 aria-labelledby={selectedTab ? `task-tab-${selectedTab}` : undefined}
               >
-                <div className="agent-heading terminal-heading">
+                <div className="agent-heading terminal-heading" hidden={!!activeDiff}>
                   <div className="heading-title">
                     <Terminal size={15} />
                     <h1>{selectedSession?.title ?? current?.name ?? '작업 터미널'}</h1>
@@ -824,12 +901,13 @@ export function App() {
                   </div>
                 )}
                 {sessionError && <div className="session-observation-error" role="status">세션 관찰 실패: {sessionError}</div>}
-                {current && ready ? (
-                  <>
-                  <div className="terminal-slot" hidden={!!selectedSession}>
+                {current && !activeDiff && startupChecked && <StartupPanel key={`startup:${current.path}`} workspace={current.path} project={current.project} snapshot={currentStartup ?? null} blocked={startupBlocked} onRun={() => { if (startupBlocked) autoStartTasks.current.set(current.path, current.id) }}
+                  onSnapshot={(snapshot) => receiveStartup(snapshot, snapshot.workspace)} onError={setError} />}
+                {state.tasks.filter((task) => mountedTasks.includes(task.id)).map((task) => (
+                  <div className="task-terminal-slot" key={`terminal:${task.id}`} hidden={task.id !== current?.id || !!activeDiff || !!selectedSession || startupBlocked}>
                   <TaskTerminal
-                    key={current.id}
-                    task={current}
+                    task={task}
+                    active={task.id === current?.id && !activeDiff && !selectedSession && !startupBlocked}
                     theme={theme}
                     onStatus={(snapshot) =>
                       setTerminals((previous) => ({
@@ -840,25 +918,23 @@ export function App() {
                     onDraftUsed={() =>
                       setState((previous) => ({
                         ...previous,
-                        tasks: previous.tasks.map((task) =>
-                          task.id === current.id
-                            ? { ...task, draft: undefined }
-                            : task,
+                        tasks: previous.tasks.map((item) =>
+                          item.id === task.id
+                            ? { ...item, draft: undefined }
+                            : item,
                         ),
                       }))
                     }
                   />
                   </div>
-                  {selectedSession && <SessionTab key={selectedSession.id} session={selectedSession}
-                    draft={sessionDrafts[selectedSession.id] ?? ''}
-                    setDraft={(value) => setSessionDrafts((previous) => ({
-                      ...previous,
-                      [selectedSession.id]: typeof value === 'function' ? value(previous[selectedSession.id] ?? '') : value,
-                    }))}
-                  />}
-                  <ProcessPanel key={current.path} workspace={current.path} />
-                  </>
-                ) : (
+                ))}
+                {activeDiff && <DiffView path={activeDiff.path} diff={diff} loading={diffLoading} onClose={() => closeDiff(activeDiff.id)} />}
+                {current && ready && !activeDiff && !startupBlocked && startupChecked && selectedSession && <SessionTab key={`session:${selectedSession.id}`} session={selectedSession}
+                  draft={sessionDrafts[selectedSession.id] ?? ''}
+                  setDraft={(value) => setSessionDrafts((previous) => ({ ...previous, [selectedSession.id]: typeof value === 'function' ? value(previous[selectedSession.id] ?? '') : value }))}
+                />}
+                {current && ready && !activeDiff && <ProcessPanel key={`processes:${current.path}`} workspace={current.path} />}
+                {!current && !activeDiff && (
                   <div className="welcome">
                     <div className="welcome-icon">
                       <img
@@ -920,7 +996,7 @@ export function App() {
                   </label>
                 )}
                 <div
-                  className={`changes-content ${selectedFile ? 'with-preview' : ''}`}
+                  className="changes-content"
                 >
                   {loading ? (
                     <div className="panel-empty">
@@ -950,38 +1026,7 @@ export function App() {
                       </p>
                     </div>
                   ) : (
-                    repository.changes
-                      .filter((file) =>
-                        file.path
-                          .toLowerCase()
-                          .includes(fileQuery.toLowerCase()),
-                      )
-                      .map((file) => (
-                        <button
-                          key={file.path}
-                          title={file.path}
-                          aria-label={file.path}
-                          className={`file-row ${selectedFile === file.path ? 'selected' : ''}`}
-                          onClick={() => setSelectedFile(file.path)}
-                        >
-                          <FileCode2 size={14} />
-                          <span>
-                            {file.path.split('/').at(-1)}
-                            <small>
-                              {file.path.includes('/')
-                                ? file.path.slice(0, file.path.lastIndexOf('/'))
-                                : ''}
-                            </small>
-                          </span>
-                          <span
-                            className={`file-status ${file.status.includes('D') ? 'deleted' : file.status.includes('?') || file.status.includes('A') ? 'added' : ''}`}
-                          >
-                            {file.status.trim() === '??'
-                              ? 'U'
-                              : file.status.trim()}
-                          </span>
-                        </button>
-                      ))
+                    <ChangedFilesTree files={repository.changes} query={fileQuery} workspace={current?.path ?? ''} selected={selectedFile} onSelect={openDiff} />
                   )}
                   {repository.totalChanges > 200 && (
                     <p className="file-limit">
@@ -989,45 +1034,6 @@ export function App() {
                     </p>
                   )}
                 </div>
-                {selectedFile && (
-                  <section className="diff-preview" aria-label="파일 변경 내용">
-                    <div className="diff-heading">
-                      <span title={selectedFile}>{selectedFile}</span>
-                      <button
-                        aria-label="변경 내용 닫기"
-                        onClick={() => setSelectedFile('')}
-                      >
-                        <X size={14} />
-                      </button>
-                    </div>
-                    {diffLoading ? (
-                      <div className="panel-empty">
-                        <LoaderCircle size={18} className="spinning" />
-                      </div>
-                    ) : (
-                      <pre>
-                        {diff.split('\n').map((line, index) => (
-                          <div
-                            key={index}
-                            className={
-                              line.startsWith('+') && !line.startsWith('+++')
-                                ? 'diff-add'
-                                : line.startsWith('-') &&
-                                    !line.startsWith('---')
-                                  ? 'diff-remove'
-                                  : line.startsWith('@@')
-                                    ? 'diff-hunk'
-                                    : ''
-                            }
-                          >
-                            <span className="line-number">{index + 1}</span>
-                            {line || ' '}
-                          </div>
-                        ))}
-                      </pre>
-                    )}
-                  </section>
-                )}
                 <footer className="changes-footer">
                   <span
                     className={`connection-dot ${connection.connected && connection.authenticated ? 'online' : ''}`}

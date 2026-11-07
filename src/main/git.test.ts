@@ -161,6 +161,18 @@ test('변경 사항이 없으면 빈 목록을 반환한다', () => {
   assert.deepEqual(parseWorktrees(''), [])
 })
 
+test('중첩된 추적하지 않는 파일은 폴더 요약 대신 실제 파일 경로로 조회한다', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'lite-ide-nested-files-'))
+  try {
+    execFileSync('git', ['-C', root, 'init', '--initial-branch=main'], { windowsHide: true })
+    await mkdir(join(root, 'src', 'nested'), { recursive: true })
+    await writeFile(join(root, 'src', 'nested', '한글.ts'), 'nested\n', 'utf8')
+    const snapshot = await inspectRepository(root)
+    assert.deepEqual(snapshot.changes, [{ path: 'src/nested/한글.ts', status: '??' }])
+    assert.equal(snapshot.totalChanges, 1)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
 test('구버전 Git의 줄바꿈 형식에서도 한글 경로를 읽는다', () => {
   assert.deepEqual(
     parseWorktrees(

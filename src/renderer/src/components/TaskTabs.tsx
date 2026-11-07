@@ -1,16 +1,18 @@
 import { useEffect, useRef } from 'react'
-import { Bot, Code2, Plus, Terminal } from 'lucide-react'
+import { Bot, Code2, FileCode2, Plus, Terminal, X } from 'lucide-react'
 
 export function TaskTabs({
   tasks,
   selected,
   onSelect,
   onAdd,
+  onClose,
 }: {
-  tasks: { id: string; title: string; active: boolean; kind?: 'terminal' | 'session' | 'subagent'; detail?: string }[]
+  tasks: { id: string; title: string; active: boolean; kind?: 'terminal' | 'session' | 'subagent' | 'diff'; detail?: string }[]
   selected?: string
   onSelect: (id: string) => void
   onAdd: () => void
+  onClose?: (id: string) => void
 }) {
   const list = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -28,16 +30,17 @@ export function TaskTabs({
         ref={list}
       >
         {tasks.map((task, index) => (
+          <div className="agent-tab-item" key={task.id}>
           <button
-            key={task.id}
             role="tab"
+            aria-label={task.title}
             aria-selected={selected === task.id}
             aria-controls="agent-task-content"
             id={`task-tab-${task.id}`}
             tabIndex={
               selected === task.id || (!selected && index === 0) ? 0 : -1
             }
-            title={task.detail || task.title}
+            title={task.detail ?? task.title}
             onClick={() => onSelect(task.id)}
             onKeyDown={(event) => {
               const next =
@@ -58,12 +61,14 @@ export function TaskTabs({
                 [next]?.focus()
             }}
           >
-            {task.kind === 'subagent' ? <Bot size={13} /> : task.kind === 'terminal' ? <Terminal size={13} /> : <Code2 size={13} />}
+            {task.kind === 'diff' ? <FileCode2 size={13} /> : task.kind === 'subagent' ? <Bot size={13} /> : task.kind === 'terminal' ? <Terminal size={13} /> : <Code2 size={13} />}
             <span>{task.title}</span>
             {task.active && (
               <span className="tab-running-dot" aria-label="실행 중" />
             )}
           </button>
+          {task.kind === 'diff' && <button className="tab-close" aria-label={`${task.title} 탭 닫기`} title="변경 내용 닫기" onClick={() => onClose?.(task.id)}><X size={12} /></button>}
+          </div>
         ))}
       </div>
       <button

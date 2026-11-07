@@ -55,6 +55,13 @@ const launch = () =>
   })
 let app = await launch()
 let page
+const errors = []
+function observeErrors(page) {
+  page.on('pageerror', (error) => errors.push(error.message))
+  page.on('console', (message) => {
+    if (/same key|unique.*key|duplicate.*key/i.test(message.text())) errors.push(message.text())
+  })
+}
 const tasks = () =>
   page.evaluate(
     () => JSON.parse(localStorage.getItem('lite-ide.workspace.v3')).tasks,
@@ -62,13 +69,13 @@ const tasks = () =>
 const snapshot = (id) =>
   page.evaluate((id) => window.desktop.terminalSnapshot(id), id)
 async function readyTerminal() {
-  await page.locator('.terminal-host[data-terminal-ready="true"]').waitFor()
+  await page.locator('.terminal-host[data-terminal-ready="true"]:visible').waitFor()
 }
 async function terminalText() {
-  return page.locator('.xterm-accessibility-tree').innerText()
+  return page.locator('.xterm-accessibility-tree:visible').innerText()
 }
 async function command(text) {
-  await page.getByLabel('작업 터미널 입력').focus()
+  await page.locator('[aria-label="작업 터미널 입력"]:visible').focus()
   await page.keyboard.type(text)
   await page.keyboard.press('Enter')
 }
@@ -87,7 +94,7 @@ async function waitScreen(text) {
   await page.waitForFunction(
     (text) =>
       document
-        .querySelector('.xterm-accessibility-tree')
+        .querySelector('.task-terminal-slot:not([hidden]) .xterm-accessibility-tree')
         ?.textContent.includes(text),
     text,
     { timeout: 15000 },
@@ -194,9 +201,8 @@ async function checkTitlebar(page, app) {
 }
 try {
   page = await app.firstWindow()
+  observeErrors(page)
   page.setDefaultTimeout(15000)
-  const errors = []
-  page.on('pageerror', (error) => errors.push(error.message))
   await page
     .getByRole('heading', { name: '작업 터미널을 시작하세요' })
     .waitFor()
@@ -352,7 +358,7 @@ try {
     })
   })
   try {
-    await page.getByLabel('작업 터미널 입력').focus()
+    await page.locator('[aria-label="작업 터미널 입력"]:visible').focus()
     await page.keyboard.press('Shift+Enter')
     await page.keyboard.press('Control+Enter')
     await page.keyboard.press('Control+Shift+Enter')
@@ -408,7 +414,7 @@ try {
       }),
     multilingual,
   )
-  await page.getByLabel('작업 터미널 입력').focus()
+  await page.locator('[aria-label="작업 터미널 입력"]:visible').focus()
   await page.keyboard.press('Control+Shift+v')
   await waitOutput(first.id, multilingual)
   await page.keyboard.press('Enter')
@@ -437,7 +443,7 @@ try {
   await waitScreen(unique)
   assert.equal((await snapshot(first.id)).generation, firstGeneration)
   assert.equal((await terminalText()).split(unique).length - 1, 1)
-  await page.getByLabel('작업 터미널 입력').focus()
+  await page.locator('[aria-label="작업 터미널 입력"]:visible').focus()
   const stateBefore = await tasks()
   await page.keyboard.press('Control+n')
   await creation.waitFor()
@@ -526,6 +532,7 @@ try {
   const processes = await page.evaluate((path) => window.desktop.inspectProcesses(path), first.path)
   assert.ok(processes.processes.some((process) => process.root && process.taskId === first.id))
   assert.ok(processes.processes.every((process) => process.taskId === first.id))
+  await checkCompactProcessLayout(first)
   await page.getByRole('button', { name: `프로세스 ${childPid} 종료`, exact: true }).click()
   await page.getByRole('button', { name: '프로세스 종료 확인', exact: true }).click()
   await waitOutput(first.id, `CHILD_EXIT:${childPid}`)
@@ -566,7 +573,7 @@ try {
   await waitScreen('REAL_SHELL_OK')
   await page.waitForFunction(() =>
     document
-      .querySelector('.xterm-accessibility-tree')
+      .querySelector('.task-terminal-slot:not([hidden]) .xterm-accessibility-tree')
       ?.innerText.split('\n')
       .some((line) => line.trim() === 'REAL_SHELL_OK'),
   )
@@ -574,9 +581,66 @@ try {
   await waitScreen(first.branch)
   await writeFile(join(first.path, 'dirty.txt'), '보호할 파일\n', 'utf8')
   await page.getByRole('button', { name: '변경 사항 새로고침' }).click()
-  await page.getByRole('button', { name: 'dirty.txt', exact: true }).waitFor()
-  await page.getByRole('button', { name: 'dirty.txt', exact: true }).click()
+  await page.getByRole('treeitem', { name: 'dirty.txt', exact: true }).waitFor()
+  await page.getByRole('treeitem', { name: 'dirty.txt', exact: true }).click()
   await page.getByText('+보호할 파일', { exact: false }).waitFor()
+  assert.equal(await page.locator('.changes-panel .diff-preview').count(), 0)
+  assert.equal(await page.locator('.agent-panel .main-diff').count(), 1)
+  await page.getByRole('treeitem', { name: 'dirty.txt', exact: true }).click()
+  assert.equal(await page.getByRole('tab', { name: 'dirty.txt', exact: true }).count(), 1)
+  // 변경 내용 탭을 보고 있어도 응답 대기 알림은 터미널·세션을 앞으로 전환합니다.
+  await app.evaluate(({ BrowserWindow }, target) => {
+    BrowserWindow.getAllWindows()[0].webContents.send('notifications:click', target)
+  }, { workspace: first.path, taskId: first.id })
+  await page.locator('.agent-panel .main-diff').waitFor({ state: 'hidden' })
+  await readyTerminal()
+  await page.getByRole('tab', { name: 'dirty.txt', exact: true }).click()
+  await page.getByText('+보호할 파일', { exact: false }).waitFor()
+  await app.evaluate(({ BrowserWindow }, target) => {
+    BrowserWindow.getAllWindows()[0].webContents.send('notifications:click', target)
+  }, { workspace: first.path, sessionId: 'ui-session' })
+  await page.locator('.agent-panel .main-diff').waitFor({ state: 'hidden' })
+  await page.getByText('실제 세션 본문 표시', { exact: true }).waitFor()
+  await page.getByRole('tab', { name: 'dirty.txt', exact: true }).click()
+  await page.getByText('+보호할 파일', { exact: false }).waitFor()
+  await mkdir(join(first.path, 'src', 'nested'), { recursive: true })
+  await writeFile(join(first.path, 'src', 'nested', '한글.ts'), '중첩 변경 파일\n', 'utf8')
+  await page.getByRole('button', { name: '변경 사항 새로고침' }).click()
+  const folder = page.getByRole('treeitem', { name: 'src', exact: true })
+  const nested = page.getByRole('treeitem', { name: 'src/nested/한글.ts', exact: true })
+  await nested.waitFor()
+  await folder.click()
+  assert.equal(await folder.getAttribute('aria-expanded'), 'false')
+  assert.equal(await nested.count(), 0)
+  await page.getByRole('textbox', { name: '변경 파일 검색', exact: true }).fill('한글.ts')
+  await nested.waitFor()
+  await nested.click()
+  await page.getByText('+중첩 변경 파일', { exact: false }).waitFor()
+  await page.getByRole('textbox', { name: '변경 파일 검색', exact: true }).fill('없는 파일')
+  await page.getByText('검색 결과가 없습니다.', { exact: true }).waitFor()
+  await page.getByRole('textbox', { name: '변경 파일 검색', exact: true }).fill('')
+  assert.equal(await folder.getAttribute('aria-expanded'), 'false')
+  await folder.click()
+  assert.equal(await nested.getAttribute('aria-selected'), 'true')
+  await checkBackgroundRefresh(first)
+  await page.screenshot({ path: 'artifacts/changes-diff.png' })
+  await writeFile(join(second.path, 'dirty.txt'), '다른 Worktree 파일\n', 'utf8')
+  await page.locator('.task-row').and(page.getByTitle(second.path, { exact: true })).click()
+  await page.getByRole('button', { name: '변경 사항 새로고침' }).click()
+  await page.getByRole('treeitem', { name: 'dirty.txt', exact: true }).click()
+  await page.getByText('+다른 Worktree 파일', { exact: false }).waitFor()
+  assert.equal(await page.getByRole('tab', { name: 'dirty.txt', exact: true }).count(), 1)
+  await page.locator('.task-row').and(page.getByTitle(first.path, { exact: true })).click()
+  await page.getByRole('tab', { name: 'dirty.txt', exact: true }).click()
+  await page.getByText('+보호할 파일', { exact: false }).waitFor()
+  await page.getByRole('button', { name: '변경 내용 닫기', exact: true }).click()
+  await readyTerminal()
+  assert.equal((await snapshot(first.id)).generation, shellGeneration)
+  await page.getByLabel('한글.ts 탭 닫기', { exact: true }).click()
+  await page.locator('.task-row').and(page.getByTitle(second.path, { exact: true })).click()
+  await page.getByLabel('dirty.txt 탭 닫기', { exact: true }).click()
+  await page.locator('.task-row').and(page.getByTitle(first.path, { exact: true })).click()
+  await rm(join(second.path, 'dirty.txt'))
   await taskAction({ ...first, name: '통합 작업' }, '작업 삭제')
   const deleting = page.getByRole('dialog', { name: '작업 삭제', exact: true })
   await deleting
@@ -677,6 +741,7 @@ try {
   await app.close()
   app = await launch()
   page = await app.firstWindow()
+  observeErrors(page)
   page.setDefaultTimeout(15000)
   await readyTerminal()
   await page.getByRole('heading', { name: '통합 작업', exact: true }).waitFor()
@@ -695,6 +760,7 @@ try {
   await app.close()
   app = await launch()
   page = await app.firstWindow()
+  observeErrors(page)
   page.setDefaultTimeout(15000)
   await page.getByText(/작업 경로를 사용할 수 없습니다/).first().waitFor()
   assert.equal((await tasks()).length, 2)
@@ -705,6 +771,7 @@ try {
   assert.equal((await tasks()).length, 1)
   assert.equal(await readFile(join(stale.path, '보존.txt'), 'utf8'), '남아 있는 파일')
   assert.ok(git('branch', '--list', stale.branch).trim())
+  await checkStartupFlow()
   assert.deepEqual(errors, [])
   assert.equal(
     await app.evaluate(({ BrowserWindow }) =>
@@ -740,4 +807,162 @@ async function windowWrite(id, data) {
     ({ id, data }) => window.desktop.writeTerminal(id, data),
     { id, data },
   )
+}
+
+async function checkStartupFlow() {
+  const win = process.platform === 'win32'
+  const successfulScript = win
+    ? "Write-Output 'STARTUP_BEGIN'; Start-Sleep -Seconds 2; Set-Content -Encoding utf8 startup-ready.txt '설치 완료'; Write-Output 'STARTUP_DONE'"
+    : "printf 'STARTUP_BEGIN\\n'; sleep 2; printf '설치 완료' > startup-ready.txt; printf 'STARTUP_DONE\\n'"
+  const setScript = async (script, auto = true) => page.evaluate(async ({ project, script, auto }) => {
+    const key = window.desktop.platform === 'win32' ? project.toLowerCase() : project
+    const previous = (await window.desktop.getSettings()).projects[key]
+    await window.desktop.updateProjectSettings(project, { ...previous, startupScript: script, startupAutoRun: auto })
+  }, { project, script, auto })
+  const startup = (task) => page.evaluate((path) => window.desktop.startupSnapshot(path), task.path)
+  const create = async (name) => {
+    await openTaskCreation()
+    const dialog = page.getByRole('dialog', { name: '새 작업', exact: true })
+    await dialog.getByRole('textbox', { name: '새 작업 이름', exact: true }).fill(name)
+    await dialog.getByRole('textbox', { name: '첫 요청', exact: true }).fill(`FIRST_PROMPT_${name}`)
+    await dialog.getByRole('button', { name: '만들고 시작', exact: true }).click()
+    await dialog.waitFor({ state: 'detached' })
+    await until(async () => (await tasks()).some((task) => task.name === name), '초기화 작업 생성')
+    return (await tasks()).find((task) => task.name === name)
+  }
+  const assertBlocked = async (task) => {
+    assert.equal(await snapshot(task.id), null)
+    await assert.rejects(page.evaluate((task) => window.desktop.openTerminal({ taskId: task.id, workspace: task.path, kind: 'codex', cols: 80, rows: 24 }), task), /Startup/)
+    await assert.rejects(page.evaluate((task) => window.desktop.sendMessage({ sessionId: task.id, workspace: task.path, text: 'blocked' }), task), /Startup/)
+  }
+  // 실제 설정 폼에서 여러 줄 명령 저장과 자동 실행 선택을 확인합니다.
+  await page.getByRole('button', { name: '설정', exact: true }).click()
+  const settings = page.getByRole('dialog', { name: '설정', exact: true })
+  await settings.getByRole('tab', { name: '프로젝트', exact: true }).click()
+  await settings.getByRole('textbox', { name: 'Startup 스크립트', exact: true }).fill(successfulScript)
+  await settings.getByRole('checkbox', { name: '새 Worktree Startup 자동 실행', exact: true }).check()
+  await settings.getByRole('button', { name: '저장', exact: true }).click()
+  await settings.getByText('프로젝트 기본값을 저장했습니다. 다음 새 작업부터 적용됩니다.', { exact: true }).waitFor()
+  await settings.getByRole('button', { name: '닫기', exact: true }).click()
+  const successful = await create('Startup 성공')
+  assert.equal((await startup(successful)).status, 'running')
+  await assertBlocked(successful)
+  const original = (await tasks()).find((task) => task.name === '통합 작업')
+  await page.locator('.task-row').and(page.getByTitle(original.path, { exact: true })).click()
+  await until(async () => (await startup(successful))?.status === 'completed', 'Startup 성공')
+  await waitOutput(successful.id, 'FIRST_PROMPT_Startup 성공')
+  assert.ok((await readFile(join(successful.path, 'startup-ready.txt'), 'utf8')).includes('설치 완료'))
+  // 실패한 초기화는 에이전트 호출 없이 로그와 재시도 경로를 제공합니다.
+  await setScript(win ? "Write-Output 'STARTUP_FAILED'; exit 7" : "printf 'STARTUP_FAILED\\n'; exit 7")
+  const failed = await create('Startup 실패')
+  await until(async () => (await startup(failed))?.status === 'failed', 'Startup 실패')
+  await assertBlocked(failed)
+  await page.getByText(/초기화가 완료되지 않아 에이전트를 시작하지 않았습니다/).waitFor()
+  await page.screenshot({ path: 'artifacts/startup-failed.png' })
+  await app.close()
+  app = await launch()
+  page = await app.firstWindow()
+  observeErrors(page)
+  page.setDefaultTimeout(15000)
+  await page.getByRole('heading', { name: 'Startup 실패', exact: true }).waitFor()
+  await page.getByText(/초기화가 완료되지 않아 에이전트를 시작하지 않았습니다/).waitFor()
+  assert.equal((await startup(failed)).status, 'stopped')
+  await assertBlocked(failed)
+  await setScript(win ? "Write-Output 'LATEST_SCRIPT_RECOVERED'" : "printf 'LATEST_SCRIPT_RECOVERED\\n'")
+  await page.getByRole('button', { name: 'Startup 실행', exact: true }).click()
+  await readyTerminal()
+  await waitOutput(failed.id, 'FIRST_PROMPT_Startup 실패')
+  assert.match((await startup(failed)).output, /LATEST_SCRIPT_RECOVERED/)
+  // 자동 실행을 꺼 둔 프로젝트는 기존처럼 바로 에이전트를 시작합니다.
+  await setScript(win ? 'Start-Sleep -Seconds 60' : 'sleep 60', false)
+  const disabled = await create('Startup 자동 끔')
+  await readyTerminal()
+  assert.equal(await startup(disabled), null)
+  await waitOutput(disabled.id, 'FIRST_PROMPT_Startup 자동 끔')
+  await setScript(win ? "Write-Output 'LONG_STARTUP'; Start-Sleep -Seconds 60" : "printf 'LONG_STARTUP\\n'; sleep 60")
+  const stopped = await create('Startup 중지')
+  await page.getByRole('button', { name: 'Startup 중지', exact: true }).click()
+  await until(async () => (await startup(stopped))?.status === 'stopped', 'Startup 중지')
+  await assertBlocked(stopped)
+  await page.screenshot({ path: 'artifacts/startup-stopped.png' })
+  console.log('Startup UI 검증 통과: 생성→초기화→성공 후 Codex 호출, 백그라운드 완료, 실패·중지 IPC 차단, 앱 복원 후 차단 유지, 최신 스크립트 재시도, 자동 실행 끔.')
+}
+
+async function checkBackgroundRefresh(task) {
+  const generation = (await snapshot(task.id)).generation
+  await app.evaluate(({ ipcMain }) => {
+    globalThis.refreshHandlers = new Map()
+    globalThis.refreshRequests = 0
+    globalThis.refreshResizeCalls = 0
+    for (const channel of ['repository:inspect', 'repository:diff', 'terminal:resize']) {
+      const original = ipcMain._invokeHandlers.get(channel)
+      globalThis.refreshHandlers.set(channel, original)
+      ipcMain.removeHandler(channel)
+      ipcMain.handle(channel, async (event, ...args) => {
+        if (channel === 'terminal:resize') globalThis.refreshResizeCalls++
+        else {
+          globalThis.refreshRequests++
+          await new Promise((resolve) => setTimeout(resolve, 600))
+        }
+        return original(event, ...args)
+      })
+    }
+  })
+  try {
+    await page.evaluate(() => {
+      const nodes = [document.querySelector('.file-tree'), document.querySelector('.main-diff pre'), document.querySelector('[role="tab"][aria-selected="true"]')]
+      globalThis.flickerState = { nodes, removals: 0, text: nodes[1].innerText }
+      globalThis.flickerObserver = new MutationObserver((records) => {
+        for (const record of records) for (const removed of record.removedNodes)
+          if (nodes.some((node) => removed === node || removed.contains(node))) globalThis.flickerState.removals++
+      })
+      globalThis.flickerObserver.observe(document.querySelector('.workspace-layout'), { childList: true, subtree: true })
+    })
+    await page.getByRole('button', { name: '변경 사항 새로고침' }).click()
+    await until(() => app.evaluate(() => globalThis.refreshRequests >= 2), '배경 갱신 요청')
+    assert.equal(await page.evaluate(() => globalThis.flickerState.nodes.every((node) => node.isConnected)), true)
+    assert.equal(await page.locator('.main-diff pre').innerText(), await page.evaluate(() => globalThis.flickerState.text))
+    await new Promise((resolve) => setTimeout(resolve, 850))
+    assert.equal(await page.evaluate(() => globalThis.flickerState.removals), 0)
+    assert.equal(await app.evaluate(() => globalThis.refreshResizeCalls), 0)
+    assert.equal((await snapshot(task.id)).generation, generation)
+    console.log('깜빡임 회귀 검증 통과: 지연된 배경 갱신 중 트리·diff·선택 탭 DOM 유지, 기존 내용 유지, PTY 재생성·불필요 resize 없음.')
+  } finally {
+    await page.evaluate(() => { globalThis.flickerObserver.disconnect(); delete globalThis.flickerObserver; delete globalThis.flickerState })
+    await app.evaluate(({ ipcMain }) => {
+      for (const [channel, original] of globalThis.refreshHandlers) { ipcMain.removeHandler(channel); ipcMain.handle(channel, original) }
+      delete globalThis.refreshHandlers
+    })
+  }
+}
+
+async function checkCompactProcessLayout(task) {
+  assert.equal(await page.locator('.startup-panel').count(), 1)
+  assert.equal(await page.locator('.process-panel').count(), 1)
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(960, 600))
+  try {
+    await until(async () => page.evaluate(() => {
+      const host = document.querySelector('.task-terminal-slot:not([hidden]) .terminal-host')
+      const screen = host?.querySelector('.xterm-screen')
+      return !!screen && screen.getBoundingClientRect().bottom <= host.getBoundingClientRect().bottom + 1
+    }), '작은 창 터미널 행 맞춤')
+    const layout = await page.evaluate(() => {
+      const host = document.querySelector('.task-terminal-slot:not([hidden]) .terminal-host')
+      const screen = host.querySelector('.xterm-screen')
+      const process = document.querySelector('.process-panel')
+      const rect = (element) => { const value = element.getBoundingClientRect(); return { top: value.top, bottom: value.bottom, height: value.height } }
+      return { host: rect(host), screen: rect(screen), process: rect(process), viewport: innerHeight, footer: !!document.querySelector('.terminal-footer') }
+    })
+    assert.ok(layout.host.height >= 170, JSON.stringify(layout))
+    assert.ok(layout.screen.bottom <= layout.process.top + 1, JSON.stringify(layout))
+    assert.ok(layout.process.bottom <= layout.viewport + 1, JSON.stringify(layout))
+    assert.ok(layout.process.height <= 181, JSON.stringify(layout))
+    assert.equal(layout.footer, false)
+    await command('COMPACT_PROCESS_INPUT_OK')
+    await waitOutput(task.id, 'COMPACT_PROCESS_INPUT_OK')
+    await waitScreen('COMPACT_PROCESS_INPUT_OK')
+    await page.screenshot({ path: 'artifacts/process-panel-compact.png' })
+  } finally {
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1320, 850))
+  }
 }

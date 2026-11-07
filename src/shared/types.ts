@@ -100,6 +100,10 @@ export interface RepositorySnapshot {
 
 export interface DesktopApi {
   platform: string
+  runStartup(projectPath: string, workspace: string, automatic?: boolean): Promise<StartupSnapshot | null>
+  stopStartup(workspace: string): Promise<void>
+  startupSnapshot(workspace: string): Promise<StartupSnapshot | null>
+  onStartup(listener: (snapshot: StartupSnapshot) => void): () => void
   openTerminal(input: TerminalOpen): Promise<TerminalSnapshot>
   writeTerminal(taskId: string, data: string): Promise<void>
   resizeTerminal(taskId: string, cols: number, rows: number): Promise<void>
@@ -177,6 +181,17 @@ export interface ProjectDefaults {
   baseRef: string
   model: string
   effort: string
+  startupScript?: string
+  startupAutoRun?: boolean
+}
+export interface StartupSnapshot {
+  workspace: string
+  status: 'running' | 'completed' | 'failed' | 'stopped'
+  output: string
+  startedAt: number
+  revision: number
+  exitCode?: number
+  error?: string
 }
 export interface AppSettings {
   schemaVersion: 1

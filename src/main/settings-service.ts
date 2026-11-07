@@ -20,10 +20,17 @@ export function validateDefaults(value: unknown): ProjectDefaults {
   const baseRef = (input.baseRef as string).trim() || 'HEAD'
   if (baseRef !== 'HEAD' && !/^refs\/(heads|remotes)\/.+/.test(baseRef))
     throw new Error('기준 브랜치를 목록에서 선택해 주세요.')
+  if (input.startupScript !== undefined &&
+    (typeof input.startupScript !== 'string' || input.startupScript.length > 30_000 || input.startupScript.includes('\0')))
+    throw new Error('Startup 스크립트는 30,000자 이내의 명령으로 입력해 주세요.')
+  if (input.startupAutoRun !== undefined && typeof input.startupAutoRun !== 'boolean')
+    throw new Error('Startup 자동 실행 설정이 올바르지 않습니다.')
   return {
     baseRef,
     model: (input.model as string).trim(),
     effort: (input.effort as string).trim(),
+    ...(input.startupScript !== undefined ? { startupScript: input.startupScript as string } : {}),
+    ...(input.startupAutoRun !== undefined ? { startupAutoRun: input.startupAutoRun as boolean } : {}),
   }
 }
 

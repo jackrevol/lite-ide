@@ -54,6 +54,7 @@ test('터미널은 작업 경로당 하나이며 입력을 에코하지 않고 �
     args: string[]
     killed: boolean
     size: number[]
+    resizeCalls: number
   }[] = []
   const factory: PtyFactory = (_file, args) => {
     let data: (text: string) => void = () => {}
@@ -64,6 +65,7 @@ test('터미널은 작업 경로당 하나이며 입력을 에코하지 않고 �
       args: args as string[],
       killed: false,
       size: [] as number[],
+      resizeCalls: 0,
     }
     children.push(child)
     return {
@@ -78,6 +80,7 @@ test('터미널은 작업 경로당 하나이며 입력을 에코하지 않고 �
       write: (text: string) => child.writes.push(text),
       resize: (cols: number, rows: number) => {
         child.size = [cols, rows]
+        child.resizeCalls++
       },
       kill: () => {
         child.killed = true
@@ -126,8 +129,12 @@ test('터미널은 작업 경로당 하나이며 입력을 에코하지 않고 �
     const shell = await service.open({ ...input, kind: 'shell' })
     assert.equal(children[0].killed, true)
     assert.notEqual(shell.generation, a.generation)
+    service.resize('one', input.cols, input.rows)
+    assert.equal(children[1].resizeCalls, 0)
     service.resize('one', 10000, 1)
     assert.deepEqual(children[1].size, [500, 5])
+    service.resize('one', 10000, 1)
+    assert.equal(children[1].resizeCalls, 1)
     await service.open(input)
     assert.equal(children[1].killed, true)
     assert.ok(

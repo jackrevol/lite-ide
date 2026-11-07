@@ -46,11 +46,14 @@ test('이전 설정은 알림 기본값으로 마이그레이션하고 알림·�
   assert.deepEqual((await service.get()).notifications, defaultNotificationSettings)
   const notifications = { enabled: false, soundEnabled: false, sound: 'custom' as const, volume: 35,
     customSound: { fileName: '12345678-1234-1234-1234-123456789abc.wav', name: '한글 음원.wav' } }
-  const defaults = { baseRef: 'HEAD', model: 'test-model', effort: 'high' }
+  const defaults = { baseRef: 'HEAD', model: 'test-model', effort: 'high', startupScript: "echo '초기화'\nnpm install", startupAutoRun: false }
   await Promise.all([service.updateNotifications(notifications), service.update(root, defaults)])
   const saved = await new SettingsService(file).get()
   assert.deepEqual(saved.notifications, notifications)
   assert.deepEqual(saved.projects, { [pathKey(root)]: defaults })
+  await service.updateNotifications({ ...notifications, volume: 40 })
+  assert.deepEqual((await new SettingsService(file).get()).projects, { [pathKey(root)]: defaults })
+  await service.updateNotifications(notifications)
   await assert.rejects(service.updateNotifications({ ...notifications, volume: NaN }))
   assert.deepEqual((await service.get()).notifications, notifications)
   await mkdir(file + '.tmp')
@@ -112,4 +115,18 @@ test('손상되거나 지원하지 않는 설정 파일을 오류로 표시하�
   } finally {
     await rm(root, { recursive: true, force: true })
   }
+})
+
+test('여러 줄 Startup 스크립트와 자동 실행 설정을 UTF-8로 저장하고 잘못된 값을 거부한다', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'lite-ide-startup-settings-'))
+  const file = join(root, 'settings.json')
+  const defaults = { baseRef: 'HEAD', model: '', effort: '', startupScript: "echo '한글'\nnpm install", startupAutoRun: false }
+  try {
+    await new SettingsService(file).update(root, defaults)
+    assert.deepEqual((await new SettingsService(file).get()).projects[pathKey(root)], defaults)
+    assert.notEqual((await readFile(file))[0], 0xef)
+    for (const startupScript of [42, 'a'.repeat(30_001), '\0'])
+      assert.throws(() => validateDefaults({ ...defaults, startupScript }))
+    assert.throws(() => validateDefaults({ ...defaults, startupAutoRun: 'yes' }))
+  } finally { await rm(root, { recursive: true, force: true }) }
 })
