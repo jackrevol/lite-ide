@@ -120,6 +120,7 @@ test('터미널은 작업 경로당 하나이며 입력을 에코하지 않고 �
     assert.equal(a.generation, b.generation)
     assert.equal(children.length, 1)
     assert.ok(!children[0].args.includes('--no-daemon'))
+    assert.equal(children[0].args[children[0].args.indexOf('--remote') + 1], 'unix://')
     assert.ok(!children[0].args.includes('--no-alt-screen'))
     assert.ok(children[0].args.includes('tui.alternate_screen="always"'))
     assert.ok(children[0].args.includes('tui.fullscreen_transcript=true'))
@@ -227,6 +228,7 @@ test('업데이트 후 선택하지 않은 작업까지 같은 Codex 세션으�
         assert.deepEqual(launch.args.slice(0, 2), ['resume', `thread-${index + 1}`])
         assert.ok(!launch.args.includes('--last'))
         assert.ok(!launch.args.includes('--no-daemon'))
+        assert.equal(launch.args[launch.args.indexOf('--remote') + 1], 'unix://')
         assert.ok(!launch.args.includes('첫 요청'))
       }
       assert.deepEqual(JSON.parse(await readFile(file + '.update.json', 'utf8')), [])

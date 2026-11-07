@@ -175,6 +175,9 @@ export class TerminalService {
         } else if (resuming && !this.resolveThread)
           args.push('resume', '--last')
         args.push(
+          // 내부 실행으로 전환되면 PTY 종료 시 작업도 중단되므로 daemon 연결을 강제합니다.
+          '--remote',
+          'unix://',
           '--config',
           'tui.alternate_screen="always"',
           '--config',

@@ -23,7 +23,7 @@ async function waitForTurn(page) {
     const session = await page.evaluate(
       async () => (await window.desktop.listSessions())[0],
     )
-    if (session && ['completed', 'failed', 'waiting'].includes(session.status))
+    if (session && ['completed', 'failed', 'waiting', 'interrupted'].includes(session.status))
       return session
     await new Promise((resolve) => setTimeout(resolve, 150))
   }
@@ -94,16 +94,20 @@ try {
       const threadFile = join(fixture, 'data', 'terminal-resume.json.threads.json')
       const before = JSON.parse(await readFile(threadFile, 'utf8'))
       assert.equal(before.length, 1)
-      await page.evaluate(async ({ workspace, model }) => {
-        await window.desktop.sendMessage({
-          sessionId: 'terminal-smoke', workspace,
-          text: 'Run exactly one shell command that sleeps for 20 seconds, then reply SESSION_CONTINUED. Do not change any files.',
-          model: model.id,
-          effort: model.efforts.includes('low') ? 'low' : model.defaultEffort,
-        })
-      }, { workspace: worktree.path, model })
-      const active = await page.evaluate(async () => (await window.desktop.listSessions())[0])
+      // API로 시작한 턴만 검사하면 CLI가 내부 서버로 전환되는 문제를 놓칩니다.
+      await page.evaluate(() => window.desktop.writeTerminal('terminal-smoke',
+        'Run exactly one shell command that sleeps for 30 seconds, then reply SESSION_CONTINUED. Do not change any files.'))
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      await page.evaluate(() => window.desktop.writeTerminal('terminal-smoke', '\r'))
+      let active
+      const deadline = Date.now() + 60000
+      while (Date.now() < deadline) {
+        active = await page.evaluate(async () => (await window.desktop.listSessions())[0])
+        if (active?.status === 'running' && active.messages.some((message) => message.kind === 'command' && message.status === 'inProgress')) break
+        await new Promise((resolve) => setTimeout(resolve, 150))
+      }
       assert.equal(active.status, 'running')
+      assert.ok(active.messages.some((message) => message.kind === 'command' && message.status === 'inProgress'), JSON.stringify(active))
       // 설치 전 체크포인트를 재현하고 숨겨진 창을 재시작해 자동 연결을 확인합니다.
       await writeFile(join(fixture, 'data', 'terminal-resume.json.update.json'), JSON.stringify([input]), 'utf8')
       await app.close()
@@ -116,6 +120,7 @@ try {
       assert.deepEqual(JSON.parse(await readFile(threadFile, 'utf8')), before)
       const continued = await waitForTurn(page)
       assert.equal(continued.status, 'completed', continued.error)
+      assert.equal(continued.threadId, active.threadId)
       assert.equal(continued.turnId, active.turnId)
       assert.equal(continued.messages.filter((message) => message.kind === 'user').length, 2)
       assert.ok(continued.messages.some((message) => message.kind === 'assistant' && message.text.includes('SESSION_CONTINUED')))
