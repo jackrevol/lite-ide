@@ -7,6 +7,7 @@ import {
   nativeTheme,
   net,
   Notification,
+  powerSaveBlocker,
   shell,
 } from 'electron'
 import { basename, isAbsolute, join, relative, resolve } from 'node:path'
@@ -98,6 +99,9 @@ if (process.env.LITE_IDE_HEADLESS === '1' && process.env.LITE_IDE_TEST_DATA)
   app.setPath('userData', process.env.LITE_IDE_TEST_DATA)
 
 app.whenReady().then(() => {
+  // macOS·Windows 공통: 창의 표시 여부와 관계없이 앱 종료까지 시스템과 화면을 유지합니다.
+  const awakeBlocker = powerSaveBlocker.start('prevent-display-sleep')
+  app.once('will-quit', () => powerSaveBlocker.stop(awakeBlocker))
   const settings = new SettingsService(
     join(app.getPath('userData'), 'settings.json'),
   )
