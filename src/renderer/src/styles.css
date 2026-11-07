@@ -432,17 +432,20 @@
   background: #a4afcb;
 }
 .session-dot.running {
-  background: #75a8ec;
+  background: #6cb17b;
 }
-.session-dot.completed,
 .connection-dot.online {
   background: #6cb17b;
 }
-.session-dot.failed {
+.session-dot.completed {
   background: #d8847b;
 }
 .session-dot.waiting {
-  background: #c09664;
+  background: #e5bd46;
+}
+.session-dot.disconnected {
+  background: #000;
+  box-shadow: 0 0 0 1px var(--subtle);
 }
 .attention-tag {
   color: #c09664;

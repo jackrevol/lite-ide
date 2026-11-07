@@ -246,6 +246,7 @@ export class TerminalService {
     this.terminals.set(input.taskId, terminal)
     let attentionSequence = 0
     if (input.kind === 'codex') terminal.notificationParser = new CodexNotificationParser((kind) => {
+      this.setWaitingForInput(terminal, true)
       this.attention?.({ taskId: input.taskId, workspace: input.workspace, kind,
         source: 'terminal', identity: `${terminal.generation}:${++attentionSequence}` })
     })
@@ -360,6 +361,13 @@ export class TerminalService {
     await writeFile(`${this.file}.update.json`, JSON.stringify(remaining), 'utf8')
   }
 
+  private setWaitingForInput(terminal: RunningTerminal, waitingForInput: boolean) {
+    if (!!terminal.waitingForInput === waitingForInput) return
+    terminal.waitingForInput = waitingForInput
+    this.emit({ taskId: terminal.taskId, generation: terminal.generation,
+      sequence: ++terminal.sequence, type: 'status', waitingForInput })
+  }
+
   write(id: string, data: string) {
     if (typeof data !== 'string' || data.length > 65536)
       throw new Error('터미널 입력이 너무 깁니다.')
@@ -368,6 +376,7 @@ export class TerminalService {
       throw new Error('터미널이 종료되었습니다. 다시 연결해 주세요.')
     terminal.process.write(data)
     if (data) terminal.notificationParser?.answered()
+    if (/[\r\n\x03]/.test(data)) this.setWaitingForInput(terminal, false)
   }
 
   resize(id: string, cols: number, rows: number) {

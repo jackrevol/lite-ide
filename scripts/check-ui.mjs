@@ -511,6 +511,34 @@ try {
     web.send('codex:session', { ...session, id: 'ui-child', title: '검증 서브에이전트', parentSessionId: session.id, task: '서브에이전트 작업 설명', messages: [{ id: 'child-message', kind: 'assistant', text: '서브에이전트 실행 결과' }] })
     web.send('codex:session', { ...session, id: 'ui-other', title: '다른 워크트리 세션', workspace: other })
   }, { workspace: first.path, other: second.path })
+  const firstDot = page.locator('.task-row').and(page.getByTitle(first.path, { exact: true })).locator('.session-dot')
+  const secondDot = page.locator('.task-row').and(page.getByTitle(second.path, { exact: true })).locator('.session-dot')
+  await until(async () => await firstDot.getAttribute('aria-label') === '작업 중', '작업 중 상태 표시')
+  assert.equal(await firstDot.evaluate((dot) => getComputedStyle(dot).backgroundColor), 'rgb(108, 177, 123)')
+  // 선택하지 않은 작업도 실시간 상태를 반영합니다.
+  for (const [status, label, color] of [
+    ['waiting', '답변 대기 중', 'rgb(229, 189, 70)'],
+    ['completed', '작업 완료', 'rgb(216, 132, 123)'],
+    ['running', '작업 중', 'rgb(108, 177, 123)'],
+  ]) {
+    await app.evaluate(({ BrowserWindow }, { workspace, status }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('codex:session', {
+        workspace, title: '다른 워크트리 세션', id: 'ui-other', status,
+        messages: [], requests: [], updatedAt: Date.now(), canAcceptDirectInput: false,
+      })
+    }, { workspace: second.path, status })
+    await until(async () => await secondDot.getAttribute('aria-label') === label, `백그라운드 작업 ${label}`)
+    assert.equal(await secondDot.getAttribute('title'), label)
+    assert.equal(await secondDot.evaluate((dot) => getComputedStyle(dot).backgroundColor), color)
+    assert.equal(await firstDot.getAttribute('aria-label'), '작업 중')
+  }
+  await windowWrite(second.id, '/question\r')
+  await waitOutput(second.id, 'QUESTION_WAITING')
+  await until(async () => await secondDot.getAttribute('aria-label') === '답변 대기 중', '백그라운드 터미널 질문 대기')
+  await windowWrite(second.id, '답변')
+  assert.equal(await secondDot.getAttribute('aria-label'), '답변 대기 중')
+  await windowWrite(second.id, '\r')
+  await until(async () => await secondDot.getAttribute('aria-label') === '작업 중', '답변 제출 후 상태 복원')
   await workTabs.getByRole('tab', { name: /검증 서브에이전트/ }).click()
   await page.getByText('서브에이전트 실행 결과', { exact: true }).waitFor()
   assert.equal(await page.getByText('서브에이전트 작업 설명', { exact: true }).count(), 1)
@@ -581,6 +609,8 @@ try {
   else await until(async () => !!(await snapshot(first.id))?.output, '셸 시작')
   const shellGeneration = (await snapshot(first.id)).generation
   assert.notEqual(shellGeneration, firstGeneration)
+  await until(async () => await firstDot.getAttribute('aria-label') === '연결 안 됨', '셸 전환 시 에이전트 연결 해제 표시')
+  assert.equal(await firstDot.evaluate((dot) => getComputedStyle(dot).backgroundColor), 'rgb(0, 0, 0)')
   await command(
     process.platform === 'win32'
       ? "Write-Output 'REAL_SHELL_OK'"

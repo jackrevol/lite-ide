@@ -33,7 +33,7 @@ import { StartupPanel } from './components/StartupPanel'
 import { DiffView } from './components/DiffView'
 import { SessionTab } from './components/SessionTab'
 import { ProcessPanel } from './components/ProcessPanel'
-import { workspaceSessions } from './lib/workspace-sessions'
+import { workspaceSessions, workspaceTaskStatus } from './lib/workspace-sessions'
 import { AppUpdateButton } from './components/AppUpdateButton'
 import { NewTaskDialog } from './components/NewTaskDialog'
 import { SettingsDialog, projectSettingsKey } from './components/SettingsDialog'
@@ -190,15 +190,20 @@ export function App() {
     return unsubscribe
   }, [ready, state.tasks])
   useEffect(() => window.desktop.onTerminal((event) => {
-    if (event.type !== 'exit') return
+    if (event.type === 'data') return
     setTerminals((previous) => {
       const terminal = previous[event.taskId]
       if (!terminal || terminal.generation !== event.generation) return previous
-      return { ...previous, [event.taskId]: { ...terminal, running: false, exitCode: event.exitCode } }
+      return { ...previous, [event.taskId]: event.type === 'status'
+        ? { ...terminal, waitingForInput: event.waitingForInput }
+        : { ...terminal, running: false, exitCode: event.exitCode } }
     })
   }), [])
+  const observedWorkspaces = JSON.stringify(state.tasks.filter((task) =>
+    task.id === current?.id || (terminals[task.id]?.running && terminals[task.id]?.kind === 'codex'),
+  ).map((task) => task.path))
   useEffect(() => {
-    if (!ready || !current) return
+    if (!ready) return
     let disposed = false
     let pending = false
     setSessionError('')
@@ -206,16 +211,20 @@ export function App() {
       if (pending) return
       pending = true
       try {
-        const found = await window.desktop.listSessions(current.path)
+        const paths = JSON.parse(observedWorkspaces) as string[]
+        const results = await Promise.allSettled(paths
+          .map((path) => window.desktop.listSessions(path)))
         if (!disposed) {
           setSessions((previous) => {
             const next = { ...previous }
+            const found = results.flatMap((result) => result.status === 'fulfilled' ? result.value : [])
             for (const session of found) {
               if (!next[session.id] || next[session.id].updatedAt <= session.updatedAt) next[session.id] = session
             }
             return next
           })
-          setSessionError('')
+          const failed = results[paths.indexOf(current?.path ?? '')]
+          setSessionError(failed?.status === 'rejected' ? errorText(failed.reason) : '')
         }
       } catch (cause) {
         if (!disposed) setSessionError(errorText(cause))
@@ -224,7 +233,7 @@ export function App() {
     void inspect()
     const timer = setInterval(() => { if (!document.hidden) void inspect() }, 4000)
     return () => { disposed = true; clearInterval(timer) }
-  }, [ready, current?.path])
+  }, [ready, current?.path, observedWorkspaces])
 
   const reconnect = useCallback(async () => {
     setConnecting(true)
@@ -744,7 +753,9 @@ export function App() {
                     {!collapsed.includes(item.path) &&
                       state.tasks
                         .filter((task) => task.project === item.path)
-                        .map((task) => (
+                        .map((task) => {
+                          const status = workspaceTaskStatus(Object.values(sessions), task.path, window.desktop.platform, terminals[task.id])
+                          return (
                           <div className="managed-row" key={task.id}>
                             <button
                               className={`task-row ${current?.id === task.id ? 'selected' : ''}`}
@@ -755,7 +766,10 @@ export function App() {
                               onClick={() => selectTask(task)}
                             >
                               <span
-                                className={`session-dot ${terminals[task.id]?.running ? 'completed' : 'idle'}`}
+                                className={`session-dot ${status.state}`}
+                                role="img"
+                                aria-label={status.label}
+                                title={status.label}
                               />
                               <span className="task-label">
                                 <span>{task.name}</span>
@@ -786,7 +800,8 @@ export function App() {
                               ]}
                             />
                           </div>
-                        ))}
+                          )
+                        })}
                   </div>
                 ))}
               </nav>

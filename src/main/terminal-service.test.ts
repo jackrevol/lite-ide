@@ -23,7 +23,8 @@ test('선택하지 않은 Codex 터미널도 OSC9를 수신하고 셸 출력은 
     } as unknown as IPty
   }
   const attention: AttentionNotification[] = []
-  const service = new TerminalService(join(directory, 'resume.json'), () => {}, factory, async () => '/codex',
+  const events: TerminalEvent[] = []
+  const service = new TerminalService(join(directory, 'resume.json'), (event) => events.push(event), factory, async () => '/codex',
     undefined, undefined, undefined, (event) => attention.push(event))
   t.after(() => service.close())
   const input = { taskId: 'one', workspace: join(directory, 'one'), kind: 'codex' as const, cols: 80, rows: 24 }
@@ -32,6 +33,8 @@ test('선택하지 않은 Codex 터미널도 OSC9를 수신하고 셸 출력은 
   sends[1]('\x1b]9;Quest'); sends[1]('ion: reply?\x07')
   assert.equal(attention[0].taskId, 'background')
   assert.equal(attention[0].kind, 'question')
+  assert.equal(service.snapshot('background')!.waitingForInput, true)
+  assert.ok(events.some((event) => event.type === 'status' && event.taskId === 'background' && event.waitingForInput))
   assert.equal(service.snapshot('background')!.output, '\x1b]9;Question: reply?\x07')
   assert.doesNotThrow(() => structuredClone(service.snapshot('background')))
   assert.ok(launches[0].includes('tui.notifications=["approval-requested","plan-mode-prompt","async-question"]'))
@@ -41,6 +44,12 @@ test('선택하지 않은 Codex 터미널도 OSC9를 수신하고 셸 출력은 
   sends[2]('\x1b]9;Question: shell?\x07')
   assert.equal(attention.length, 1)
   service.write('background', '1')
+  assert.equal(service.snapshot('background')!.waitingForInput, true)
+  service.write('background', '\x1b[B')
+  assert.equal(service.snapshot('background')!.waitingForInput, true)
+  service.write('background', '\r')
+  assert.equal(service.snapshot('background')!.waitingForInput, false)
+  assert.ok(events.some((event) => event.type === 'status' && !event.waitingForInput))
   sends[1]('\x1b]9;Question: reply?\x07')
   assert.equal(attention.length, 2)
 })

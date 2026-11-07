@@ -35,6 +35,7 @@ export interface TerminalSnapshot {
   workspace: string
   kind: TerminalKind
   running: boolean
+  waitingForInput?: boolean
   output: string
   sequence: number
   cols: number
@@ -71,6 +72,13 @@ export interface StopProcessInput {
   identity: string
 }
 export type TerminalEvent =
+  | {
+      taskId: string
+      generation: string
+      sequence: number
+      type: 'status'
+      waitingForInput: boolean
+    }
   | {
       taskId: string
       generation: string

@@ -229,6 +229,10 @@ export function TaskTerminal({
         return
       ready.sequence = event.sequence
       if (event.type === 'data') term.write(event.data)
+      else if (event.type === 'status') {
+        ready.waitingForInput = event.waitingForInput
+        callbacks.current.onStatus({ ...ready })
+      }
       else {
         ready.running = false
         ready.exitCode = event.exitCode
