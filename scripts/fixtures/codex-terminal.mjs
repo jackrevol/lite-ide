@@ -10,6 +10,19 @@ let input = '',
 const prompt = () => process.stdout.write('codex> ')
 function run(command) {
   if (command === '/exit') process.exit(0)
+  if (command === '/cursor-redraw') {
+    let remaining = 5
+    const redraw = () => {
+      process.stdout.write('\x1b[?25l')
+      setTimeout(() => {
+        process.stdout.write('\x1b[?25h')
+        if (--remaining) setTimeout(redraw, 40)
+        else { process.stdout.write('CURSOR_DONE:/cursor-redraw\r\n'); prompt() }
+      }, 35)
+    }
+    redraw()
+    return
+  }
   if (command === '/cursor-fragment') {
     process.stdout.write('\x1b[5')
     setTimeout(() => { process.stdout.write(' q\x1b[?12;25hCURSOR_DONE:/cursor-fragment\r\n'); prompt() }, 40)

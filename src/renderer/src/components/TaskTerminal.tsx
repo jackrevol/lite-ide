@@ -8,6 +8,7 @@ import type { TerminalEvent, TerminalSnapshot } from '../../../shared/types'
 import type { WorkspaceTask } from '../lib/workspace-state'
 import { Button } from './ui/button'
 import { installSteadyCursor } from '../lib/steady-cursor'
+import { createTerminalOutput } from '../lib/terminal-output'
 
 export function TaskTerminal({
   task,
@@ -100,6 +101,7 @@ export function TaskTerminal({
     })
     terminal.current = term
     const steadyCursor = installSteadyCursor(term)
+    const output = createTerminalOutput((data) => term.write(data))
     const fit = new FitAddon()
     term.loadAddon(fit)
     term.open(host.current)
@@ -228,12 +230,13 @@ export function TaskTerminal({
       )
         return
       ready.sequence = event.sequence
-      if (event.type === 'data') term.write(event.data)
+      if (event.type === 'data') output.write(event.data)
       else if (event.type === 'status') {
         ready.waitingForInput = event.waitingForInput
         callbacks.current.onStatus({ ...ready })
       }
       else {
+        output.flush()
         ready.running = false
         ready.exitCode = event.exitCode
         setExited(event.exitCode)
@@ -260,7 +263,9 @@ export function TaskTerminal({
         if (disposed) return
         ready = { ...snapshot }
         term.resize(snapshot.cols, snapshot.rows)
-        term.write(snapshot.output, resize)
+        output.write(snapshot.output)
+        output.flush()
+        term.write('', resize)
         for (const event of pending) receive(event)
         pending = []
         host.current?.setAttribute('data-terminal-ready', 'true')
@@ -276,6 +281,7 @@ export function TaskTerminal({
       if (resizeTimer) clearTimeout(resizeTimer)
       if (searchTimer) clearTimeout(searchTimer)
       parsed.dispose()
+      output.dispose()
       steadyCursor.dispose()
       unsubscribe()
       input.dispose()

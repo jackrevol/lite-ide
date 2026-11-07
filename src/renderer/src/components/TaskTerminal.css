@@ -1,3 +1,18 @@
+.task-terminal .xterm .xterm-helper-textarea {
+  caret-color: transparent;
+}
+
+/* 조합 시작·종료 때 xterm 기본 검정 배경이 번쩍이지 않게 터미널 색을 따릅니다. */
+.task-terminal .xterm .composition-view {
+  background: #ffffff;
+  color: #27272a;
+}
+
+.dark .task-terminal .xterm .composition-view {
+  background: #18181b;
+  color: #e4e4e7;
+}
+
 .terminal-search {
   display: flex;
   align-items: center;

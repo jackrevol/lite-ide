@@ -1156,6 +1156,7 @@ async function checkPeriodicTabs() {
 }
 
 async function checkRemoteCursor() {
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setBackgroundThrottling(false))
   const host = page.locator('.task-terminal-slot:not([hidden]) .terminal-host')
   for (const [commandText, style] of [['/cursor-block', 'block'], ['/cursor-underline', 'underline'], ['/cursor-bar', 'bar'], ['/cursor-enable', 'bar'], ['/cursor-fragment', 'bar']]) {
     await command(commandText)
@@ -1180,7 +1181,58 @@ async function checkRemoteCursor() {
   await waitScreen('CURSOR_DONE:/cursor-show')
   await until(async () => await host.locator('.xterm-cursor').count() === 1, 'CLI 커서 표시')
   assert.equal(await host.locator('.xterm-cursor-blink').count(), 0)
-  console.log('커서 회귀 통과: 원격 모양·복합/분할 blink 요청에서도 고정, 위치 이동·숨김·표시 보존.')
+  for (const [runIndex, mode] of ['focused', 'blurred', 'composition'].entries()) {
+    await host.evaluate((element) => {
+      globalThis.cursorFrames = []
+      const sample = () => {
+        globalThis.cursorFrames.push(!!element.querySelector('.xterm-cursor'))
+      }
+      globalThis.cursorObserver = new MutationObserver(sample)
+      globalThis.cursorObserver.observe(element.querySelector('.xterm-rows'), { childList: true, subtree: true, attributes: true })
+    })
+    try {
+      await command('/cursor-redraw')
+      if (mode === 'blurred') await host.locator('textarea').evaluate((element) => element.blur())
+      if (mode === 'composition') {
+        await host.locator('textarea').evaluate((element) => {
+          element.value = ''
+          element.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' }))
+          element.value = '한'
+          element.dispatchEvent(new CompositionEvent('compositionupdate', { bubbles: true, data: '한' }))
+        })
+        const appearance = await host.evaluate((element) => {
+          const composition = element.querySelector('.composition-view')
+          return {
+            active: composition.classList.contains('active'),
+            text: composition.textContent,
+            background: getComputedStyle(composition).backgroundColor,
+            terminalBackground: getComputedStyle(element.querySelector('.xterm-viewport')).backgroundColor,
+            color: getComputedStyle(composition).color,
+            terminalColor: getComputedStyle(element.querySelector('.xterm-rows')).color,
+            caret: getComputedStyle(element.querySelector('textarea')).caretColor,
+          }
+        })
+        assert.equal(appearance.active, true)
+        assert.equal(appearance.text, '한')
+        assert.equal(appearance.background, appearance.terminalBackground)
+        assert.equal(appearance.color, appearance.terminalColor)
+        assert.equal(appearance.caret, 'rgba(0, 0, 0, 0)')
+      }
+      await waitScreen('CURSOR_DONE:/cursor-redraw')
+      // 이전 실행의 완료 표시로 조기 종료하지 않고 이번 다시 그리기까지 측정합니다.
+      await until(async () => (await terminalText()).split('CURSOR_DONE:/cursor-redraw').length - 1 >= runIndex + 1, '분할된 커서 다시 그리기')
+      const frames = await page.evaluate(() => globalThis.cursorFrames)
+      assert.ok(frames.length > 0, '커서 렌더링을 측정해야 합니다.')
+      assert.equal(frames.filter((visible) => !visible).length, 0, `분할된 숨김/표시 중 커서가 사라집니다 (${mode}).`)
+    } finally {
+      await page.evaluate(() => globalThis.cursorObserver.disconnect())
+      if (mode === 'composition') {
+        await host.locator('textarea').evaluate((element) => element.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '한' })))
+        await page.keyboard.press('Control+c')
+      }
+    }
+  }
+  console.log('커서 회귀 통과: blink 요청·분할된 다시 그리기를 포커스/비포커스/한글 조합 중 검증, 조합 색상 일치, 위치 이동·실제 숨김·표시 보존.')
 }
 
 async function setupFocusedTerminal() {
