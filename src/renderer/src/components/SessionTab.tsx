@@ -6,7 +6,7 @@ import { Button } from './ui/button'
 
 const labels = { idle: '대기', running: '실행 중', waiting: '응답 대기', completed: '완료', interrupted: '중단', failed: '실패' }
 
-export function SessionTab({ session, draft, setDraft }: { session: AgentSession; draft: string; setDraft: Dispatch<SetStateAction<string>> }) {
+export function SessionTab({ session, draft, setDraft, requestDrafts, setRequestDrafts }: { session: AgentSession; draft: string; setDraft: Dispatch<SetStateAction<string>>; requestDrafts: Record<string, Record<string, string>>; setRequestDrafts: Dispatch<SetStateAction<Record<string, Record<string, string>>>> }) {
   const [pending, setPending] = useState('')
   const [error, setError] = useState('')
   const active = session.status === 'running' || session.status === 'waiting'
@@ -31,7 +31,7 @@ export function SessionTab({ session, draft, setDraft }: { session: AgentSession
       </div>
       {session.task && <p className="session-tab-task">{session.task}</p>}
       {(error || session.observationError) && <p className="error-message" role="alert">{error || session.observationError}</p>}
-      {session.messages.length || session.requests.length ? <Conversation session={session} /> : <p className="session-tab-empty">아직 기록된 활동이 없습니다. 활동을 수신하면 여기에 표시됩니다.</p>}
+      {session.messages.length || session.requests.length ? <Conversation session={session} requestDrafts={requestDrafts} setRequestDrafts={setRequestDrafts} /> : <p className="session-tab-empty">아직 기록된 활동이 없습니다. 활동을 수신하면 여기에 표시됩니다.</p>}
       {!canControl ? <p className="session-tab-note">{session.closed ? '종료된 세션의 활동 기록입니다.' : 'CLI 세션을 읽기 전용으로 관찰합니다. 지시는 해당 작업의 터미널에서 전달해 주세요.'}</p> : (
         <form className="session-tab-composer" onSubmit={(event) => {
           event.preventDefault()

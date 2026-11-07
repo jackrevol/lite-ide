@@ -249,6 +249,7 @@ app.whenReady().then(() => {
     undefined,
     undefined,
     async (input, resuming) => {
+      if (input.threadId) return input.threadId
       if (
         process.env.LITE_IDE_HEADLESS === '1' && process.env.LITE_IDE_TEST_TERMINAL
       )

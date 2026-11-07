@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
@@ -110,11 +110,14 @@ function Message({ message }: { message: AgentMessage }) {
 function RequestCard({
   request,
   answer,
+  answers,
+  setAnswers,
 }: {
   request: AgentRequest
   answer: (value: RequestAnswer) => Promise<void>
+  answers: Record<string, string>
+  setAnswers: (value: Record<string, string>) => void
 }) {
-  const [answers, setAnswers] = useState<Record<string, string>>({})
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   async function submit(value: RequestAnswer) {
@@ -183,7 +186,7 @@ function RequestCard({
   )
 }
 
-export function Conversation({ session }: { session?: AgentSession }) {
+export function Conversation({ session, requestDrafts, setRequestDrafts }: { session?: AgentSession; requestDrafts: Record<string, Record<string, string>>; setRequestDrafts: Dispatch<SetStateAction<Record<string, Record<string, string>>>> }) {
   const scroll = useRef<HTMLDivElement>(null)
   const follow = useRef(true)
   useEffect(() => {
@@ -219,9 +222,16 @@ export function Conversation({ session }: { session?: AgentSession }) {
           <RequestCard
             key={request.id}
             request={request}
-            answer={(answer) =>
-              window.desktop.answerRequest(session.id, request.id, answer)
-            }
+            answers={requestDrafts[JSON.stringify([session.id, request.id])] ?? {}}
+            setAnswers={(answers) => setRequestDrafts((previous) => ({ ...previous, [JSON.stringify([session.id, request.id])]: answers }))}
+            answer={async (answer) => {
+              await window.desktop.answerRequest(session.id, request.id, answer)
+              setRequestDrafts((previous) => {
+                const next = { ...previous }
+                delete next[JSON.stringify([session.id, request.id])]
+                return next
+              })
+            }}
           />
         ))}
         {session?.status === 'running' && (

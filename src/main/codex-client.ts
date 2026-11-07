@@ -88,6 +88,8 @@ export class CodexClient {
   private process?: ChildProcessWithoutNullStreams
   private socket?: WebSocket
   private startup?: Promise<void>
+  private generation = 0
+  private controller?: AbortController
   private sequence = 0
   private pending = new Map<
     number,
@@ -102,15 +104,22 @@ export class CodexClient {
 
   async start(): Promise<void> {
     if (this.startup) return this.startup
-    this.startup = this.connect().catch((error) => {
-      this.stop()
+    const generation = this.generation
+    const controller = new AbortController()
+    this.controller = controller
+    this.startup = this.connect(generation, controller.signal).catch((error) => {
+      if (generation === this.generation) this.stop()
       throw error
     })
     return this.startup
   }
 
-  private async connect() {
+  private async connect(generation: number, signal: AbortSignal) {
+    const requireActive = () => {
+      if (generation !== this.generation) throw new Error('Codex 연결이 종료되었습니다.')
+    }
     const binary = await findCodex()
+    requireActive()
     const fixture =
       process.env.LITE_IDE_HEADLESS === '1' && binary.endsWith('.mjs')
     // 앱은 연결만 소유합니다. 백그라운드 서버의 작업은 앱 업데이트 중에도 유지합니다.
@@ -118,7 +127,9 @@ export class CodexClient {
       await promisify(execFile)(binary, ['app-server', 'daemon', 'start'], {
         windowsHide: true,
         timeout: 20000,
+        signal,
       })
+    requireActive()
     const child = spawn(
       fixture ? process.execPath : binary,
       fixture ? [binary] : ['app-server', 'proxy'],
@@ -155,6 +166,7 @@ export class CodexClient {
     }
     const disconnected = (reason: string) => {
       if (this.process !== child) return
+      this.generation++
       const socket = this.socket
       this.process = undefined
       this.socket = undefined
@@ -196,10 +208,12 @@ export class CodexClient {
         socket.once('error', reject)
       })
     }
+    requireActive()
     await this.request('initialize', {
       clientInfo: { name: 'lite_ide', title: 'Lite IDE', version: '0.1.0' },
       capabilities: { experimentalApi: true },
     })
+    requireActive()
     this.write({ method: 'initialized', params: {} })
   }
 
@@ -242,6 +256,9 @@ export class CodexClient {
   }
 
   stop() {
+    this.generation++
+    this.controller?.abort()
+    this.controller = undefined
     const child = this.process
     const socket = this.socket
     this.socket = undefined

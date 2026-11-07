@@ -163,7 +163,7 @@ export class TerminalService {
             : (input.prompt ?? ''),
         )
       } else {
-        let threadId = this.threads.get(key) ?? input.threadId
+        let threadId = input.threadId ?? this.threads.get(key)
         if (!threadId && this.resolveThread)
           threadId = await this.resolveThread(input, resuming)
         if (threadId) {
@@ -332,7 +332,7 @@ export class TerminalService {
     if (!this.resolveThread) return
     for (const terminal of this.terminals.values()) {
       if (terminal.kind !== 'codex' || !terminal.running) continue
-      const threadId = await this.resolveThread(terminal.input, true)
+      const threadId = terminal.input.threadId ?? await this.resolveThread(terminal.input, true)
       if (threadId) {
         this.threads.set(pathKey(terminal.workspace), threadId)
         terminal.input.threadId = threadId
@@ -397,8 +397,8 @@ export class TerminalService {
     const terminal = this.terminals.get(id)
     if (!terminal?.process) return
     if (!preserveSession && terminal.kind === 'codex' && this.interruptThread) {
-      const threadId = await this.resolveThread?.(terminal.input, true)
-        ?? terminal.input.threadId
+      const threadId = terminal.input.threadId
+        ?? await this.resolveThread?.(terminal.input, true)
       if (threadId) {
         this.threads.set(pathKey(terminal.workspace), threadId)
         terminal.input.threadId = threadId

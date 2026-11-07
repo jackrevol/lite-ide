@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  readDiff,
   parseStatus,
   parseWorktrees,
   createWorktree,
@@ -410,4 +411,41 @@ test('브랜치 변경 후 실제 브랜치를 삭제하고 Git 연결이 끊어
   } finally {
     await rm(root, { recursive: true, force: true })
   }
+})
+
+
+test('대괄호 파일의 diff는 해당 파일만 표시하고 점 두 개로 시작하는 새 파일도 읽는다', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'lite-literal-diff-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const git = (...args: string[]) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', windowsHide: true })
+  git('init', '--initial-branch=main')
+  for (const file of ['file[1].txt', 'file1.txt']) await writeFile(join(root, file), 'before', 'utf8')
+  git('add', '.')
+  git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'fixture')
+  for (const file of ['file[1].txt', 'file1.txt']) await writeFile(join(root, file), 'after', 'utf8')
+  const diff = await readDiff(root, 'file[1].txt')
+  assert.match(diff, /file\[1\]\.txt/)
+  assert.equal(diff.includes('file1.txt'), false)
+  await writeFile(join(root, '..notes'), 'notes', 'utf8')
+  assert.match(await readDiff(root, '..notes'), /\+notes/)
+})
+
+test('Worktree checkout 훅 실패와 시간 초과는 이번 폴더와 브랜치를 정리한다', async (t) => {
+  const parent = await mkdtemp(join(tmpdir(), 'lite-worktree-rollback-'))
+  const root = join(parent, 'repo')
+  await mkdir(root)
+  t.after(() => rm(parent, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }))
+  const git = (...args: string[]) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', windowsHide: true })
+  git('init', '--initial-branch=main')
+  git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-m', 'fixture')
+  const hook = join(root, '.git', 'hooks', 'post-checkout')
+  for (const [content, timeout] of [['#!/bin/sh\nexit 1\n', 5000], ['#!/bin/sh\nsleep 2\n', 500]] as const) {
+    await writeFile(hook, content, { encoding: 'utf8', mode: 0o755 })
+    await assert.rejects(createWorktree(root, 'feature/retry', 'HEAD', timeout))
+    assert.equal((await inspectRepository(root)).worktrees.length, 1)
+    assert.equal(git('branch', '--list', 'feature/retry').trim(), '')
+  }
+  await rm(hook)
+  const tree = await createWorktree(root, 'feature/retry')
+  await removeWorktree(root, tree.path)
 })

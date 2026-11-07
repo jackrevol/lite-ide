@@ -41,6 +41,7 @@ export function SubagentPanel({
   parent: AgentSession
   agents: Record<string, AgentSession>
 }) {
+  const [requestDrafts, setRequestDrafts] = useState<Record<string, Record<string, string>>>({})
   const [expanded, setExpanded] = useState(true)
   const [filter, setFilter] = useState('all')
   const [query, setQuery] = useState('')
@@ -270,7 +271,7 @@ export function SubagentPanel({
             </div>
             {selected.task && <p className="subagent-task">{selected.task}</p>}
             <div className="subagent-detail-conversation">
-              <Conversation session={selected} />
+              <Conversation session={selected} requestDrafts={requestDrafts} setRequestDrafts={setRequestDrafts} />
               {!selected.messages.length && (
                 <p className="subagent-empty">
                   아직 수신된 대화가 없습니다. 새로고침하여 활동을 확인할 수

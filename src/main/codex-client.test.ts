@@ -10,6 +10,17 @@ test('Codex 초기화와 동시 RPC, 종료 중인 요청의 거절을 처리한
   process.env.LITE_IDE_TEST_CODEX = resolve('scripts/fixtures/codex-server.mjs')
   const client = new CodexClient()
   try {
+    const cancelled = client.start()
+    const rejectedStart = assert.rejects(cancelled, /연결이 종료/)
+    client.stop()
+    // 취소된 이전 초기화가 새 연결을 종료하지 않아야 합니다.
+    const restarted = client.start()
+    await rejectedStart
+    await restarted
+    const cancelledAgain = client.start()
+    await cancelledAgain
+    client.stop()
+    await assert.rejects(client.request('account/read', {}), /연결되어 있지/)
     await Promise.all([client.start(), client.start()])
     const [account, models] = await Promise.all([
       client.request<{ account: { type: string } }>('account/read', {}),

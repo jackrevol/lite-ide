@@ -78,6 +78,7 @@ export function App() {
   const [repositories, setRepositories] = useState<
     Record<string, RepositorySnapshot>
   >({})
+  const [requestDrafts, setRequestDrafts] = useState<Record<string, Record<string, string>>>({})
   const [repository, setRepository] = useState(emptyRepository)
   const [ready, setReady] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -341,6 +342,7 @@ export function App() {
     // 배경 갱신 중에는 기존 트리와 선택·접힘·스크롤을 그대로 유지합니다.
     if (repositoryDirectory.current !== directory) {
       repositoryDirectory.current = directory
+      setRepository(emptyRepository)
       setLoading(true)
     }
     void window.desktop
@@ -914,6 +916,8 @@ export function App() {
                 ))}
                 {activeDiff && <DiffView path={activeDiff.path} diff={diff} loading={diffLoading} onClose={() => closeDiff(activeDiff.id)} />}
                 {current && ready && !activeDiff && !startupBlocked && startupChecked && selectedSession && <SessionTab key={`session:${selectedSession.id}`} session={selectedSession}
+                  requestDrafts={requestDrafts}
+                  setRequestDrafts={setRequestDrafts}
                   draft={sessionDrafts[selectedSession.id] ?? ''}
                   setDraft={(value) => setSessionDrafts((previous) => ({ ...previous, [selectedSession.id]: typeof value === 'function' ? value(previous[selectedSession.id] ?? '') : value }))}
                 />}

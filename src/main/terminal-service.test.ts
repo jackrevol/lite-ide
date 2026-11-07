@@ -344,3 +344,28 @@ test('세션 중단을 기다리는 동안 PTY가 먼저 종료되어도 중복 
     assert.equal(service.snapshot('one')?.running, false)
   } finally { await service.close() }
 })
+
+
+test('같은 폴더에 새 대화가 있어도 연결된 세션을 종료하고 복원한다', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'lite-terminal-thread-'))
+  const file = join(directory, 'resume.json')
+  let lookups = 0
+  const interrupted: string[] = []
+  const factory: PtyFactory = () => {
+    let exit = (_event: { exitCode: number }) => {}
+    return {
+      onData: () => ({ dispose() {} }),
+      onExit: (callback: typeof exit) => { exit = callback; return { dispose() {} } },
+      kill: () => exit({ exitCode: 0 }), write() {}, resize() {},
+    } as unknown as IPty
+  }
+  const service = new TerminalService(file, () => {}, factory, async () => '/codex',
+    async () => { lookups++; return 'external-thread' }, async (id) => { interrupted.push(id) })
+  t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }) })
+  await service.open({ taskId: 'one', workspace: directory, kind: 'codex', threadId: 'original-thread', cols: 80, rows: 24 })
+  await service.prepareForUpdate()
+  assert.equal(JSON.parse(await readFile(file + '.update.json', 'utf8'))[0].threadId, 'original-thread')
+  await service.stop('one')
+  assert.deepEqual(interrupted, ['original-thread'])
+  assert.equal(lookups, 0)
+})

@@ -504,6 +504,7 @@ try {
   await waitScreen('BACKGROUND_ONCE')
   assert.equal((await terminalText()).split('BACKGROUND_ONCE').length - 1, 1)
   assert.equal((await snapshot(first.id)).generation, firstGeneration)
+  await checkRepositoryFailure(first, second)
   await app.evaluate(({ BrowserWindow }, { workspace, other }) => {
     const web = BrowserWindow.getAllWindows()[0].webContents
     const session = { workspace, title: '관찰 세션', id: 'ui-session', status: 'running', messages: [{ id: 'message', kind: 'assistant', text: '실제 세션 본문 표시' }], requests: [], updatedAt: Date.now(), canAcceptDirectInput: false }
@@ -544,6 +545,7 @@ try {
   assert.equal(await page.getByText('서브에이전트 작업 설명', { exact: true }).count(), 1)
   assert.equal(await workTabs.getByRole('tab', { name: /다른 워크트리 세션/ }).count(), 0)
   assert.equal(await page.getByLabel('세션 추가 지시').count(), 0)
+  await checkQuestionDraft(first, second)
   // OS 토스트를 띄우지 않고 같은 클릭 이벤트로 작업·세션 선택을 검증합니다.
   await app.evaluate(({ BrowserWindow }, workspace) => {
     BrowserWindow.getAllWindows()[0].webContents.send('notifications:click', { workspace, sessionId: 'ui-session' })
@@ -1346,4 +1348,57 @@ async function checkSettingsUpdate(settings) {
       delete globalThis.updateTestVersion
     })
   }
+}
+
+
+async function checkRepositoryFailure(first, second) {
+  const name = 'only-first-regression.txt'
+  await writeFile(join(first.path, name), 'first only', 'utf8')
+  await page.getByRole('button', { name: '변경 사항 새로고침' }).click()
+  await page.getByRole('treeitem', { name, exact: true }).waitFor()
+  await app.evaluate(({ ipcMain }, target) => {
+    const original = ipcMain._invokeHandlers.get('repository:inspect')
+    globalThis.repositoryFailureHandler = original
+    ipcMain.removeHandler('repository:inspect')
+    ipcMain.handle('repository:inspect', (event, path) => {
+      if (path === target) throw new Error('REPOSITORY_FAILURE_REGRESSION')
+      return original(event, path)
+    })
+  }, second.path)
+  try {
+    await page.locator('.task-row').and(page.getByTitle(second.path, { exact: true })).click()
+    await page.getByText(/REPOSITORY_FAILURE_REGRESSION/).waitFor()
+    assert.equal(await page.getByRole('treeitem', { name, exact: true }).count(), 0)
+  } finally {
+    await app.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler('repository:inspect')
+      ipcMain.handle('repository:inspect', globalThis.repositoryFailureHandler)
+      delete globalThis.repositoryFailureHandler
+    })
+    await rm(join(first.path, name))
+    await page.locator('.task-row').and(page.getByTitle(first.path, { exact: true })).click()
+    await readyTerminal()
+  }
+}
+
+async function checkQuestionDraft(first, second) {
+  await app.evaluate(({ BrowserWindow }, workspace) => {
+    BrowserWindow.getAllWindows()[0].webContents.send('codex:session', {
+      id: 'ui-session', workspace, title: '관찰 세션', status: 'waiting',
+      messages: [{ id: 'message', kind: 'assistant', text: '실제 세션 본문 표시' }],
+      requests: [{ id: 'draft-question', kind: 'questions', title: '답변 초안 검증',
+        questions: [{ id: 'q', question: '초안 보존 질문' }] }], updatedAt: Date.now(), canAcceptDirectInput: false,
+    })
+  }, first.path)
+  const tabs = page.getByRole('tablist', { name: '작업 탭' })
+  await tabs.getByRole('tab', { name: /관찰 세션/ }).click()
+  await page.getByLabel('초안 보존 질문').fill('탭을 이동해도 유지할 답변')
+  await tabs.getByRole('tab', { name: new RegExp(first.name) }).click()
+  await tabs.getByRole('tab', { name: /관찰 세션/ }).click()
+  assert.equal(await page.getByLabel('초안 보존 질문').inputValue(), '탭을 이동해도 유지할 답변')
+  await page.locator('.task-row').and(page.getByTitle(second.path, { exact: true })).click()
+  await page.locator('.task-row').and(page.getByTitle(first.path, { exact: true })).click()
+  await tabs.getByRole('tab', { name: /관찰 세션/ }).click()
+  assert.equal(await page.getByLabel('초안 보존 질문').inputValue(), '탭을 이동해도 유지할 답변')
+  await tabs.getByRole('tab', { name: new RegExp(first.name) }).click()
 }

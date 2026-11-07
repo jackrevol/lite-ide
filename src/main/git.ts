@@ -24,7 +24,7 @@ async function git(
   args: string[],
   timeout = 15_000,
 ): Promise<string> {
-  const { stdout } = await execute('git', ['-C', directory, ...args], {
+  const { stdout } = await execute('git', ['--literal-pathspecs', '-C', directory, ...args], {
     encoding: 'utf8',
     windowsHide: true,
     timeout,
@@ -130,7 +130,7 @@ export async function readDiff(
     const info = await lstat(absolute)
     if (info.isSymbolicLink() || !info.isFile()) return '일반 파일이 아닙니다.'
     const scope = relative(await realpath(directory), await realpath(absolute))
-    if (scope.startsWith('..') || isAbsolute(scope))
+    if (scope === '..' || scope.startsWith(`..${sep}`) || isAbsolute(scope))
       throw new Error('프로젝트 내부 파일만 확인할 수 있습니다.')
     if (info.size > 1024 * 1024)
       return '파일이 1MB를 초과하여 미리보기를 생략했습니다.'
@@ -162,6 +162,7 @@ export async function createWorktree(
   directory: string,
   branch: string,
   baseRef = 'HEAD',
+  timeout = 120_000,
 ): Promise<Worktree> {
   if (typeof branch !== 'string' || !branch.trim() || branch.length > 100)
     throw new Error('브랜치 이름을 입력해 주세요.')
@@ -173,7 +174,23 @@ export async function createWorktree(
     `${basename(directory)}-worktrees`,
     `${name}-${crypto.randomUUID().slice(0, 8)}`,
   )
-  await git(directory, ['worktree', 'add', '-b', branch, path, base])
+  try {
+    await git(directory, ['worktree', 'add', '-b', branch, path, base], timeout)
+  } catch (error) {
+    // 이번 호출이 등록한 경로와 브랜치만 되돌립니다.
+    const snapshot = await inspectRepository(directory)
+    const created = snapshot.worktrees.find((tree) =>
+      pathKey(tree.path) === pathKey(path) && tree.branch === branch)
+    if (created) {
+      try {
+        await git(directory, ['worktree', 'remove', '--force', '--', path])
+        await git(directory, ['branch', '-D', '--', branch])
+      } catch {
+        throw new Error(`Worktree 생성과 정리를 완료하지 못했습니다. 남은 작업 폴더를 확인해 주세요: ${path}`, { cause: error })
+      }
+    }
+    throw error
+  }
   // Git이 정규화한 경로를 사용해 Windows의 짧은 경로·드라이브 표기 차이를 없앱니다.
   const snapshot = await inspectRepository(directory)
   const created = snapshot.worktrees.find((tree) => tree.branch === branch)
