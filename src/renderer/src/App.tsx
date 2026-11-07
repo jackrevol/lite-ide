@@ -401,6 +401,27 @@ export function App() {
       if (current) setSelectedTabs((previous) => ({ ...previous, [current.id]: current.id }))
     }
   }
+  function openTaskTerminal(task: WorkspaceTask, kind: 'codex' | 'shell') {
+    selectTask(task)
+    setSelectedTabs((previous) => ({ ...previous, [task.id]: task.id }))
+    setState((previous) => ({ ...previous, tasks: previous.tasks.map((item) => item.id === task.id ? { ...item, terminalKind: kind } : item) }))
+  }
+  async function runTaskStartup(task: WorkspaceTask) {
+    selectTask(task)
+    setSelectedTabs((previous) => ({ ...previous, [task.id]: task.id }))
+    autoStartTasks.current.set(task.path, task.id)
+    try {
+      const snapshot = await window.desktop.runStartup(task.project, task.path)
+      if (snapshot) receiveStartup(snapshot, task.path)
+      else {
+        autoStartTasks.current.delete(task.path)
+        setError('프로젝트 설정에서 Startup 스크립트를 입력하고 저장해 주세요.')
+      }
+    } catch (cause) {
+      autoStartTasks.current.delete(task.path)
+      setError(errorText(cause))
+    }
+  }
   async function openProject() {
     setOpening(true)
   }
@@ -734,6 +755,10 @@ export function App() {
                               heading={task.name}
                               icon={<MoreHorizontal size={15} />}
                               actions={[
+                                { label: 'Codex 터미널', icon: <Terminal size={13} />, onClick: () => openTaskTerminal(task, 'codex') },
+                                { label: '셸 터미널', icon: <Terminal size={13} />, onClick: () => openTaskTerminal(task, 'shell') },
+                                { label: '터미널 종료', icon: <Square size={13} />, disabled: !terminals[task.id]?.running, onClick: () => { void window.desktop.closeTerminal(task.id).catch((cause) => setError(errorText(cause))) } },
+                                { label: 'Startup 다시 실행', icon: <RefreshCw size={13} />, disabled: startupSnapshots[task.path]?.status === 'running', onClick: () => { void runTaskStartup(task) } },
                                 {
                                   label: '이름 변경',
                                   icon: <Pencil size={13} />,
@@ -823,62 +848,6 @@ export function App() {
                 role="tabpanel"
                 aria-labelledby={selectedTab ? `task-tab-${selectedTab}` : undefined}
               >
-                <div className="agent-heading terminal-heading" hidden={!!activeDiff}>
-                  <div className="heading-title">
-                    <Terminal size={15} />
-                    <h1>{selectedSession?.title ?? current?.name ?? '작업 터미널'}</h1>
-                  </div>
-                  {current && !selectedSession && (
-                    <div className="terminal-controls">
-                      <button
-                        aria-label="Codex 터미널"
-                        title="현재 프로세스를 종료하고 Codex로 전환"
-                        aria-pressed={current.terminalKind === 'codex'}
-                        onClick={() =>
-                          setState((previous) => ({
-                            ...previous,
-                            tasks: previous.tasks.map((task) =>
-                              task.id === current.id
-                                ? { ...task, terminalKind: 'codex' }
-                                : task,
-                            ),
-                          }))
-                        }
-                      >
-                        Codex
-                      </button>
-                      <button
-                        aria-label="셸 터미널"
-                        title="현재 프로세스를 종료하고 셸로 전환"
-                        aria-pressed={current.terminalKind === 'shell'}
-                        onClick={() =>
-                          setState((previous) => ({
-                            ...previous,
-                            tasks: previous.tasks.map((task) =>
-                              task.id === current.id
-                                ? { ...task, terminalKind: 'shell' }
-                                : task,
-                            ),
-                          }))
-                        }
-                      >
-                        셸
-                      </button>
-                      <button
-                        title="터미널 종료"
-                        aria-label="터미널 종료"
-                        disabled={!terminals[current.id]?.running}
-                        onClick={() =>
-                          void window.desktop
-                            .closeTerminal(current.id)
-                            .catch((cause) => setError(errorText(cause)))
-                        }
-                      >
-                        <Square size={12} />
-                      </button>
-                    </div>
-                  )}
-                </div>
                 {error && (
                   <div className="error-message" role="alert">
                     <span>{error}</span>
@@ -888,7 +857,7 @@ export function App() {
                   </div>
                 )}
                 {sessionError && <div className="session-observation-error" role="status">세션 관찰 실패: {sessionError}</div>}
-                {current && !activeDiff && startupChecked && <StartupPanel key={`startup:${current.path}`} workspace={current.path} project={current.project} snapshot={currentStartup ?? null} blocked={startupBlocked} onRun={() => { if (startupBlocked) autoStartTasks.current.set(current.path, current.id) }}
+                {current && !activeDiff && startupChecked && startupBlocked && <StartupPanel key={`startup:${current.path}`} workspace={current.path} project={current.project} snapshot={currentStartup ?? null} blocked={startupBlocked} onRun={() => { if (startupBlocked) autoStartTasks.current.set(current.path, current.id) }}
                   onSnapshot={(snapshot) => receiveStartup(snapshot, snapshot.workspace)} onError={setError} />}
                 {state.tasks.filter((task) => mountedTasks.includes(task.id)).map((task) => (
                   <div className="task-terminal-slot" key={`terminal:${task.id}`} hidden={task.id !== current?.id || !!activeDiff || !!selectedSession || startupBlocked}>

@@ -20,7 +20,8 @@ async function setup(t: TestContext) {
     updatedAt: Date.now(),
   }
   await writeFile(file, JSON.stringify([parent]), 'utf8')
-  const service = new AgentService(file, () => {})
+  const emitted: AgentSession[] = []
+  const service = new AgentService(file, (session) => emitted.push(structuredClone(session)))
   await service.all()
   const calls: { method: string; params: Record<string, unknown> }[] = []
   const threads = new Map<string, Record<string, unknown>>()
@@ -68,7 +69,7 @@ async function setup(t: TestContext) {
     return (await service.all()).find((item) => item.threadId === id)!
   }
   t.after(() => service.close())
-  return { service, calls, threads, replies, notify, child, file }
+  return { service, calls, threads, replies, notify, child, file, emitted }
 }
 
 test('서브에이전트의 계층·메타데이터·실시간 명령 출력을 부모와 분리해 보관한다', async (t) => {
@@ -503,6 +504,64 @@ test('CLI 세션과 순서가 섞인 자식 계층을 읽기 전용으로 발견
   await assert.rejects(service.sendSubagentMessage(observedChild.id, '추가 지시'), /직접 지시/)
   await assert.rejects(service.send({ sessionId: observed.id, workspace, text: '직접 시작' }), /Codex 터미널/)
   await assert.rejects(service.interrupt(observedChild.id), /Codex 터미널/)
+})
+
+test('반복 관측에서 과거 spawn 기록이 완료한 자식의 상태와 이름을 되돌리지 않는다', async (t) => {
+  const { service, emitted } = await setup(t)
+  const workspace = (await service.all())[0].workspace
+  const root = {
+    id: 'poll-root', cwd: workspace, updatedAt: 100, status: { type: 'active', activeFlags: [] },
+    turns: [{ id: 'root-turn', status: 'inProgress', items: [
+      { id: 'old-spawn', type: 'collabAgentToolCall', tool: 'spawnAgent', receiverThreadIds: ['poll-child'], agentsStates: { 'poll-child': { status: 'running' } } },
+      { id: 'old-activity', type: 'subAgentActivity', kind: 'started', agentThreadId: 'poll-child', agentPath: '과거 이름' },
+    ] }],
+  }
+  const child = { id: 'poll-child', parentThreadId: root.id, cwd: workspace, updatedAt: 101, agentNickname: '현재 이름', status: { type: 'idle' }, turns: [{ id: 'child-turn', status: 'completed', items: [] }] }
+  service.client.request = async <T>(method: string, params: Record<string, unknown>) => {
+    if (method === 'thread/read') return { thread: params.threadId === root.id ? root : child } as T
+    return { data: params.ancestorThreadId ? [child] : [root] } as T
+  }
+  await service.observeWorkspace(workspace)
+  const observed = (await service.all()).find((session) => session.threadId === child.id)!
+  await service.inspectSubagent(observed.id)
+  assert.equal(observed.status, 'completed')
+  assert.equal(observed.title, '현재 이름')
+  emitted.length = 0
+  for (let index = 0; index < 3; index++) await service.observeWorkspace(workspace)
+  const changes = emitted.filter((session) => session.id === observed.id).map((session) => ({ status: session.status, title: session.title }))
+  assert.ok(changes.every((session) => session.status === 'completed' && session.title === '현재 이름'), JSON.stringify(changes))
+})
+
+test('최초 복원한 자식은 전체 이력의 완료 상태를 보존하고 이후 실시간 재시작도 반영한다', async (t) => {
+  const { service, notify } = await setup(t)
+  const workspace = (await service.all())[0].workspace
+  const root = {
+    id: 'restore-root', cwd: workspace, status: { type: 'active', activeFlags: [] },
+    turns: [{ id: 'restore-turn', status: 'inProgress', items: [
+      { id: 'spawn', type: 'collabAgentToolCall', tool: 'spawnAgent', receiverThreadIds: ['restore-child'], agentsStates: { 'restore-child': { status: 'running' } } },
+      { id: 'started', type: 'subAgentActivity', kind: 'started', agentThreadId: 'restore-child', agentPath: '복원 담당' },
+      { id: 'completed', type: 'subAgentActivity', kind: 'completed', agentThreadId: 'restore-child' },
+    ] }],
+  }
+  service.client.request = async <T>(method: string, params: Record<string, unknown>) => {
+    if (method === 'thread/read') {
+      if (params.threadId !== root.id) throw new Error('자식 직접 조회 실패')
+      return { thread: root } as T
+    }
+    return { data: params.ancestorThreadId ? [] : [root] } as T
+  }
+  await service.observeWorkspace(workspace)
+  const child = (await service.all()).find((session) => session.threadId === 'restore-child')!
+  await assert.rejects(service.inspectSubagent(child.id), /자식 직접 조회 실패/)
+  assert.equal(child.status, 'completed')
+  assert.equal(child.title, '복원 담당')
+  await service.observeWorkspace(workspace)
+  assert.equal(child.status, 'completed')
+  notify('item/completed', { threadId: root.id, item: { id: 'live-started', type: 'subAgentActivity', kind: 'started', agentThreadId: child.threadId, agentPath: '새 작업 담당' } })
+  assert.equal(child.status, 'running')
+  assert.equal(child.title, '새 작업 담당')
+  notify('item/completed', { threadId: root.id, item: { id: 'live-completed', type: 'subAgentActivity', kind: 'completed', agentThreadId: child.threadId } })
+  assert.equal(child.status, 'completed')
 })
 
 test('CLI 관측은 동시 조회를 합치고 페이지를 끝까지 읽으며 실패를 실행 실패로 바꾸지 않는다', async (t) => {

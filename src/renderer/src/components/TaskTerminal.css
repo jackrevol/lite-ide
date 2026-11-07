@@ -1,77 +1,3 @@
-.terminal-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-shrink: 0;
-  gap: 8px;
-  min-width: 0;
-  padding: 5px 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--muted);
-}
-
-.terminal-session-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-  color: var(--muted-foreground);
-  font-size: 10px;
-  white-space: nowrap;
-}
-
-.terminal-session-state i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--subtle);
-}
-
-.terminal-session-state[data-state='running'] i {
-  background: #69a77b;
-}
-
-.terminal-session-state[data-state='error'] i {
-  background: var(--destructive-foreground);
-}
-
-.terminal-toolbar-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 2px;
-  min-width: 0;
-}
-
-.terminal-toolbar-divider {
-  width: 1px;
-  height: 14px;
-  margin: 0 3px;
-  background: var(--border);
-}
-
-.terminal-font-size {
-  min-width: 23px;
-  height: 24px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--muted-foreground);
-  font: 10px var(--font-mono);
-  cursor: pointer;
-}
-
-.terminal-font-size:hover {
-  background: var(--accent);
-}
-
-.terminal-font-size:focus-visible,
-.terminal-search input:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
-}
-
 .terminal-search {
   display: flex;
   align-items: center;
@@ -99,11 +25,4 @@
   min-width: 37px;
   text-align: center;
   font: 10px var(--font-mono);
-}
-
-.terminal-action-message {
-  padding: 5px 12px;
-  border-top: 1px solid var(--border);
-  color: var(--muted-foreground);
-  font-size: 10px;
 }

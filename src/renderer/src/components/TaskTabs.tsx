@@ -63,9 +63,7 @@ export function TaskTabs({
           >
             {task.kind === 'diff' ? <FileCode2 size={13} /> : task.kind === 'subagent' ? <Bot size={13} /> : task.kind === 'terminal' ? <Terminal size={13} /> : <Code2 size={13} />}
             <span>{task.title}</span>
-            {task.active && (
-              <span className="tab-running-dot" aria-label="실행 중" />
-            )}
+            <span className={`tab-running-dot ${task.active ? '' : 'inactive'}`} aria-label={task.active ? '실행 중' : undefined} aria-hidden={!task.active} />
           </button>
           {task.kind === 'diff' && <button className="tab-close" aria-label={`${task.title} 탭 닫기`} title="변경 내용 닫기" onClick={() => onClose?.(task.id)}><X size={12} /></button>}
           </div>

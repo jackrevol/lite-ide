@@ -693,6 +693,7 @@
   background: #75a8ec;
   flex-shrink: 0;
 }
+.tab-running-dot.inactive { visibility: hidden; }
 .agent-heading {
   height: 43px;
   padding: 0 16px;
@@ -930,7 +931,7 @@
 .startup-panel { flex-shrink: 0; border-bottom: 1px solid var(--border); font-size: 11px; }
 .startup-heading { display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; gap: 10px; }
 .startup-heading button { display: flex; align-items: center; gap: 6px; padding: 3px; color: var(--muted-foreground); }
-.startup-heading .startup-toggle { flex: 1; min-width: 0; text-align: left; }
+.startup-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .startup-details { padding: 4px 16px 12px; }
 .startup-details p { line-height: 1.7; margin: 6px 0; }
 .startup-details pre { margin: 8px 0; max-height: 180px; overflow: auto; padding: 10px; background: var(--sidebar); font: 11px/1.6 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -2199,11 +2200,18 @@ dialog::backdrop {
   flex: 1;
   min-height: 170px;
   min-width: 0;
-  padding: 12px 10px 6px 14px;
+  padding: 0;
   overflow: hidden;
 }
 .terminal-host .xterm {
   height: 100%;
+  padding: 12px 10px 6px 14px;
+}
+.task-terminal .terminal-host .xterm-viewport {
+  background-color: #ffffff;
+}
+.dark .task-terminal .terminal-host .xterm-viewport {
+  background-color: #18181b;
 }
 .terminal-notice {
   display: flex;
