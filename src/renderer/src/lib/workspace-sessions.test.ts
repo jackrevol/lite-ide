@@ -40,9 +40,9 @@ test('작업 상태를 표시하며 터미널 연결 해제와 셸 전환은 과
   assert.equal(status({ ...terminal, waitingForInput: true }).state, 'waiting')
   for (const state of ['idle', 'waiting', 'completed', 'failed', 'interrupted'] as const) {
     const result = workspaceTaskStatus([{ ...root, status: state }], terminal.workspace, 'darwin', terminal)
-    assert.equal(result.state, state)
-    if (state === 'failed') assert.equal(result.label, '작업 실패')
-    if (state === 'interrupted') assert.equal(result.label, '작업 중단')
+    assert.equal(result.state, ['idle', 'failed', 'interrupted'].includes(state) ? 'completed' : state)
+    if (state === 'failed') assert.equal(result.detail, '작업 실패')
+    if (state === 'interrupted') assert.equal(result.detail, '작업 중단')
   }
 })
 
@@ -51,7 +51,7 @@ test('터미널이 계속 켜져 있어도 작업 완료·실패·중단을 실�
   for (const state of ['running', 'completed', 'failed', 'interrupted', 'idle', 'waiting'] as const) {
     const current = { ...root, status: state }
     const status = workspaceTaskStatus([current], terminal.workspace, 'darwin', terminal)
-    assert.equal(status.state, state)
+    assert.equal(status.state, ['idle', 'failed', 'interrupted'].includes(state) ? 'completed' : state)
     assert.deepEqual(status, agentSessionStatus(current))
   }
   assert.equal(agentSessionStatus({ ...root, status: 'running', observationError: 'offline' }).state, 'disconnected')
@@ -67,19 +67,19 @@ test('현재 부모 작업의 상태만 반영하며 자식과 과거 대화의 
     { ...session('closed', terminal.workspace), status: 'running', closed: true, updatedAt: 50 },
   ]
   assert.deepEqual(workspaceTaskStatus(sessions, terminal.workspace, 'darwin', terminal),
-    { state: 'completed', label: '작업 완료' })
+    { state: 'completed', label: '작업 완료됨' })
   assert.equal(workspaceTaskStatus([{ ...root, observationError: 'offline' }], terminal.workspace, 'darwin', terminal).state, 'disconnected')
   assert.equal(workspaceTaskStatus([{ ...root, status: 'running', requests: [{ id: 'request', kind: 'questions', title: '질문', detail: '' }] }], terminal.workspace, 'darwin', terminal).state, 'waiting')
   assert.deepEqual(workspaceTaskStatus([], terminal.workspace, 'darwin', terminal),
-    { state: 'unknown', label: '상태 확인 중' })
+    { state: 'disconnected', label: '연결 안 됨', detail: '세션 상태 확인 중' })
 })
 
 test('질문 없는 초기 상태와 실행 상태를 답변 대기로 표시하지 않는다', () => {
   const root = session('parent', terminal.workspace)
   const status = (sessions: AgentSession[], value = terminal) =>
     workspaceTaskStatus(sessions, terminal.workspace, 'darwin', value)
-  assert.equal(status([]).state, 'unknown')
-  assert.deepEqual(status([root]), { state: 'idle', label: '입력 대기 중' })
+  assert.equal(status([]).state, 'disconnected')
+  assert.deepEqual(status([root]), { state: 'completed', label: '작업 완료됨', detail: '입력 대기 중' })
   assert.deepEqual(status([{ ...root, status: 'running' }]), { state: 'running', label: '작업 중' })
   assert.equal(status([root], { ...terminal, waitingForInput: true }).state, 'waiting')
   assert.equal(status([{ ...root, requests: [{ id: 'q', kind: 'questions', title: '질문', detail: '' }] }]).state, 'waiting')
@@ -89,6 +89,20 @@ test('질문 없는 초기 상태와 실행 상태를 답변 대기로 표시하
 test('CLI가 닫힌 뒤에도 확인된 Worked 결과를 상태 미확인으로 숨기지 않는다', () => {
   const root = { ...session('worked', terminal.workspace), closed: true, status: 'completed' as const }
   assert.deepEqual(workspaceTaskStatus([root], terminal.workspace, 'darwin', terminal),
-    { state: 'completed', label: '작업 완료' })
-  assert.equal(workspaceTaskStatus([{ ...root, status: 'running' }], terminal.workspace, 'darwin', terminal).state, 'unknown')
+    { state: 'completed', label: '작업 완료됨' })
+  assert.equal(workspaceTaskStatus([{ ...root, status: 'running' }], terminal.workspace, 'darwin', terminal).state, 'disconnected')
+})
+
+test('화면 상태는 네 가지로 통일하고 실패·중단·관측 실패의 상세 원인은 보존한다', () => {
+  const root = session('four-states', terminal.workspace)
+  const results = ['idle', 'running', 'waiting', 'completed', 'failed', 'interrupted'].map((status) =>
+    agentSessionStatus({ ...root, status: status as AgentSession['status'] }))
+  results.push(agentSessionStatus({ ...root, observationError: '연결 오류' }))
+  assert.deepEqual([...new Set(results.map((status) => status.label))].sort(),
+    ['연결 안 됨', '작업 중', '질문 대기 중', '작업 완료됨'].sort())
+  assert.deepEqual([...new Set(results.map((status) => status.state))].sort(),
+    ['disconnected', 'running', 'waiting', 'completed'].sort())
+  assert.equal(results[4].detail, '작업 실패')
+  assert.equal(results[5].detail, '작업 중단')
+  assert.match(results[6].detail!, /연결 오류/)
 })

@@ -845,9 +845,7 @@ export function App() {
                 tasks={current ? [{
                   id: current.id,
                   title: current.name,
-                  status: terminals[current.id]?.kind === 'shell' && terminals[current.id]?.running
-                    ? { state: 'idle' as const, label: '셸 실행 중' }
-                    : workspaceTaskStatus(Object.values(sessions), current.path, window.desktop.platform, terminals[current.id]),
+                  status: workspaceTaskStatus(Object.values(sessions), current.path, window.desktop.platform, terminals[current.id]),
                   kind: 'terminal' as const,
                   detail: `${current.path} · 터미널`,
                 }, ...visibleSessions.map((session) => ({

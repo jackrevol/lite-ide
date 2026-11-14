@@ -1,9 +1,8 @@
-import { Check, Circle, CircleDashed, CircleHelp, CircleX, LoaderCircle, Pause, Unplug } from 'lucide-react'
+import { Check, CircleHelp, LoaderCircle, Unplug } from 'lucide-react'
 import type { SessionIndicatorStatus } from '../lib/workspace-sessions'
 
 const icons = {
-  running: LoaderCircle, completed: Check, waiting: CircleHelp, failed: CircleX,
-  interrupted: Pause, idle: Circle, unknown: CircleDashed, disconnected: Unplug,
+  running: LoaderCircle, completed: Check, waiting: CircleHelp, disconnected: Unplug,
 }
 
 export function SessionStatusIndicator({ status }: { status: SessionIndicatorStatus }) {
@@ -14,9 +13,13 @@ export function SessionStatusIndicator({ status }: { status: SessionIndicatorSta
       data-state={status.state}
       role="img"
       aria-label={status.label}
-      title={status.label}
+      title={status.detail ? `${status.label} · ${status.detail}` : status.label}
     >
       <Icon size={12} aria-hidden="true" />
     </span>
   )
+}
+
+export function SessionStatusBadge({ status }: { status: SessionIndicatorStatus }) {
+  return <span className={`status-label ${status.state}`} title={status.detail}>{status.label}</span>
 }
