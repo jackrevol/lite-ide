@@ -6,6 +6,7 @@ import {
   ipcMain,
   nativeTheme,
   net,
+  nativeImage,
   Notification,
   powerSaveBlocker,
   shell,
@@ -37,6 +38,8 @@ import { appInfo } from './app-info'
 import { AgentService } from './agent-service'
 import { prepareCodex } from './codex-update-service'
 import { TerminalService } from './terminal-service'
+import { removeImages, storeImages } from './image-attachments'
+import type { TerminalImageUpload } from '../shared/image-attachments'
 import { NotificationService } from './notification-service'
 import { ResetAnnouncementService } from './reset-announcement-service'
 import { StartupService } from './startup-service'
@@ -308,6 +311,35 @@ app.whenReady().then(() => {
   ipcMain.handle('terminal:write', (event, id: string, data: string) => {
     requireTerminalSender(event)
     terminals!.write(id, data)
+  })
+  const attachImages = async (input: TerminalImageUpload) => {
+    if (updates?.snapshot().status === 'installing') throw new Error('업데이트 설치를 시작하고 있습니다.')
+    terminals!.requireImageTarget(input?.taskId, input?.generation)
+    const workspace = requireWorkspace(terminals!.snapshot(input.taskId)!.workspace)
+    await startups!.requireReady(workspace)
+    const files = await storeImages(join(app.getPath('userData'), 'image-attachments'), input.images)
+    try {
+      if (files.some((file) => nativeImage.createFromPath(file).isEmpty()))
+        throw new Error('이미지를 읽을 수 없습니다. 다른 이미지 파일로 다시 시도해 주세요.')
+      terminals!.pasteImages(input.taskId, input.generation, files)
+    } catch (error) {
+      await removeImages(files)
+      throw error
+    }
+  }
+  ipcMain.handle('terminal:attach-images', async (event, input: TerminalImageUpload) => {
+    requireTerminalSender(event)
+    await attachImages(input)
+  })
+  ipcMain.handle('terminal:paste-clipboard', async (event, taskId: string, generation: string) => {
+    requireTerminalSender(event)
+    terminals!.requireImageTarget(taskId, generation)
+    const image = clipboard.readImage()
+    if (!image.isEmpty()) {
+      await attachImages({ taskId, generation, images: [{ name: 'clipboard.png', data: image.toPNG() }] })
+      return 'images'
+    }
+    return 'empty'
   })
   ipcMain.handle(
     'terminal:resize',

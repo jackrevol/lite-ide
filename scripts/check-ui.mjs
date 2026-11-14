@@ -6,6 +6,7 @@ import {
   mkdir,
   writeFile,
   readFile,
+  readdir,
   realpath,
   stat,
   rm,
@@ -74,6 +75,56 @@ async function readyTerminal() {
 }
 async function terminalText() {
   return page.locator('.xterm-accessibility-tree:visible').innerText()
+}
+async function checkImageAttachments(task) {
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=='
+  const before = await snapshot(task.id)
+  const picker = page.locator('.task-terminal-slot:not([hidden]) input[type="file"]')
+  await page.locator('[aria-label="작업 터미널 입력"]:visible').focus()
+  await page.keyboard.type('IMAGE_REQUEST ')
+  await picker.setInputFiles({ name: '한글 이미지.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') })
+  await waitOutput(task.id, '[Image #1]')
+  assert.ok((await snapshot(task.id)).output.includes('IMAGE_REQUEST '))
+  for (const type of ['drop', 'paste']) {
+    await page.locator('.task-terminal-slot:not([hidden]) .terminal-host').evaluate((host, { type, png }) => {
+      const data = new DataTransfer()
+      data.items.add(new File([Uint8Array.from(atob(png), (char) => char.charCodeAt(0))], '스크린샷.png', { type: 'image/png' }))
+      host.dispatchEvent(type === 'drop'
+        ? new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data })
+        : new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }))
+    }, { type, png })
+    await waitOutput(task.id, type === 'drop' ? '[Image #2]' : '[Image #3]')
+  }
+  // OS 클립보드를 덮지 않고 네이티브 이미지 읽기 경로만 대체합니다.
+  await app.evaluate(({ clipboard, nativeImage }, png) => {
+    globalThis.originalImageReader = clipboard.readImage
+    clipboard.readImage = () => nativeImage.createFromBuffer(Buffer.from(png, 'base64'))
+  }, png)
+  try {
+    await page.locator('[aria-label="작업 터미널 입력"]:visible').focus()
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+v' : 'Control+Shift+v')
+    await waitOutput(task.id, '[Image #4]')
+  } finally {
+    await app.evaluate(({ clipboard }) => { clipboard.readImage = globalThis.originalImageReader; delete globalThis.originalImageReader })
+  }
+  await picker.setInputFiles({ name: 'fake.png', mimeType: 'image/png', buffer: Buffer.from('not an image') })
+  await page.getByRole('alert').filter({ hasText: 'PNG, JPEG, WebP, GIF' }).waitFor()
+  await page.getByRole('button', { name: '이미지 첨부 오류 닫기' }).click()
+  assert.equal((await snapshot(task.id)).output.includes('IMAGE_FILES_READ:'), false)
+  assert.equal((await snapshot(task.id)).generation, before.generation)
+  const directory = join(fixture, 'user-data', 'image-attachments')
+  const files = await Promise.all((await readdir(directory)).map(async (name) => Buffer.from(await readFile(join(directory, name))).toString('base64')))
+  assert.equal(files.length, 4)
+  assert.ok(files.filter((file) => file === png).length >= 3)
+  assert.ok(files.every((file) => file.startsWith('iVBORw0KGgo')))
+  await assert.rejects(page.evaluate(({ id, png }) => window.desktop.attachTerminalImages({
+    taskId: id, generation: 'stale', images: [{ name: 'a.png', data: Uint8Array.from(atob(png), (char) => char.charCodeAt(0)) }],
+  }), { id: task.id, png }), /변경되었거나 종료/)
+  await page.screenshot({ path: 'artifacts/terminal-image-attachments.png' })
+  await page.locator('[aria-label="작업 터미널 입력"]:visible').focus()
+  await page.keyboard.press('Enter')
+  await waitOutput(task.id, 'IMAGE_FILES_READ:4')
+  console.log('이미지 첨부 검증 통과: 파일 선택·드롭·이미지 붙여넣기·네이티브 클립보드, 이미지 원본 저장·잘못된 파일 거부·입력 보존·명시적 Enter 전송·같은 터미널 유지.')
 }
 async function command(text) {
   await page.locator('[aria-label="작업 터미널 입력"]:visible').focus()
@@ -430,6 +481,11 @@ try {
     })
   }
   const multilingual = 'UTF8_한글_😀'
+  await app.evaluate(({ ipcMain }) => {
+    globalThis.originalClipboardPaste = ipcMain._invokeHandlers.get('terminal:paste-clipboard')
+    ipcMain.removeHandler('terminal:paste-clipboard')
+    ipcMain.handle('terminal:paste-clipboard', () => 'empty')
+  })
   await page.evaluate(
     (text) =>
       Object.defineProperty(navigator.clipboard, 'readText', {
@@ -441,6 +497,11 @@ try {
   await page.locator('[aria-label="작업 터미널 입력"]:visible').focus()
   await page.keyboard.press('Control+Shift+v')
   await waitOutput(first.id, multilingual)
+  await app.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler('terminal:paste-clipboard')
+    ipcMain.handle('terminal:paste-clipboard', globalThis.originalClipboardPaste)
+    delete globalThis.originalClipboardPaste
+  })
   await page.keyboard.press('Enter')
   await waitScreen(multilingual)
   assert.equal((await terminalText()).split(multilingual).length - 1, 1)
@@ -462,9 +523,16 @@ try {
   // 출력이 진행되는 동안 새로 붙어도 스냅샷과 이벤트를 중복 렌더링하지 않습니다.
   await page.reload()
   await readyTerminal()
+  await page.locator('[aria-label="작업 터미널 입력"]:visible').focus()
+  await page.keyboard.press('Control+f')
+  await page.getByLabel('터미널 검색어').fill(unique)
+  await page.waitForFunction(() => document.querySelector('.terminal-search-count')?.textContent.includes('1 / 1'))
   await waitScreen(unique)
   assert.equal((await snapshot(first.id)).generation, firstGeneration)
   assert.equal((await terminalText()).split(unique).length - 1, 1)
+  await page.getByLabel('터미널 검색어').press('Escape')
+  await page.locator('.task-terminal-slot:not([hidden]) .terminal-host').hover()
+  await page.mouse.wheel(0, 100000)
   await page.locator('[aria-label="작업 터미널 입력"]:visible').focus()
   const stateBefore = await tasks()
   await page.keyboard.press('Control+n')
@@ -508,6 +576,8 @@ try {
   // 다른 Worktree로의 이동은 사이드바에서 수행하며 탭에는 현재 작업만 남습니다.
   await page.locator('.task-row').and(page.getByTitle(first.path, { exact: true })).click()
   await readyTerminal()
+  await page.locator('.task-terminal-slot:not([hidden]) .terminal-host').hover()
+  await page.mouse.wheel(0, 100000)
   await waitScreen('BACKGROUND_ONCE')
   assert.equal((await terminalText()).split('BACKGROUND_ONCE').length - 1, 1)
   assert.equal((await snapshot(first.id)).generation, firstGeneration)
@@ -626,6 +696,7 @@ try {
   await waitOutput(first.id, `CHILD_EXIT:${childPid}`)
   assert.equal((await snapshot(first.id)).running, true)
   await page.locator('.process-panel-heading > button').first().click()
+  await checkImageAttachments(first)
   await taskAction(first, '이름 변경')
   const rename = page.getByRole('dialog', {
     name: '작업 이름 변경',
@@ -653,6 +724,10 @@ try {
   if (process.platform === 'win32') await waitOutput(first.id, 'PS ')
   else await until(async () => !!(await snapshot(first.id))?.output, '셸 시작')
   const shellGeneration = (await snapshot(first.id)).generation
+  assert.equal(await page.getByRole('button', { name: '이미지 첨부', exact: true }).count(), 0)
+  await assert.rejects(page.evaluate(({ id, generation }) => window.desktop.attachTerminalImages({
+    taskId: id, generation, images: [],
+  }), { id: first.id, generation: shellGeneration }), /Codex 터미널/)
   assert.notEqual(shellGeneration, firstGeneration)
   await until(async () => await firstDot.getAttribute('aria-label') === '연결 안 됨', '셸 전환 시 에이전트 연결 해제 표시')
   assert.equal(await firstDot.getAttribute('data-state'), 'disconnected')
@@ -1149,11 +1224,11 @@ async function checkCompactProcessLayout(task) {
     const expiry = creditsRow.locator('strong span')
     assert.equal(await creditsRow.locator('strong').innerText(), `3개 · ${nearestExpiry.compact}`)
     assert.equal(await expiry.getAttribute('title'), `먼저 만료되는 초기화권 · ${nearestExpiry.full} 만료`)
-    assert.equal(await creditsRow.evaluate((row) => {
+  await until(async () => creditsRow.evaluate((row) => {
       const label = row.querySelector('span').getBoundingClientRect()
       const value = row.querySelector('strong').getBoundingClientRect()
       return Math.abs(label.y - value.y) < 2 && value.height < 20 && row.scrollWidth <= row.clientWidth
-    }), true, '초기화권 개수와 가장 가까운 만료일을 한 줄에 표시합니다.')
+    }), '초기화권 개수와 가장 가까운 만료일 한 줄 표시 및 창 크기 반영')
     const compactHeight = (await usage.boundingBox()).height
     assert.ok(compactHeight <= 190, `접힌 사용량 영역이 너무 큽니다: ${compactHeight}px`)
     await details.click()

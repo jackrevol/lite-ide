@@ -121,7 +121,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
             { id: 'past-spawn', type: 'collabAgentToolCall', tool: 'spawnAgent', receiverThreadIds: ['polling-child'], agentsStates: { 'polling-child': { status: 'running' } } },
             { id: 'past-start', type: 'subAgentActivity', kind: 'started', agentThreadId: 'polling-child', agentPath: '과거 시작 이름' },
           ] }] })
-          threads.set('polling-child', { id: 'polling-child', parentThreadId: 'polling-parent', cwd: p.cwd, agentNickname: '완료한 현재 검증 담당', updatedAt: fixtureNow + 1, status: { type: 'idle' }, turns: [{ id: 'polling-child-turn', status: 'completed', items: [] }] })
+          threads.set('polling-child', { id: 'polling-child', parentThreadId: 'polling-parent', cwd: p.cwd, agentNickname: '완료한 현재 검증 담당', updatedAt: fixtureNow + 1, status: { type: 'active', activeFlags: [] }, turns: [{ id: 'polling-child-turn', status: 'completed', items: [] }] })
         }
         reply({ data: p.ancestorThreadId ? [threads.get('polling-child')].filter(Boolean) : [threads.get('polling-parent')].filter(Boolean), nextCursor: null })
       } else reply({ data: [], nextCursor: null })

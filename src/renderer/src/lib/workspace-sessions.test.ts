@@ -85,3 +85,10 @@ test('질문 없는 초기 상태와 실행 상태를 답변 대기로 표시하
   assert.equal(status([{ ...root, requests: [{ id: 'q', kind: 'questions', title: '질문', detail: '' }] }]).state, 'waiting')
   assert.equal(status([{ ...root, requests: [{ id: 'a', kind: 'approval', title: '승인', detail: '' }] }]).state, 'waiting')
 })
+
+test('CLI가 닫힌 뒤에도 확인된 Worked 결과를 상태 미확인으로 숨기지 않는다', () => {
+  const root = { ...session('worked', terminal.workspace), closed: true, status: 'completed' as const }
+  assert.deepEqual(workspaceTaskStatus([root], terminal.workspace, 'darwin', terminal),
+    { state: 'completed', label: '작업 완료' })
+  assert.equal(workspaceTaskStatus([{ ...root, status: 'running' }], terminal.workspace, 'darwin', terminal).state, 'unknown')
+})

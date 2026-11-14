@@ -42,7 +42,6 @@ export class AgentService {
   private removedWorkspaceVersions = new Map<string, number>()
   private terminalExitTimes = new Map<string, number>()
   private externalThreads = new Set<string>()
-  private observedVersions = new Map<string, number>()
   private rolloutStates = new Map<string, RolloutState>()
   private closed = false
   private revisions = new Map<string, number>()
@@ -231,15 +230,10 @@ export class AgentService {
 
   private async refreshObservedSession(
     session: AgentSession,
-    metadata: Record<string, unknown>,
   ) {
-    if (
-      typeof metadata.updatedAt !== 'number' ||
-      this.observedVersions.get(session.threadId!) !== metadata.updatedAt ||
-      ['running', 'waiting'].includes(session.status) ||
-      session.observationError
-    )
-      await this.inspectSubagent(session.id)
+    // CLI는 같은 초 안에 새 턴을 시작하거나 완료해도 목록의 updatedAt이 같을 수 있습니다.
+    // Working/Worked 전환은 목록 캐시가 아닌 현재 턴과 원본 이벤트로 확인합니다.
+    await this.inspectSubagent(session.id)
   }
 
   async terminalExited(workspace: string) {
@@ -360,7 +354,7 @@ export class AgentService {
         }
         this.externalThreads.add(threadId)
         root.canAcceptDirectInput = false
-        await this.refreshObservedSession(root, thread)
+        await this.refreshObservedSession(root)
         if (cancelled()) return
         const descendants = await this.listThreads({
           ancestorThreadId: threadId,
@@ -386,7 +380,7 @@ export class AgentService {
             if (!child) continue
             this.externalThreads.add(child.threadId!)
             child.canAcceptDirectInput = false
-            await this.refreshObservedSession(child, metadata)
+            await this.refreshObservedSession(child)
           }
         }
       }
@@ -886,17 +880,33 @@ export class AgentService {
         if (lastTurn.status)
           session.error = string(record(lastTurn.error).message) || undefined
         this.applyThreadStatus(session, record(thread.status))
-        // 다른 app-server는 CLI의 미완료 턴을 interrupted로 복원하므로 원본 이벤트를 우선합니다.
-        if (rollout?.status && record(thread.status).type !== 'active') {
+        const threadStatus = record(thread.status)
+        const waiting = session.requests.length || list(threadStatus.activeFlags).some((flag) =>
+          flag === 'waitingOnApproval' || flag === 'waitingOnUserInput')
+        // 연결된 스레드의 active가 완료된 턴(Worked)을 실행 중으로 되돌리지 않게 합니다.
+        if (this.externalThreads.has(session.threadId!) && !waiting &&
+          ['completed', 'interrupted', 'failed'].includes(string(lastTurn.status)))
+          session.status = lastTurn.status as AgentSession['status']
+        // CLI의 Working/Worked를 기록한 원본 이벤트는 같은 턴의 일반 active보다 우선합니다.
+        const rolloutOlderTurn = rollout?.turnId && list(thread.turns).slice(0, -1)
+          .some((turn) => record(turn).id === rollout.turnId)
+        const rolloutCurrent = rollout?.status && !rolloutOlderTurn && (
+          !lastTurn.id || rollout.turnId === lastTurn.id ||
+          typeof thread.updatedAt !== 'number' ||
+          (rollout.updatedAt ?? 0) >= thread.updatedAt * 1000
+        )
+        if (rolloutCurrent && rollout.status && (!waiting || rollout.status !== 'running')) {
           session.status = rollout.status
           session.turnId = rollout.turnId || session.turnId
         }
+        if (session.requests.length) session.status = 'waiting'
+        if (this.externalThreads.has(session.threadId!) && session.status === 'running')
+          session.closed = false
       }
       session.observationError = undefined
       if (this.externalThreads.has(session.threadId!)) {
         if (typeof thread.updatedAt === 'number') {
           session.updatedAt = thread.updatedAt * 1000
-          this.observedVersions.set(session.threadId!, thread.updatedAt)
         }
         if (rollout?.updatedAt)
           session.updatedAt = Math.max(session.updatedAt, rollout.updatedAt)

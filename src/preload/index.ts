@@ -19,6 +19,8 @@ const api: DesktopApi = {
   },
   openTerminal: (input) => ipcRenderer.invoke('terminal:open', input),
   writeTerminal: (id, data) => ipcRenderer.invoke('terminal:write', id, data),
+  attachTerminalImages: (input) => ipcRenderer.invoke('terminal:attach-images', input),
+  pasteTerminalClipboard: (id, generation) => ipcRenderer.invoke('terminal:paste-clipboard', id, generation),
   resizeTerminal: (id, cols, rows) =>
     ipcRenderer.invoke('terminal:resize', id, cols, rows),
   closeTerminal: (id) => ipcRenderer.invoke('terminal:close', id),

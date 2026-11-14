@@ -10,6 +10,30 @@ import { pathKey } from './git.ts'
 import type { TerminalEvent } from '../shared/types.ts'
 import type { AttentionNotification } from './notification-service.ts'
 
+test('이미지 경로는 Codex 입력에 붙여넣기만 하고 전송·재연결·셸 입력을 하지 않는다', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'lite-terminal-images-'))
+  const writes: string[] = []
+  let exit = (_event: { exitCode: number }) => {}
+  const factory: PtyFactory = () => ({
+    onData: () => ({ dispose() {} }),
+    onExit: (callback: typeof exit) => { exit = callback; return { dispose() {} } },
+    kill: () => exit({ exitCode: 0 }), write: (text: string) => writes.push(text), resize() {},
+  } as unknown as IPty)
+  const service = new TerminalService(join(directory, 'resume.json'), () => {}, factory, async () => '/codex')
+  t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }) })
+  const target = await service.open({ taskId: 'images', workspace: directory, kind: 'codex', cols: 80, rows: 24 })
+  service.pasteImages(target.taskId, target.generation, ['/한글 폴더/a.png', 'C:\\Users\\Test User\\b.png'])
+  assert.deepEqual(writes, ['\x1b[200~"/한글 폴더/a.png"\x1b[201~\x1b[200~"C:/Users/Test User/b.png"\x1b[201~'])
+  assert.equal(writes[0].includes('\r'), false)
+  assert.equal(writes[0].includes('\n'), false)
+  assert.throws(() => service.pasteImages(target.taskId, 'old-generation', ['/a.png']), /변경되었거나 종료/)
+  assert.throws(() => service.pasteImages(target.taskId, target.generation, ['/a.png\nmalicious']), /문자/)
+  await service.open({ taskId: 'images', workspace: directory, kind: 'shell', cols: 80, rows: 24 })
+  const shell = service.snapshot('images')!
+  assert.throws(() => service.pasteImages(shell.taskId, shell.generation, ['/a.png']), /Codex 터미널/)
+  assert.equal(writes.length, 1)
+})
+
 test('하위 폴더 터미널 종료 실패는 Git 삭제를 차단하고 재시도 후 삭제한다', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'lite-terminal-delete-'))
   let refuse = true
