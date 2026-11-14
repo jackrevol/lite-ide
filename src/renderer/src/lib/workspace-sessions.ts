@@ -30,7 +30,9 @@ export function workspaceTaskStatus(
 
   // 과거 대화나 자식 세션의 완료 기록이 현재 작업 상태를 덮지 않게 합니다.
   const root = workspaceSessions(sessions, workspace, platform)
-    .filter((session) => !session.parentSessionId && !session.closed)
+    .filter((session) => !session.parentSessionId && (
+      !session.closed || ['completed', 'failed', 'interrupted'].includes(session.status)
+    ))
     .sort((a, b) => b.updatedAt - a.updatedAt)[0]
   // 세션 미관측이나 일반 입력 대기는 질문·승인 요청의 근거가 아닙니다.
   if (!root)

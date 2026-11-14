@@ -385,6 +385,23 @@ export class TerminalService {
     if (/[\r\n\x03]/.test(data)) this.setWaitingForInput(terminal, false)
   }
 
+  requireImageTarget(id: string, generation: string) {
+    const terminal = this.terminals.get(id)
+    if (!terminal?.running || !terminal.process || terminal.generation !== generation)
+      throw new Error('터미널이 변경되었거나 종료되었습니다. 다시 첨부해 주세요.')
+    if (terminal.kind !== 'codex') throw new Error('이미지는 Codex 터미널에서 첨부할 수 있습니다.')
+  }
+
+  pasteImages(id: string, generation: string, paths: string[]) {
+    this.requireImageTarget(id, generation)
+    // 각 경로를 별도 붙여넣기로 전달해야 Codex가 실제 이미지 첨부로 인식합니다.
+    // Enter는 보내지 않아 작성 중인 요청을 그대로 유지합니다.
+    for (const path of paths) {
+      if (/[\x00-\x1f\x7f]/.test(path)) throw new Error('이미지 경로에 사용할 수 없는 문자가 있습니다.')
+    }
+    this.write(id, paths.map((path) => `\x1b[200~${JSON.stringify(path.replaceAll('\\', '/'))}\x1b[201~`).join(''))
+  }
+
   resize(id: string, cols: number, rows: number) {
     const terminal = this.terminals.get(id)
     if (!terminal?.process) return

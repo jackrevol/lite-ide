@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 process.stdin.setRawMode(true)
 process.stdin.setEncoding('utf8')
@@ -7,8 +7,15 @@ process.stdout.write(
 )
 let input = '',
   timer
+let pasteBuffer = ''
+let images = []
 const prompt = () => process.stdout.write('codex> ')
 function run(command) {
+  if (images.length) {
+    for (const path of images) readFileSync(path)
+    process.stdout.write(`IMAGE_FILES_READ:${images.length}\r\n`)
+    images = []
+  }
   if (command === '/exit') process.exit(0)
   if (command === '/cursor-redraw') {
     let remaining = 5
@@ -61,11 +68,12 @@ if (process.argv[3]) {
   process.stdout.write(`codex> ${process.argv[3]}\r\n`)
   run(process.argv[3])
 } else prompt()
-process.stdin.on('data', (chunk) => {
+function typed(chunk) {
   if (chunk.includes('\x03')) {
     clearInterval(timer)
     timer = undefined
     input = ''
+    images = []
     process.stdout.write('^C\r\nINTERRUPTED\r\n')
     prompt()
     return
@@ -86,5 +94,27 @@ process.stdin.on('data', (chunk) => {
       input += char
       process.stdout.write(char)
     }
+  }
+}
+process.stdin.on('data', (chunk) => {
+  let remaining = pasteBuffer + chunk
+  pasteBuffer = ''
+  while (remaining) {
+    const start = remaining.indexOf('\x1b[200~')
+    if (start < 0) { typed(remaining); return }
+    if (start) typed(remaining.slice(0, start))
+    const end = remaining.indexOf('\x1b[201~', start + 6)
+    if (end < 0) { pasteBuffer = remaining.slice(start); return }
+    const pasted = remaining.slice(start + 6, end)
+    let path
+    try { path = JSON.parse(pasted) } catch {}
+    if (typeof path === 'string' && /\.(png|jpg|gif|webp)$/i.test(path)) {
+      readFileSync(path)
+      images.push(path)
+      const token = `[Image #${images.length}]`
+      input += token
+      process.stdout.write(token)
+    } else typed(pasted)
+    remaining = remaining.slice(end + 6)
   }
 })

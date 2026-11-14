@@ -1,3 +1,5 @@
+import type { TerminalImageUpload } from './image-attachments'
+
 export interface Project {
   path: string
   name: string
@@ -114,6 +116,8 @@ export interface DesktopApi {
   onStartup(listener: (snapshot: StartupSnapshot) => void): () => void
   openTerminal(input: TerminalOpen): Promise<TerminalSnapshot>
   writeTerminal(taskId: string, data: string): Promise<void>
+  attachTerminalImages(input: TerminalImageUpload): Promise<void>
+  pasteTerminalClipboard(taskId: string, generation: string): Promise<'images' | 'empty'>
   resizeTerminal(taskId: string, cols: number, rows: number): Promise<void>
   closeTerminal(taskId: string): Promise<void>
   terminalSnapshot(taskId: string): Promise<TerminalSnapshot | null>

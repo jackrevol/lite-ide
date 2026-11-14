@@ -2,6 +2,19 @@
   position: relative;
 }
 
+.terminal-image-tools {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  border-top: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.terminal-image-tools > span { min-width: 0; overflow-wrap: anywhere; }
+.terminal-image-tools .terminal-image-error { color: #d8847b; }
+
 .terminal-starting {
   position: absolute;
   inset: 0 0 auto;

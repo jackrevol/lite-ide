@@ -801,6 +801,50 @@ test('CLI 원본 rollout으로 진행 상태를 복구하고 부분 기록은 �
   assert.equal(observed.status, 'running')
 })
 
+test('CLI Working/Worked는 일반 active나 같은 updatedAt 캐시보다 현재 턴 원본 기록을 우선한다', async (t) => {
+  const { service } = await setup(t)
+  const workspace = (await service.all())[0].workspace
+  const path = join(workspace, 'working-worked.jsonl')
+  const root = {
+    id: 'working-worked', cwd: workspace, source: 'cli', path, updatedAt: 100,
+    status: { type: 'active', activeFlags: [] },
+    turns: [{ id: 'first-turn', status: 'completed', items: [] }],
+  }
+  const event = (type: string, turn_id: string) => JSON.stringify({
+    timestamp: '2026-11-14T12:00:00Z', type: 'event_msg', payload: { type, turn_id },
+  }) + '\n'
+  await writeFile(path, event('task_complete', 'first-turn'), 'utf8')
+  service.client.request = async <T>(method: string, params: Record<string, unknown>) =>
+    (method === 'thread/read' ? { thread: root }
+      : { data: params.ancestorThreadId ? [] : [root] }) as T
+  await service.observeWorkspace(workspace)
+  const observed = (await service.all()).find((item) => item.threadId === root.id)!
+  assert.equal(observed.status, 'completed')
+  // 목록은 같은 updatedAt과 과거 완료 턴을 반환해도 새 Working을 놓치지 않습니다.
+  observed.closed = true
+  await appendFile(path, event('task_started', 'next-turn'), 'utf8')
+  await service.observeWorkspace(workspace)
+  assert.equal(observed.status, 'running')
+  assert.equal(observed.turnId, 'next-turn')
+  assert.equal(observed.closed, false)
+  // active 상태가 남아 있고 조회 턴도 과거 것이어도 Worked는 완료입니다.
+  await appendFile(path, event('task_complete', 'next-turn'), 'utf8')
+  await service.observeWorkspace(workspace)
+  assert.equal(observed.status, 'completed')
+  assert.equal(observed.turnId, 'next-turn')
+  // 같은 초의 과거 Worked 로그는 서버가 이미 관측한 다음 Working을 덮지 않습니다.
+  root.turns.push({ id: 'next-turn', status: 'completed', items: [] },
+    { id: 'newest-turn', status: 'inProgress', items: [] })
+  await service.observeWorkspace(workspace)
+  assert.equal(observed.status, 'running')
+  assert.equal(observed.turnId, 'newest-turn')
+  root.turns.at(-1)!.status = 'completed'
+  // 원본 파일이 없어도 서버가 명시한 턴의 완료는 active보다 우선합니다.
+  await writeFile(path, '', 'utf8')
+  await service.observeWorkspace(workspace)
+  assert.equal(observed.status, 'completed')
+})
+
 test('CLI 관측의 활성 상태와 조회 중 작업은 Worktree 삭제를 차단하지 않는다', async (t) => {
   const { service } = await setup(t)
   const workspace = (await service.all())[0].workspace
