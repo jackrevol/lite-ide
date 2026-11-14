@@ -512,8 +512,8 @@ try {
   assert.equal((await terminalText()).split('BACKGROUND_ONCE').length - 1, 1)
   assert.equal((await snapshot(first.id)).generation, firstGeneration)
   await checkRepositoryFailure(first, second)
-  const firstDot = page.locator('.task-row').and(page.getByTitle(first.path, { exact: true })).locator('.session-dot')
-  const secondDot = page.locator('.task-row').and(page.getByTitle(second.path, { exact: true })).locator('.session-dot')
+  const firstDot = page.locator('.task-row').and(page.getByTitle(first.path, { exact: true })).locator('.session-indicator')
+  const secondDot = page.locator('.task-row').and(page.getByTitle(second.path, { exact: true })).locator('.session-indicator')
   await until(async () => await firstDot.getAttribute('aria-label') === '상태 확인 중', '세션 관측 전 상태 표시')
   await app.evaluate(({ BrowserWindow }, { workspace, other }) => {
     const web = BrowserWindow.getAllWindows()[0].webContents
@@ -523,12 +523,46 @@ try {
     web.send('codex:session', { ...session, id: 'ui-other', title: '다른 워크트리 세션', workspace: other })
   }, { workspace: first.path, other: second.path })
   await until(async () => await firstDot.getAttribute('aria-label') === '작업 중', '작업 중 상태 표시')
-  assert.equal(await firstDot.evaluate((dot) => getComputedStyle(dot).backgroundColor), 'rgb(108, 177, 123)')
+  assert.equal(await firstDot.evaluate((dot) => getComputedStyle(dot).color), 'rgb(108, 177, 123)')
+  const terminalIndicator = workTabs.getByRole('tab', { name: first.name, exact: true }).locator('.session-indicator')
+  const sessionIndicator = workTabs.getByRole('tab', { name: '세션 · 관찰 세션', exact: true }).locator('.session-indicator')
+  for (const [status, label, color] of [
+    ['running', '작업 중', 'rgb(108, 177, 123)'],
+    ['completed', '작업 완료', 'rgb(117, 168, 236)'],
+    ['waiting', '답변 대기 중', 'rgb(229, 189, 70)'],
+    ['failed', '작업 실패', 'rgb(216, 132, 123)'],
+    ['interrupted', '작업 중단', 'rgb(192, 150, 100)'],
+    ['idle', '입력 대기 중', null],
+    ['running', '작업 중', 'rgb(108, 177, 123)'],
+  ]) {
+    await app.evaluate(({ BrowserWindow }, { workspace, status }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('codex:session', {
+        workspace, title: '관찰 세션', id: 'ui-session', status,
+        messages: [{ id: 'message', kind: 'assistant', text: '실제 세션 본문 표시' }],
+        requests: [], updatedAt: Date.now(), canAcceptDirectInput: false,
+      })
+    }, { workspace: first.path, status })
+    for (const indicator of [firstDot, terminalIndicator, sessionIndicator]) {
+      await until(async () => await indicator.getAttribute('aria-label') === label, `작업 목록·터미널·세션 탭 ${label}`)
+      assert.equal(await indicator.getAttribute('data-state'), status)
+      if (color) assert.equal(await indicator.evaluate((element) => getComputedStyle(element).color), color)
+      const animation = await indicator.locator('svg').evaluate((element) => getComputedStyle(element).animationName)
+      assert.equal(animation, status === 'running' ? 'spin' : 'none')
+    }
+    assert.equal((await snapshot(first.id)).generation, firstGeneration)
+    assert.equal((await snapshot(first.id)).running, true)
+    if (status === 'completed') await page.screenshot({ path: 'artifacts/session-status-completed.png' })
+  }
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  assert.equal(await terminalIndicator.locator('svg').evaluate((element) => getComputedStyle(element).animationName), 'none')
+  assert.equal(await terminalIndicator.getAttribute('data-state'), 'running')
+  await page.emulateMedia({ reducedMotion: 'no-preference' })
+  console.log('세션 상태 검증 통과: 터미널 유지 중 작업 목록·터미널·세션 탭의 작업 중/완료/응답 대기/실패/중단/입력 대기 일치, 상태별 색상과 회전 표시, 동작 줄이기 설정 반영.')
   // 선택하지 않은 작업도 실시간 상태를 반영합니다.
   for (const [status, label, color] of [
     ['idle', '입력 대기 중', null],
     ['waiting', '답변 대기 중', 'rgb(229, 189, 70)'],
-    ['completed', '작업 완료', 'rgb(216, 132, 123)'],
+    ['completed', '작업 완료', 'rgb(117, 168, 236)'],
     ['running', '작업 중', 'rgb(108, 177, 123)'],
   ]) {
     await app.evaluate(({ BrowserWindow }, { workspace, status }) => {
@@ -539,7 +573,7 @@ try {
     }, { workspace: second.path, status })
     await until(async () => await secondDot.getAttribute('aria-label') === label, `백그라운드 작업 ${label}`)
     assert.equal(await secondDot.getAttribute('title'), label)
-    if (color) assert.equal(await secondDot.evaluate((dot) => getComputedStyle(dot).backgroundColor), color)
+    if (color) assert.equal(await secondDot.evaluate((dot) => getComputedStyle(dot).color), color)
     assert.equal(await firstDot.getAttribute('aria-label'), '작업 중')
   }
   await windowWrite(second.id, '/question\r')
@@ -621,7 +655,9 @@ try {
   const shellGeneration = (await snapshot(first.id)).generation
   assert.notEqual(shellGeneration, firstGeneration)
   await until(async () => await firstDot.getAttribute('aria-label') === '연결 안 됨', '셸 전환 시 에이전트 연결 해제 표시')
-  assert.equal(await firstDot.evaluate((dot) => getComputedStyle(dot).backgroundColor), 'rgb(0, 0, 0)')
+  assert.equal(await firstDot.getAttribute('data-state'), 'disconnected')
+  await until(async () => await workTabs.getByRole('tab', { name: '통합 작업', exact: true })
+    .locator('.session-indicator').getAttribute('aria-label') === '셸 실행 중', '셸 생존 상태와 Codex 작업 상태 구분')
   await command(
     process.platform === 'win32'
       ? "Write-Output 'REAL_SHELL_OK'"
@@ -1200,7 +1236,7 @@ async function checkPeriodicTabs() {
   const childTab = page.getByRole('tab', { name: '서브 · 완료한 현재 검증 담당', exact: true })
   await childTab.waitFor()
   await childTab.click()
-  await until(async () => childTab.locator('.tab-running-dot.inactive').count(), '완료한 자식 탭 초기 관찰')
+  await until(async () => childTab.locator('.session-indicator.completed').count(), '완료한 자식 탭 초기 관찰')
   await app.evaluate(({ ipcMain }) => {
     globalThis.periodicSessionsHandler = ipcMain._invokeHandlers.get('codex:sessions')
     globalThis.periodicSessionCalls = 0
@@ -1223,7 +1259,7 @@ async function checkPeriodicTabs() {
         scrollLeft: list.scrollLeft, width: list.clientWidth, height: list.clientHeight, scrollWidth: list.scrollWidth,
         tabs: [...list.querySelectorAll('[role="tab"]')].map((tab) => {
           const rect = tab.getBoundingClientRect()
-          return { id: tab.id, label: tab.getAttribute('aria-label'), title: tab.title, selected: tab.getAttribute('aria-selected'), active: getComputedStyle(tab.querySelector('.tab-running-dot')).visibility === 'visible', x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+          return { id: tab.id, label: tab.getAttribute('aria-label'), title: tab.title, selected: tab.getAttribute('aria-selected'), state: tab.querySelector('.session-indicator')?.getAttribute('data-state'), x: rect.x, y: rect.y, width: rect.width, height: rect.height }
         }),
       })
       globalThis.readPeriodicTabs = read
@@ -1246,10 +1282,10 @@ async function checkPeriodicTabs() {
     for (const sample of measured.samples) assert.deepEqual(sample, measured.baseline, '주기 조회가 탭 이름·상태·크기·선택·스크롤을 바꾸지 않아야 합니다.')
     // 정상적인 새 실행과 완료도 상태 표시만 바꾸고 다른 탭을 밀지 않습니다.
     const child = await page.evaluate(async (path) => (await window.desktop.listSessions(path)).find((session) => session.threadId === 'polling-child'), task.path)
-    const geometry = (value) => ({ ...value, tabs: value.tabs.map(({ active, ...tab }) => tab) })
+    const geometry = (value) => ({ ...value, tabs: value.tabs.map(({ state, ...tab }) => tab) })
     for (const status of ['running', 'completed']) {
       await app.evaluate(({ BrowserWindow }, session) => BrowserWindow.getAllWindows()[0].webContents.send('codex:session', session), { ...child, status, updatedAt: Date.now() })
-      await until(async () => childTab.locator(status === 'running' ? '.tab-running-dot:not(.inactive)' : '.tab-running-dot.inactive').count(), `정상 상태 ${status} 표시`)
+      await until(async () => childTab.locator(`.session-indicator.${status}`).count(), `정상 상태 ${status} 표시`)
       assert.deepEqual(geometry(await page.evaluate(() => globalThis.readPeriodicTabs())), geometry(measured.baseline))
     }
     await page.screenshot({ path: 'artifacts/periodic-tabs-stable.png' })

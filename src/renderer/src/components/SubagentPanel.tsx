@@ -11,6 +11,8 @@ import {
 } from 'lucide-react'
 import type { AgentSession, AgentStatus } from '../../../shared/types'
 import { Conversation } from './Conversation'
+import { SessionStatusIndicator } from './SessionStatusIndicator'
+import { agentSessionStatus } from '../lib/workspace-sessions'
 import { Button } from './ui/button'
 import { getSubagents, isAgentActive as isActive } from '../lib/subagents'
 
@@ -174,7 +176,7 @@ export function SubagentPanel({
                 onClick={() => setSelectedId(child.id)}
               >
                 <div className="subagent-card-title">
-                  <span className={`session-dot ${child.status}`} />
+                  <SessionStatusIndicator status={agentSessionStatus(child)} />
                   <strong>{child.title}</strong>
                   {child.role && <small>{child.role}</small>}
                   <span className={`status-label ${child.status}`}>

@@ -27,13 +27,14 @@ import { ProjectDialog } from './components/ProjectDialog'
 import { SidebarActionMenu } from './components/SidebarActionMenu'
 import { WorkspacePanels } from './components/WorkspacePanels'
 import { TaskTabs } from './components/TaskTabs'
+import { SessionStatusIndicator } from './components/SessionStatusIndicator'
 import { TaskTerminal } from './components/TaskTerminal'
 import { ChangedFilesTree } from './components/ChangedFilesTree'
 import { StartupPanel } from './components/StartupPanel'
 import { DiffView } from './components/DiffView'
 import { SessionTab } from './components/SessionTab'
 import { ProcessPanel } from './components/ProcessPanel'
-import { workspaceSessions, workspaceTaskStatus } from './lib/workspace-sessions'
+import { agentSessionStatus, workspaceSessions, workspaceTaskStatus } from './lib/workspace-sessions'
 import { AppUpdateButton } from './components/AppUpdateButton'
 import { NewTaskDialog } from './components/NewTaskDialog'
 import { SettingsDialog, projectSettingsKey } from './components/SettingsDialog'
@@ -767,12 +768,7 @@ export function App() {
                               }
                               onClick={() => selectTask(task)}
                             >
-                              <span
-                                className={`session-dot ${status.state}`}
-                                role="img"
-                                aria-label={status.label}
-                                title={status.label}
-                              />
+                              <SessionStatusIndicator status={status} />
                               <span className="task-label">
                                 <span>{task.name}</span>
                                 <small>{task.branch}</small>
@@ -849,16 +845,18 @@ export function App() {
                 tasks={current ? [{
                   id: current.id,
                   title: current.name,
-                  active: !!terminals[current.id]?.running,
+                  status: terminals[current.id]?.kind === 'shell' && terminals[current.id]?.running
+                    ? { state: 'idle' as const, label: '셸 실행 중' }
+                    : workspaceTaskStatus(Object.values(sessions), current.path, window.desktop.platform, terminals[current.id]),
                   kind: 'terminal' as const,
                   detail: `${current.path} · 터미널`,
                 }, ...visibleSessions.map((session) => ({
                   id: `session-${session.id}`,
                   title: `${session.parentSessionId ? '서브 · ' : '세션 · '}${session.nickname || session.title}`,
-                  active: session.status === 'running' || session.status === 'waiting',
+                  status: agentSessionStatus(session),
                   kind: session.parentSessionId ? 'subagent' as const : 'session' as const,
                   detail: [session.title, session.task, session.role, session.model].filter(Boolean).join('\n'),
-                })), ...diffTabs.filter((tab) => tab.taskId === current.id).map((tab) => ({ id: tab.id, title: tab.path.split('/').at(-1)!, detail: `${current.name} · ${tab.path}`, active: false, kind: 'diff' as const }))] : []}
+                })), ...diffTabs.filter((tab) => tab.taskId === current.id).map((tab) => ({ id: tab.id, title: tab.path.split('/').at(-1)!, detail: `${current.name} · ${tab.path}`, kind: 'diff' as const }))] : []}
                 selected={selectedTab}
                 onSelect={(id) => {
                   const tab = diffTabs.find((tab) => tab.id === id)

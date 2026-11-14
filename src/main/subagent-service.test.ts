@@ -202,6 +202,55 @@ test('명시적인 승인·입력 대기 플래그만 답변 대기로 처리한
   assert.equal(session.status, 'running')
 })
 
+test('완료 이벤트가 빠져도 idle 알림에서 실행 표시를 해제하고 실제 턴 결과를 복구한다', async (t) => {
+  const { child, notify, service, threads, emitted } = await setup(t)
+  for (const status of ['completed', 'failed', 'interrupted'] as const) {
+    const session = await child(`idle-${status}`)
+    threads.set(session.threadId!, {
+      id: session.threadId, status: { type: 'idle' },
+      turns: [{ id: session.turnId, status, items: [] }],
+    })
+    notify('thread/status/changed', { threadId: session.threadId, status: { type: 'idle' } })
+    assert.equal(session.status, 'idle')
+    assert.equal(emitted.at(-1)!.status, 'idle')
+    await service.inspectSubagent(session.id)
+    assert.equal(session.status, status)
+    // 뒤따르는 idle 알림은 이미 확인한 완료·실패·중단 결과를 덮지 않습니다.
+    notify('thread/status/changed', { threadId: session.threadId, status: { type: 'idle' } })
+    assert.equal(session.status, status)
+  }
+  const waiting = await child('pending-question')
+  service.client.onMessage({ id: 'pending-question', method: 'item/tool/requestUserInput',
+    params: { threadId: waiting.threadId, questions: [{ id: 'scope', question: '범위는?' }] } })
+  notify('thread/status/changed', { threadId: waiting.threadId, status: { type: 'idle' } })
+  assert.equal(waiting.status, 'waiting')
+  assert.equal(waiting.requests.length, 1)
+  // 조회 결과의 턴 정보가 아직 실행 중이어도 서버가 idle이면 완료로 추측하지 않습니다.
+  const idle = await child('idle-snapshot', { status: { type: 'idle' } })
+  assert.equal(idle.status, 'idle')
+})
+
+test('idle 후 결과 조회 중 새 턴이 시작되면 과거 완료 결과로 되돌리지 않는다', async (t) => {
+  const { child, notify, service } = await setup(t)
+  const session = await child()
+  let finish!: (value: unknown) => void
+  let entered!: () => void
+  const reading = new Promise<void>((resolve) => { entered = resolve })
+  service.client.request = async <T>() => {
+    entered()
+    return new Promise<unknown>((resolve) => { finish = resolve }) as Promise<T>
+  }
+  notify('thread/status/changed', { threadId: session.threadId, status: { type: 'idle' } })
+  await reading
+  const pending = service.inspectSubagent(session.id)
+  notify('turn/started', { threadId: session.threadId, turn: { id: 'new-turn' } })
+  finish({ thread: { id: session.threadId, status: { type: 'idle' },
+    turns: [{ id: 'old-turn', status: 'completed', items: [] }] } })
+  await pending
+  assert.equal(session.status, 'running')
+  assert.equal(session.turnId, 'new-turn')
+})
+
 test('자식의 승인·질문을 처리하고 미처리 요청이 있으면 추가 지시를 막는다', async (t) => {
   const { service, child, replies } = await setup(t)
   const session = await child()

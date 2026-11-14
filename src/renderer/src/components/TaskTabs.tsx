@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Bot, Code2, FileCode2, Plus, Terminal, X } from 'lucide-react'
+import type { SessionIndicatorStatus } from '../lib/workspace-sessions'
+import { SessionStatusIndicator } from './SessionStatusIndicator'
 
 export function TaskTabs({
   tasks,
@@ -8,7 +10,7 @@ export function TaskTabs({
   onAdd,
   onClose,
 }: {
-  tasks: { id: string; title: string; active: boolean; kind?: 'terminal' | 'session' | 'subagent' | 'diff'; detail?: string }[]
+  tasks: { id: string; title: string; status?: SessionIndicatorStatus; kind?: 'terminal' | 'session' | 'subagent' | 'diff'; detail?: string }[]
   selected?: string
   onSelect: (id: string) => void
   onAdd: () => void
@@ -63,7 +65,9 @@ export function TaskTabs({
           >
             {task.kind === 'diff' ? <FileCode2 size={13} /> : task.kind === 'subagent' ? <Bot size={13} /> : task.kind === 'terminal' ? <Terminal size={13} /> : <Code2 size={13} />}
             <span>{task.title}</span>
-            <span className={`tab-running-dot ${task.active ? '' : 'inactive'}`} aria-label={task.active ? '실행 중' : undefined} aria-hidden={!task.active} />
+            <span className="tab-status-slot">
+              {task.status && <SessionStatusIndicator status={task.status} />}
+            </span>
           </button>
           {task.kind === 'diff' && <button className="tab-close" aria-label={`${task.title} 탭 닫기`} title="변경 내용 닫기" onClick={() => onClose?.(task.id)}><X size={12} /></button>}
           </div>
