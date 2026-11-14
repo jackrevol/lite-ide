@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { AgentSession, TerminalSnapshot } from '../../../shared/types'
-import { sameWorkspace, workspaceSessions, workspaceTaskStatus } from './workspace-sessions.ts'
+import { agentSessionStatus, sameWorkspace, workspaceSessions, workspaceTaskStatus } from './workspace-sessions.ts'
 
 const session = (id: string, workspace: string, parentSessionId?: string): AgentSession => ({
   id, workspace, parentSessionId, title: id, status: 'idle', messages: [], requests: [], updatedAt: 0,
@@ -40,10 +40,21 @@ test('작업 상태를 표시하며 터미널 연결 해제와 셸 전환은 과
   assert.equal(status({ ...terminal, waitingForInput: true }).state, 'waiting')
   for (const state of ['idle', 'waiting', 'completed', 'failed', 'interrupted'] as const) {
     const result = workspaceTaskStatus([{ ...root, status: state }], terminal.workspace, 'darwin', terminal)
-    assert.equal(result.state, state === 'idle' ? 'idle' : state === 'waiting' ? 'waiting' : 'completed')
+    assert.equal(result.state, state)
     if (state === 'failed') assert.equal(result.label, '작업 실패')
     if (state === 'interrupted') assert.equal(result.label, '작업 중단')
   }
+})
+
+test('터미널이 계속 켜져 있어도 작업 완료·실패·중단을 실행 중과 구분한다', () => {
+  const root = session('parent', terminal.workspace)
+  for (const state of ['running', 'completed', 'failed', 'interrupted', 'idle', 'waiting'] as const) {
+    const current = { ...root, status: state }
+    const status = workspaceTaskStatus([current], terminal.workspace, 'darwin', terminal)
+    assert.equal(status.state, state)
+    assert.deepEqual(status, agentSessionStatus(current))
+  }
+  assert.equal(agentSessionStatus({ ...root, status: 'running', observationError: 'offline' }).state, 'disconnected')
 })
 
 test('현재 부모 작업의 상태만 반영하며 자식과 과거 대화의 상태가 섞이지 않는다', () => {

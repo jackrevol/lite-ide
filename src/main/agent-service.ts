@@ -982,6 +982,8 @@ export class AgentService {
       session.status = list(status.activeFlags).some((flag) =>
         flag === 'waitingOnApproval' || flag === 'waitingOnUserInput',
       ) ? 'waiting' : 'running'
+    else if (status.type === 'idle' && ['running', 'waiting'].includes(session.status))
+      session.status = 'idle'
     else if (status.type === 'systemError') session.status = 'failed'
     if (session.requests.length) session.status = 'waiting'
   }
@@ -1185,6 +1187,7 @@ export class AgentService {
       return
     }
     if (!session) return
+    let refreshIdleStatus = false
     if (message.method === 'serverRequest/resolved') {
       for (const request of session.requests) {
         if (this.requests.get(request.id)?.id === params.requestId) {
@@ -1197,7 +1200,10 @@ export class AgentService {
       if (session.status === 'waiting' && !session.requests.length)
         session.status = 'running'
     } else if (message.method === 'thread/status/changed') {
-      this.applyThreadStatus(session, record(params.status))
+      const status = record(params.status)
+      refreshIdleStatus = status.type === 'idle' && !session.requests.length &&
+        ['running', 'waiting'].includes(session.status)
+      this.applyThreadStatus(session, status)
     } else if (message.method === 'thread/closed') {
       session.closed = true
       if (['running', 'waiting', 'idle'].includes(session.status))
@@ -1266,6 +1272,8 @@ export class AgentService {
       session.error = string(record(params.error).message)
     } else return
     this.publish(session)
+    // 완료 알림이 누락돼도 실행 표시를 남기지 않고 턴의 실제 결과를 확인합니다.
+    if (refreshIdleStatus) void this.inspectSession(session).catch(() => {})
   }
 
   private normalizeItem(
