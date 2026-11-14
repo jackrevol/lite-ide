@@ -122,7 +122,10 @@ test('새 Worktree는 선택한 로컬·원격 기준 commit에서 시작하고 
     const base = git('rev-parse', 'HEAD').trim()
     await assert.rejects(requireLinkedWorktree(root), /전용 Worktree/)
     git('branch', 'base')
-    git('update-ref', 'refs/remotes/origin/base', base)
+    const remote = join(root, 'remote.git')
+    git('init', '--bare', remote)
+    git('remote', 'add', 'origin', remote)
+    git('push', 'origin', 'base')
     git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/base')
     git('tag', 'v1')
     await writeFile(join(root, 'file.txt'), 'newer\n', 'utf8')
@@ -165,6 +168,85 @@ test('새 Worktree는 선택한 로컬·원격 기준 commit에서 시작하고 
     assert.equal(await readFile(join(root, 'file.txt'), 'utf8'), 'unsaved\n')
   } finally {
     await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('Worktree 생성마다 원격을 갱신하고 추적·원격·HEAD 기준의 최신 commit을 사용한다', async () => {
+  const fixture = await realpath(await mkdtemp(join(tmpdir(), 'lite-ide-latest-base-')))
+  const remote = join(fixture, 'remote.git')
+  const seed = join(fixture, 'seed')
+  const project = join(fixture, 'project')
+  const git = (directory: string, ...args: string[]) =>
+    execFileSync('git', ['-C', directory, ...args], {
+      encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim()
+  const advanceRemote = async (content: string) => {
+    await writeFile(join(seed, 'file.txt'), content, 'utf8')
+    git(seed, 'add', '.')
+    git(seed, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+      'commit', '-m', content)
+    git(seed, 'push', 'origin', 'main')
+    return git(seed, 'rev-parse', 'HEAD')
+  }
+  try {
+    git(fixture, 'init', '--bare', '--initial-branch=main', remote)
+    git(fixture, 'init', '--initial-branch=main', seed)
+    git(seed, 'remote', 'add', 'origin', remote)
+    const original = await advanceRemote('original\n')
+    git(fixture, 'clone', remote, project)
+    // 로컬 이름과 추적 대상 이름이 달라도 추적 대상을 우선합니다.
+    git(project, 'branch', '-m', 'local-main')
+    await writeFile(join(project, 'file.txt'), '로컬 미커밋 변경\n', 'utf8')
+    for (const [index, ref] of ['HEAD', 'refs/heads/local-main', 'refs/remotes/origin/main'].entries()) {
+      const latest = await advanceRemote(`latest-${index}\n`)
+      assert.notEqual(git(project, 'rev-parse', 'refs/remotes/origin/main'), latest)
+      const tree = await createWorktree(project, `feature/latest-${index}`, ref)
+      assert.equal(git(tree.path, 'rev-parse', 'HEAD'), latest)
+      assert.equal(await readFile(join(tree.path, 'file.txt'), 'utf8'), `latest-${index}\n`)
+    }
+    // 추적 설정이 없는 로컬 브랜치도 origin의 같은 이름 브랜치를 확인합니다.
+    git(project, 'branch', '--no-track', 'main', original)
+    const latest = await advanceRemote('without-upstream\n')
+    const tree = await createWorktree(project, 'feature/without-upstream', 'refs/heads/main')
+    assert.equal(git(tree.path, 'rev-parse', 'HEAD'), latest)
+    assert.equal(git(project, 'rev-parse', 'HEAD'), original)
+    assert.equal(git(project, 'rev-parse', 'refs/heads/main'), original)
+    assert.equal(await readFile(join(project, 'file.txt'), 'utf8'), '로컬 미커밋 변경\n')
+
+    git(seed, 'push', 'origin', 'main:obsolete')
+    git(project, 'fetch', 'origin')
+    git(project, 'branch', '--track', 'obsolete', 'origin/obsolete')
+    git(seed, 'push', 'origin', '--delete', 'obsolete')
+    for (const ref of ['refs/remotes/origin/obsolete', 'refs/heads/obsolete']) {
+      await assert.rejects(createWorktree(project, 'feature/deleted', ref), /기준 브랜치/)
+      assert.equal(git(project, 'branch', '--list', 'feature/deleted'), '')
+    }
+
+    // 원격에서 이력이 되돌아가도 갱신된 원격 commit을 기준으로 생성합니다.
+    git(seed, 'push', '--force', 'origin', `${original}:main`)
+    const rewound = await createWorktree(project, 'feature/rewound')
+    assert.equal(git(rewound.path, 'rev-parse', 'HEAD'), original)
+
+    git(project, 'remote', 'rename', 'origin', 'upstream')
+    const soleRemote = await createWorktree(project, 'feature/sole-remote', 'refs/heads/main')
+    assert.equal(git(soleRemote.path, 'rev-parse', 'HEAD'), original)
+    git(project, 'remote', 'add', 'backup', remote)
+    await assert.rejects(
+      createWorktree(project, 'feature/ambiguous', 'refs/heads/main'),
+      /원격 브랜치가 여러 개/,
+    )
+    assert.equal(git(project, 'branch', '--list', 'feature/ambiguous'), '')
+    // 여러 원격이 있어도 명시한 추적 대상은 그대로 사용합니다.
+    const tracked = await createWorktree(project, 'feature/tracked')
+    assert.equal(git(tracked.path, 'rev-parse', 'HEAD'), original)
+
+    const beforeFailure = git(project, 'worktree', 'list', '--porcelain')
+    git(project, 'remote', 'set-url', 'upstream', join(fixture, 'missing.git'))
+    await assert.rejects(createWorktree(project, 'feature/offline'), /최신 형상을 가져오지 못했습니다/)
+    assert.equal(git(project, 'branch', '--list', 'feature/offline'), '')
+    assert.equal(git(project, 'worktree', 'list', '--porcelain'), beforeFailure)
+  } finally {
+    await rm(fixture, { recursive: true, force: true })
   }
 })
 
