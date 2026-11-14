@@ -9,21 +9,13 @@ import {
   Square,
   X,
 } from 'lucide-react'
-import type { AgentSession, AgentStatus } from '../../../shared/types'
+import type { AgentSession } from '../../../shared/types'
 import { Conversation } from './Conversation'
-import { SessionStatusIndicator } from './SessionStatusIndicator'
+import { SessionStatusBadge, SessionStatusIndicator } from './SessionStatusIndicator'
 import { agentSessionStatus } from '../lib/workspace-sessions'
 import { Button } from './ui/button'
 import { getSubagents, isAgentActive as isActive } from '../lib/subagents'
 
-const labels: Record<AgentStatus, string> = {
-  idle: '준비 중',
-  running: '작업 중',
-  waiting: '응답 필요',
-  completed: '완료',
-  interrupted: '중단됨',
-  failed: '오류',
-}
 const needsAttention = (session: AgentSession) =>
   session.status === 'waiting' ||
   session.status === 'failed' ||
@@ -62,27 +54,19 @@ export function SubagentPanel({
       a.id.localeCompare(b.id),
   )
   const selected = selectedId ? agents[selectedId] : undefined
-  const active = children.filter(isActive).length
-  const attention = children.filter(needsAttention).length
+  const count = (state: string) => children.filter((child) => agentSessionStatus(child).state === state).length
+  const active = count('running')
+  const waiting = count('waiting')
   const filters = [
     { id: 'all', label: '전체', count: children.length },
-    { id: 'active', label: '진행 중', count: active },
-    { id: 'attention', label: '확인 필요', count: attention },
-    {
-      id: 'finished',
-      label: '종료',
-      count:
-        children.length -
-        active -
-        children.filter((item) => item.status === 'idle').length,
-    },
+    { id: 'disconnected', label: '연결 안 됨', count: count('disconnected') },
+    { id: 'running', label: '작업 중', count: active },
+    { id: 'waiting', label: '질문 대기 중', count: waiting },
+    { id: 'completed', label: '작업 완료됨', count: count('completed') },
   ]
   const visible = children.filter(
     (item) =>
-      (filter === 'all' ||
-        (filter === 'active' && isActive(item)) ||
-        (filter === 'attention' && needsAttention(item)) ||
-        (filter === 'finished' && !isActive(item) && item.status !== 'idle')) &&
+      (filter === 'all' || agentSessionStatus(item).state === filter) &&
       `${item.title} ${item.role ?? ''} ${item.task ?? ''} ${item.threadId ?? ''}`
         .toLowerCase()
         .includes(query.trim().toLowerCase()),
@@ -137,7 +121,7 @@ export function SubagentPanel({
         <span className="count">{children.length}</span>
         <span className="subagent-overview" role="status">
           작업 중 {active}
-          {attention > 0 && <b> · 확인 필요 {attention}</b>}
+          {waiting > 0 && <b> · 질문 대기 중 {waiting}</b>}
         </span>
       </button>
       {expanded && (
@@ -179,9 +163,7 @@ export function SubagentPanel({
                   <SessionStatusIndicator status={agentSessionStatus(child)} />
                   <strong>{child.title}</strong>
                   {child.role && <small>{child.role}</small>}
-                  <span className={`status-label ${child.status}`}>
-                    {child.closed ? '종료됨' : labels[child.status]}
-                  </span>
+                  <SessionStatusBadge status={agentSessionStatus(child)} />
                 </div>
                 <p>{child.task || lastActivity(child)}</p>
                 <div className="subagent-card-meta">
@@ -234,9 +216,7 @@ export function SubagentPanel({
                   {agents[selected.parentSessionId!]?.title ?? parent.title}
                 </p>
               </div>
-              <span className={`status-label ${selected.status}`}>
-                {selected.closed ? '종료됨' : labels[selected.status]}
-              </span>
+              <SessionStatusBadge status={agentSessionStatus(selected)} />
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -272,6 +252,7 @@ export function SubagentPanel({
               </Button>
             </div>
             {selected.task && <p className="subagent-task">{selected.task}</p>}
+            {agentSessionStatus(selected).detail && <p className="subagent-task">{agentSessionStatus(selected).detail}</p>}
             <div className="subagent-detail-conversation">
               <Conversation session={selected} requestDrafts={requestDrafts} setRequestDrafts={setRequestDrafts} />
               {!selected.messages.length && (

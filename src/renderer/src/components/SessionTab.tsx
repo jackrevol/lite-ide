@@ -4,13 +4,15 @@ import type { AgentSession } from '../../../shared/types'
 import { Conversation } from './Conversation'
 import { Button } from './ui/button'
 
-const labels = { idle: '대기', running: '실행 중', waiting: '응답 대기', completed: '완료', interrupted: '중단', failed: '실패' }
+import { agentSessionStatus } from '../lib/workspace-sessions'
+import { SessionStatusBadge } from './SessionStatusIndicator'
 
 export function SessionTab({ session, draft, setDraft, requestDrafts, setRequestDrafts }: { session: AgentSession; draft: string; setDraft: Dispatch<SetStateAction<string>>; requestDrafts: Record<string, Record<string, string>>; setRequestDrafts: Dispatch<SetStateAction<Record<string, Record<string, string>>>> }) {
   const [pending, setPending] = useState('')
   const [error, setError] = useState('')
   const active = session.status === 'running' || session.status === 'waiting'
   const canControl = session.canAcceptDirectInput !== false && !session.closed
+  const status = agentSessionStatus(session)
   async function perform(action: string, run: () => Promise<void>) {
     if (pending) return
     setPending(action)
@@ -22,7 +24,8 @@ export function SessionTab({ session, draft, setDraft, requestDrafts, setRequest
   return (
     <div className="session-tab-view">
       <div className="session-tab-meta">
-        <span className={`status-label ${session.status}`}>{session.closed ? '종료됨' : labels[session.status]}</span>
+        <SessionStatusBadge status={status} />
+        {status.detail && <span>{status.detail}</span>}
         <span>{[session.nickname, session.role, session.model].filter(Boolean).join(' · ') || 'Codex 세션'}</span>
         {(session.parentSessionId || session.canAcceptDirectInput === false) && <Button variant="ghost" size="xs" disabled={!!pending} onClick={() => void perform('refresh', () => window.desktop.inspectSubagent(session.id))}>
           <RefreshCw size={12} className={pending === 'refresh' ? 'spinning' : ''} />활동 새로고침
