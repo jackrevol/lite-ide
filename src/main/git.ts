@@ -29,7 +29,7 @@ async function git(
     windowsHide: true,
     timeout,
     maxBuffer: 16 * 1024 * 1024,
-    env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
   })
   return stdout
 }
@@ -166,7 +166,7 @@ export async function createWorktree(
   if (typeof branch !== 'string' || !branch.trim() || branch.length > 100)
     throw new Error('브랜치 이름을 입력해 주세요.')
   await git(directory, ['check-ref-format', '--branch', branch])
-  const base = await resolveBaseRef(directory, baseRef)
+  const base = await refreshWorktreeBase(directory, baseRef)
   const name = branch.replace(/[^a-zA-Z0-9._-]/g, '-')
   const path = join(
     dirname(directory),
@@ -179,6 +179,56 @@ export async function createWorktree(
   const created = snapshot.worktrees.find((tree) => tree.branch === branch)
   if (!created) throw new Error('생성한 Worktree 경로를 확인하지 못했습니다.')
   return created
+}
+
+async function refreshWorktreeBase(
+  directory: string,
+  baseRef: string,
+): Promise<string> {
+  // 입력을 먼저 검증하고, fetch가 끝난 뒤 생성에 사용할 commit을 확정합니다.
+  await resolveBaseRef(directory, baseRef)
+  const localRef = baseRef === 'HEAD'
+    ? (await git(directory, ['symbolic-ref', '-q', 'HEAD']).catch(() => '')).trim()
+    : baseRef.startsWith('refs/heads/') ? baseRef : ''
+  let upstream = ''
+  if (localRef) {
+    const output = await git(directory, [
+      'for-each-ref', '--format=%(refname)%00%(upstream)', localRef,
+    ])
+    upstream = output.split(/\r?\n/)
+      .find((line) => line.startsWith(`${localRef}\0`))?.split('\0')[1] || ''
+  }
+  const remotes = (await git(directory, ['remote']))
+    .split(/\r?\n/).filter(Boolean)
+  for (const remote of remotes) {
+    try {
+      await git(directory, ['fetch', '--prune', '--no-tags', '--', remote], 120_000)
+    } catch (cause) {
+      throw new Error(
+        `원격 ${remote}의 최신 형상을 가져오지 못했습니다. 연결과 인증을 확인한 뒤 다시 시도해 주세요.`,
+        { cause },
+      )
+    }
+  }
+  const branches = await listBranches(directory)
+  let latestRef = upstream || baseRef
+  if (!upstream && localRef) {
+    const branch = localRef.slice('refs/heads/'.length)
+    const candidates = remotes
+      .map((remote) => `refs/remotes/${remote}/${branch}`)
+      .filter((ref) => branches.includes(ref))
+    const origin = `refs/remotes/origin/${branch}`
+    if (candidates.includes(origin)) latestRef = origin
+    else if (candidates.length === 1) latestRef = candidates[0]
+    else if (candidates.length > 1)
+      throw new Error('같은 이름의 원격 브랜치가 여러 개입니다. 기준 원격 브랜치를 직접 선택해 주세요.')
+  }
+  if (
+    latestRef.startsWith('refs/remotes/') &&
+    !remotes.some((remote) => latestRef.startsWith(`refs/remotes/${remote}/`))
+  )
+    throw new Error('기준 브랜치의 원격 저장소가 없습니다. 기준 브랜치를 다시 선택해 주세요.')
+  return resolveBaseRef(directory, latestRef)
 }
 
 export async function requireLinkedWorktree(directory: string): Promise<void> {

@@ -117,7 +117,7 @@ export function NewTaskDialog({
         <p title={project.path}>{project.name}에서 작업을 시작합니다.</p>
         <fieldset disabled={pending || !!created.current}>
           <p>
-            선택한 기준 브랜치에서 작업 전용 브랜치와 폴더를 생성합니다.
+            선택한 기준 브랜치의 최신 형상을 확인한 뒤 작업 전용 브랜치와 폴더를 생성합니다.
           </p>
           <BaseBranchSelect
             label="기준 브랜치"
