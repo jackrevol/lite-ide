@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { ChevronDown, ChevronUp, ImagePlus, Search, X } from 'lucide-react'
-import { imageAccept, maxImageBytes, maxImageCount } from '../../../shared/image-attachments'
+import { ChevronDown, ChevronUp, Search, X } from 'lucide-react'
+import { AttachmentTray } from './AttachmentTray'
+import { useTerminalAttachments } from '../lib/use-terminal-attachments'
 import './TaskTerminal.css'
 import '@xterm/xterm/css/xterm.css'
 import type { TerminalEvent, TerminalSnapshot } from '../../../shared/types'
@@ -29,34 +30,9 @@ export function TaskTerminal({
   const host = useRef<HTMLDivElement>(null)
   const terminal = useRef<Terminal | null>(null)
   const readySnapshot = useRef<TerminalSnapshot | null>(null)
-  const imageInput = useRef<HTMLInputElement>(null)
-  const uploading = useRef(false)
-  const [attaching, setAttaching] = useState(false)
-  const [imageNotice, setImageNotice] = useState('')
-  const [imageError, setImageError] = useState('')
-  const imageFailure = (cause: unknown) => setImageError(cause instanceof Error ? cause.message : String(cause))
-  const attachImages = async (files: File[]) => {
-    if (!files.length || uploading.current) return
-    const target = readySnapshot.current
-    if (task.terminalKind !== 'codex' || !target?.running) return
-    uploading.current = true
-    setAttaching(true)
-    setImageError('')
-    setImageNotice('')
-    try {
-      if (files.length > maxImageCount) throw new Error(`이미지는 한 번에 ${maxImageCount}개까지 첨부할 수 있습니다.`)
-      if (files.reduce((sum, file) => sum + file.size, 0) > maxImageBytes)
-        throw new Error('이미지 첨부는 한 번에 총 20MB까지 가능합니다.')
-      const images = await Promise.all(files.map(async (file) => ({
-        name: file.name, data: new Uint8Array(await file.arrayBuffer()),
-      })))
-      await window.desktop.attachTerminalImages({ taskId: target.taskId, generation: target.generation, images })
-      setImageNotice(`${files.length}개 이미지를 입력에 추가했습니다. 요청과 함께 Enter로 전송하세요.`)
-      if (visible.current && readySnapshot.current?.generation === target.generation)
-        terminal.current?.focus()
-    } catch (cause) { imageFailure(cause) }
-    finally { uploading.current = false; setAttaching(false) }
-  }
+  const attachments = useTerminalAttachments(readySnapshot)
+  const attachmentActions = useRef(attachments)
+  attachmentActions.current = attachments
   const searchInput = useRef<HTMLInputElement>(null)
   const searchQuery = useRef('')
   const searchIndex = useRef(-1)
@@ -120,8 +96,6 @@ export function TaskTerminal({
     setExited(null)
     setStarting(true)
     readySnapshot.current = null
-    setImageNotice('')
-    setImageError('')
     searchIndex.current = -1
     setSearchResult({ index: 0, count: 0 })
     const term = new Terminal({
@@ -151,13 +125,15 @@ export function TaskTerminal({
         void window.desktop.writeTerminal(task.id, chunk).catch(report)
     }
     const input = term.onData((data) => {
-      if (/[\r\x03]/.test(data)) setImageNotice('')
+      if (/[\r\x03]/.test(data)) attachmentActions.current.setNotice('')
       // xterm이 한글 조합을 먼저 확정한 뒤 내보내는 Enter만 수정 키 시퀀스로 바꿉니다.
       if (data === '\r' && modifiedEnter) {
         const sequence = modifiedEnter
         modifiedEnter = undefined
         write(sequence)
-      } else write(data)
+      } else if (task.terminalKind === 'codex' && data === '\r' && attachmentActions.current.draftsRef.current.length) {
+        void attachmentActions.current.insert(true)
+      } else if (!attachmentActions.current.delivering.current) write(data)
     })
     const parsed = term.onWriteParsed(() => {
       if (!searchQuery.current) return
@@ -171,7 +147,7 @@ export function TaskTerminal({
     })
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown') return true
-      if (uploading.current && event.key === 'Enter') {
+      if (attachmentActions.current.delivering.current && event.key === 'Enter') {
         event.preventDefault()
         return false
       }
@@ -231,20 +207,12 @@ export function TaskTerminal({
         ) {
           event.preventDefault()
           if (task.terminalKind === 'codex' && ready?.running) {
-            if (uploading.current) return false
-            uploading.current = true
-            setAttaching(true)
-            void window.desktop.pasteTerminalClipboard(task.id, ready.generation)
-              .then(async (kind) => {
-                if (!disposed && kind === 'images') {
-                  setImageError('')
-                  setImageNotice('클립보드 이미지를 입력에 추가했습니다. 요청과 함께 Enter로 전송하세요.')
-                } else if (!disposed && kind === 'empty') {
-                  const text = await navigator.clipboard.readText()
-                  if (!disposed) term.paste(text)
-                }
-              }).catch((cause) => { if (!disposed) imageFailure(cause) })
-              .finally(() => { uploading.current = false; if (!disposed) setAttaching(false) })
+            void attachmentActions.current.pasteClipboard().then(async (handled) => {
+              if (!disposed && !handled) {
+                const text = await navigator.clipboard.readText()
+                if (!disposed) term.paste(text)
+              }
+            }).catch((cause) => { if (!disposed) attachmentActions.current.setError(cause instanceof Error ? cause.message : String(cause)) })
             return false
           }
           void navigator.clipboard
@@ -322,6 +290,7 @@ export function TaskTerminal({
         setStarting(false)
         ready = { ...snapshot }
         readySnapshot.current = { ...snapshot }
+        if (snapshot.kind === 'codex') void attachmentActions.current.restore(snapshot)
         term.resize(snapshot.cols, snapshot.rows)
         output.write(snapshot.output)
         output.flush()
@@ -362,7 +331,7 @@ export function TaskTerminal({
         if (!files.length) return
         event.preventDefault()
         event.stopPropagation()
-        void attachImages(files)
+        attachments.addFiles(files)
       }}
       onDragOver={(event) => {
         if (task.terminalKind === 'codex' && event.dataTransfer.types.includes('Files')) {
@@ -374,7 +343,11 @@ export function TaskTerminal({
         if (task.terminalKind !== 'codex' || !event.dataTransfer.files.length) return
         event.preventDefault()
         event.stopPropagation()
-        void attachImages(Array.from(event.dataTransfer.files))
+        if (Array.from(event.dataTransfer.items).some((item) => item.webkitGetAsEntry()?.isDirectory)) {
+          attachments.setError('폴더는 직접 첨부할 수 없습니다. 폴더 안의 파일을 선택해 주세요.')
+          return
+        }
+        void attachments.addFiles(Array.from(event.dataTransfer.files)).then(() => { if (visible.current) terminal.current?.focus() })
       }}>
       {searchOpen && (
         <div className="terminal-search" role="search" aria-label="터미널 출력 검색">
@@ -415,22 +388,8 @@ export function TaskTerminal({
         <div className="terminal-starting" role="status">Codex 업데이트 확인 및 터미널 시작 중…</div>
       )}
       <div className="terminal-host" ref={host} aria-label="작업 터미널" />
-      {task.terminalKind === 'codex' && (
-        <div className="terminal-image-tools">
-          <input ref={imageInput} type="file" accept={imageAccept} multiple hidden aria-label="첨부할 이미지 선택"
-            onChange={(event) => {
-              const files = Array.from(event.currentTarget.files ?? [])
-              event.currentTarget.value = ''
-              void attachImages(files)
-            }} />
-          <Button variant="ghost" size="xs" type="button" disabled={starting || exited !== null || attaching}
-            onClick={() => imageInput.current?.click()}><ImagePlus size={13} />{attaching ? '이미지 추가 중…' : '이미지 첨부'}</Button>
-          <span role={imageError ? 'alert' : 'status'} className={imageError ? 'terminal-image-error' : ''}>
-            {imageError || imageNotice || '이미지를 끌어 놓거나 붙여넣을 수 있습니다.'}
-          </span>
-          {imageError && <Button variant="ghost" size="icon-xs" aria-label="이미지 첨부 오류 닫기" onClick={() => setImageError('')}><X size={12} /></Button>}
-        </div>
-      )}
+      {task.terminalKind === 'codex' && <AttachmentTray attachments={attachments}
+        disabled={starting || exited !== null} onInserted={() => terminal.current?.focus()} />}
       {(error || exited !== null) && (
         <div className="terminal-notice" role={error ? 'alert' : 'status'}>
           <span>

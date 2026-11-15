@@ -38,8 +38,8 @@ import { appInfo } from './app-info'
 import { AgentService } from './agent-service'
 import { prepareCodex } from './codex-update-service'
 import { TerminalService } from './terminal-service'
-import { removeImages, storeImages } from './image-attachments'
-import type { TerminalImageUpload } from '../shared/image-attachments'
+import { AttachmentService } from './attachment-service'
+import type { AttachmentSelection, AttachmentTarget, StageAttachmentsInput } from '../shared/attachments'
 import { NotificationService } from './notification-service'
 import { ResetAnnouncementService } from './reset-announcement-service'
 import { StartupService } from './startup-service'
@@ -312,34 +312,62 @@ app.whenReady().then(() => {
     requireTerminalSender(event)
     terminals!.write(id, data)
   })
-  const attachImages = async (input: TerminalImageUpload) => {
+  const attachments = new AttachmentService(join(app.getPath('userData'), 'attachments'), (path, size) => {
+    const image = nativeImage.createFromPath(path)
+    if (image.isEmpty()) throw new Error('이미지를 읽을 수 없습니다. 다른 파일로 다시 시도해 주세요.')
+    const bounds = image.getSize()
+    const scale = Math.min(1, size / Math.max(bounds.width, bounds.height))
+    return image.resize({ width: Math.max(1, Math.round(bounds.width * scale)), height: Math.max(1, Math.round(bounds.height * scale)) }).toDataURL()
+  })
+  const requireAttachmentTarget = async (target: AttachmentTarget) => {
     if (updates?.snapshot().status === 'installing') throw new Error('업데이트 설치를 시작하고 있습니다.')
-    terminals!.requireImageTarget(input?.taskId, input?.generation)
-    const workspace = requireWorkspace(terminals!.snapshot(input.taskId)!.workspace)
+    terminals!.requireAttachmentTarget(target?.taskId, target?.generation)
+    const workspace = requireWorkspace(terminals!.snapshot(target.taskId)!.workspace)
     await startups!.requireReady(workspace)
-    const files = await storeImages(join(app.getPath('userData'), 'image-attachments'), input.images)
-    try {
-      if (files.some((file) => nativeImage.createFromPath(file).isEmpty()))
-        throw new Error('이미지를 읽을 수 없습니다. 다른 이미지 파일로 다시 시도해 주세요.')
-      terminals!.pasteImages(input.taskId, input.generation, files)
-    } catch (error) {
-      await removeImages(files)
+    terminals!.requireAttachmentTarget(target.taskId, target.generation)
+  }
+  const stageAttachments = async (input: StageAttachmentsInput) => {
+    await requireAttachmentTarget(input)
+    const items = await attachments.stage(input)
+    try { terminals!.requireAttachmentTarget(input.taskId, input.generation) }
+    catch (error) {
+      await attachments.discard({ ...input, ids: items.map((item) => item.id) })
       throw error
     }
+    return items
   }
-  ipcMain.handle('terminal:attach-images', async (event, input: TerminalImageUpload) => {
+  ipcMain.handle('attachments:stage', async (event, input: StageAttachmentsInput) => {
     requireTerminalSender(event)
-    await attachImages(input)
+    return stageAttachments(input)
   })
-  ipcMain.handle('terminal:paste-clipboard', async (event, taskId: string, generation: string) => {
+  ipcMain.handle('attachments:list', async (event, target: AttachmentTarget) => {
     requireTerminalSender(event)
-    terminals!.requireImageTarget(taskId, generation)
+    await requireAttachmentTarget(target)
+    return attachments.restore(target)
+  })
+  ipcMain.handle('attachments:clipboard', async (event, target: AttachmentTarget) => {
+    requireTerminalSender(event)
+    await requireAttachmentTarget(target)
     const image = clipboard.readImage()
-    if (!image.isEmpty()) {
-      await attachImages({ taskId, generation, images: [{ name: 'clipboard.png', data: image.toPNG() }] })
-      return 'images'
-    }
-    return 'empty'
+    if (image.isEmpty()) return []
+    return stageAttachments({ ...target, files: [{ name: '붙여넣은 이미지.png', data: image.toPNG() }] })
+  })
+  ipcMain.handle('attachments:discard', (event, input: AttachmentSelection) => {
+    requireTerminalSender(event)
+    return attachments.discard(input)
+  })
+  ipcMain.handle('attachments:preview', (event, target: AttachmentTarget, id: string) => {
+    requireTerminalSender(event)
+    return attachments.preview(target, id)
+  })
+  ipcMain.handle('attachments:insert', async (event, input: AttachmentSelection & { submit?: boolean }) => {
+    requireTerminalSender(event)
+    await requireAttachmentTarget(input)
+    if (input.submit !== undefined && typeof input.submit !== 'boolean') throw new Error('올바른 전송 옵션이 아닙니다.')
+    await attachments.deliver(input, (files) => {
+      terminals!.pasteAttachments(input.taskId, input.generation, files)
+      if (input.submit) terminals!.write(input.taskId, '\r')
+    })
   })
   ipcMain.handle(
     'terminal:resize',

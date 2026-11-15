@@ -22,8 +22,11 @@ test('이미지 경로는 Codex 입력에 붙여넣기만 하고 전송·재연�
   const service = new TerminalService(join(directory, 'resume.json'), () => {}, factory, async () => '/codex')
   t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }) })
   const target = await service.open({ taskId: 'images', workspace: directory, kind: 'codex', cols: 80, rows: 24 })
-  service.pasteImages(target.taskId, target.generation, ['/한글 폴더/a.png', 'C:\\Users\\Test User\\b.png'])
-  assert.deepEqual(writes, ['\x1b[200~"/한글 폴더/a.png"\x1b[201~\x1b[200~"C:/Users/Test User/b.png"\x1b[201~'])
+  service.pasteAttachments(target.taskId, target.generation, [
+    { path: '/한글 폴더/a.png', kind: 'image' }, { path: 'C:\\Users\\Test User\\b.png', kind: 'image' },
+    { path: '/문서 폴더/내용.md', kind: 'file' },
+  ])
+  assert.deepEqual(writes, ['\x1b[200~"/한글 폴더/a.png"\x1b[201~\x1b[200~"C:/Users/Test User/b.png"\x1b[201~\x1b[200~ "/문서 폴더/내용.md" \x1b[201~'])
   assert.equal(writes[0].includes('\r'), false)
   assert.equal(writes[0].includes('\n'), false)
   assert.throws(() => service.pasteImages(target.taskId, 'old-generation', ['/a.png']), /변경되었거나 종료/)

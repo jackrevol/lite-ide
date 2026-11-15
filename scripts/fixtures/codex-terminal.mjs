@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 process.stdin.setRawMode(true)
 process.stdin.setEncoding('utf8')
@@ -9,8 +9,14 @@ let input = '',
   timer
 let pasteBuffer = ''
 let images = []
+let files = []
 const prompt = () => process.stdout.write('codex> ')
 function run(command) {
+  if (files.length) {
+    for (const path of files) readFileSync(path)
+    process.stdout.write(`FILE_ATTACHMENTS_READ:${files.length}\r\n`)
+    files = []
+  }
   if (images.length) {
     for (const path of images) readFileSync(path)
     process.stdout.write(`IMAGE_FILES_READ:${images.length}\r\n`)
@@ -74,6 +80,7 @@ function typed(chunk) {
     timer = undefined
     input = ''
     images = []
+    files = []
     process.stdout.write('^C\r\nINTERRUPTED\r\n')
     prompt()
     return
@@ -107,14 +114,17 @@ process.stdin.on('data', (chunk) => {
     if (end < 0) { pasteBuffer = remaining.slice(start); return }
     const pasted = remaining.slice(start + 6, end)
     let path
-    try { path = JSON.parse(pasted) } catch {}
+    try { path = JSON.parse(pasted.trim()) } catch {}
     if (typeof path === 'string' && /\.(png|jpg|gif|webp)$/i.test(path)) {
       readFileSync(path)
       images.push(path)
       const token = `[Image #${images.length}]`
       input += token
       process.stdout.write(token)
-    } else typed(pasted)
+    } else {
+      if (typeof path === 'string' && existsSync(path)) files.push(path)
+      typed(pasted)
+    }
     remaining = remaining.slice(end + 6)
   }
 })
