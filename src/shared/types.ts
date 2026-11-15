@@ -1,4 +1,4 @@
-import type { TerminalImageUpload } from './image-attachments'
+import type { Attachment, AttachmentPreview, AttachmentSelection, AttachmentTarget, StageAttachmentsInput } from './attachments'
 
 export interface Project {
   path: string
@@ -116,8 +116,12 @@ export interface DesktopApi {
   onStartup(listener: (snapshot: StartupSnapshot) => void): () => void
   openTerminal(input: TerminalOpen): Promise<TerminalSnapshot>
   writeTerminal(taskId: string, data: string): Promise<void>
-  attachTerminalImages(input: TerminalImageUpload): Promise<void>
-  pasteTerminalClipboard(taskId: string, generation: string): Promise<'images' | 'empty'>
+  stageAttachments(input: StageAttachmentsInput): Promise<Attachment[]>
+  listAttachments(target: AttachmentTarget): Promise<Attachment[]>
+  stageClipboardAttachment(target: AttachmentTarget): Promise<Attachment[]>
+  discardAttachments(input: AttachmentSelection): Promise<void>
+  insertAttachments(input: AttachmentSelection & { submit?: boolean }): Promise<void>
+  previewAttachment(target: AttachmentTarget, id: string): Promise<AttachmentPreview>
   resizeTerminal(taskId: string, cols: number, rows: number): Promise<void>
   closeTerminal(taskId: string): Promise<void>
   terminalSnapshot(taskId: string): Promise<TerminalSnapshot | null>
