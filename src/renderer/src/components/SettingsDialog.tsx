@@ -10,6 +10,7 @@ import { Button } from './ui/button'
 import { UpdatePanel } from './UpdatePanel'
 import { BaseBranchSelect, useBranches } from './BaseBranchSelect'
 import { NotificationSettingsPanel } from './NotificationSettingsPanel'
+import { BrowserSettingsPanel } from './BrowserSettingsPanel'
 
 export const projectSettingsKey = (path: string) =>
   window.desktop.platform === 'win32' ? path.toLowerCase() : path
@@ -135,6 +136,7 @@ export function SettingsDialog({
       <div role="tablist" aria-label="설정 분류" className="settings-tabs">
         {[
           ['general', '일반'],
+          ['browser', '브라우저'],
           ['project', '프로젝트'],
           ['about', '프로그램 정보'],
         ].map(([id, label]) => (
@@ -186,7 +188,7 @@ export function SettingsDialog({
               </label>
             </section>
             {settings && <NotificationSettingsPanel initial={settings.notifications}
-              onSaved={(notifications) => setSettings({ ...settings, notifications })} />}
+              onSaved={(notifications) => setSettings((current) => current && ({ ...current, notifications }))} />}
             <section className="settings-section">
               <h3>앱 업데이트</h3>
               <div className="settings-update">
@@ -195,6 +197,7 @@ export function SettingsDialog({
             </section>
           </>
         )}
+        {tab === 'browser' && settings && <BrowserSettingsPanel initial={settings.browser} onSaved={setSettings} />}
         {tab === 'project' && (
           <>
             <h3>새 작업 기본값</h3>

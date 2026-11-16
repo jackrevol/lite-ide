@@ -5,6 +5,7 @@ import type { AppSettings, ProjectDefaults } from '../shared/types.ts'
 import type { NotificationSettings } from '../shared/types.ts'
 import { defaultNotificationSettings, validateNotificationSettings } from '../shared/notifications.ts'
 import { validateStartupScriptPath } from './startup-script.ts'
+import { defaultBrowserSettings, validateBrowserSettings, type BrowserSettings } from '../shared/browser.ts'
 
 export function validateDefaults(value: unknown): ProjectDefaults {
   if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -38,7 +39,7 @@ export function validateDefaults(value: unknown): ProjectDefaults {
 
 export class SettingsService {
   private file: string
-  private state: AppSettings = { schemaVersion: 1, projects: {}, notifications: { ...defaultNotificationSettings } }
+  private state: AppSettings = { schemaVersion: 1, projects: {}, notifications: { ...defaultNotificationSettings }, browser: { ...defaultBrowserSettings } }
   private loaded: Promise<void>
   private loadFailed = false
   private queue: Promise<unknown> = Promise.resolve()
@@ -61,7 +62,7 @@ export class SettingsService {
     await this.loaded
   }
   private async load() {
-    const next: AppSettings = { schemaVersion: 1, projects: {}, notifications: { ...defaultNotificationSettings } }
+    const next: AppSettings = { schemaVersion: 1, projects: {}, notifications: { ...defaultNotificationSettings }, browser: { ...defaultBrowserSettings } }
     try {
       if ((await stat(this.file)).size > 1024 * 1024)
         throw new Error('설정 파일이 너무 큽니다.')
@@ -81,6 +82,8 @@ export class SettingsService {
       }
       if (data.notifications !== undefined)
         next.notifications = validateNotificationSettings(data.notifications)
+      if (data.browser !== undefined)
+        next.browser = validateBrowserSettings(data.browser)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
@@ -120,10 +123,17 @@ export class SettingsService {
   }
 
   async updateNotifications(value: NotificationSettings): Promise<AppSettings> {
+    return this.updateGlobal({ notifications: validateNotificationSettings(value) })
+  }
+
+  async updateBrowser(value: BrowserSettings): Promise<AppSettings> {
+    return this.updateGlobal({ browser: validateBrowserSettings(value) })
+  }
+
+  private async updateGlobal(value: Partial<Pick<AppSettings, 'notifications' | 'browser'>>): Promise<AppSettings> {
     await this.ensureLoaded()
-    const validated = validateNotificationSettings(value)
     const operation = this.queue.catch(() => {}).then(async () => {
-      const next = { ...structuredClone(this.state), notifications: validated }
+      const next = { ...structuredClone(this.state), ...value }
       await mkdir(dirname(this.file), { recursive: true })
       await writeFile(`${this.file}.tmp`, JSON.stringify(next, null, 2), 'utf8')
       await rename(`${this.file}.tmp`, this.file)

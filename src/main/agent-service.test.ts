@@ -6,6 +6,28 @@ import { tmpdir } from 'node:os'
 import { AgentService } from './agent-service.ts'
 import type { AgentSession } from '../shared/types.ts'
 
+test('브라우저 MCP 설정을 새 대화의 백그라운드 서버에 전달하고 기존 턴은 유지한다', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'lite-agent-browser-'))
+  const config = { 'mcp_servers.lite_ide_browser': { command: '/runtime with spaces', args: ['--browser', 'chrome'], enabled: true } }
+  const service = new AgentService(join(directory, 'sessions.json'), () => {}, undefined, undefined, undefined,
+    async (workspace) => { assert.equal(workspace, directory); return config })
+  t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }) })
+  const calls: { method: string; params: Record<string, unknown> }[] = []
+  service.client.start = async () => {}
+  service.client.request = async <T>(method: string, params: Record<string, unknown>) => {
+    calls.push({ method, params })
+    return (method === 'thread/start' ? { thread: { id: 'browser-thread' } } : { turn: { id: 'turn' } }) as T
+  }
+  const input = { sessionId: 'session', workspace: directory, text: '화면 확인' }
+  await service.send(input)
+  assert.deepEqual(calls[0], { method: 'thread/start', params: {
+    cwd: directory, model: null, sandbox: 'danger-full-access', approvalPolicy: 'never', approvalsReviewer: 'user', config,
+  } })
+  service.client.onMessage({ method: 'turn/completed', params: { threadId: 'browser-thread', turn: { id: 'turn', status: 'completed' } } })
+  await service.send({ ...input, text: '이어서 확인' })
+  assert.deepEqual(calls.map((call) => call.method), ['thread/start', 'turn/start', 'turn/start'])
+})
+
 test('새 대화는 업데이트 완료 후 시작하고 기존 대화의 후속 입력은 업데이트하지 않는다', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'lite-agent-update-'))
   const calls: string[] = []

@@ -349,6 +349,10 @@ try {
   if (process.argv.includes('--settings-only')) {
     await setupFocusedTerminal()
     await checkSettingsLayout()
+    await page.getByRole('button', { name: '설정', exact: true }).click()
+    const settings = page.getByRole('dialog', { name: '설정', exact: true })
+    await checkBrowserSettings(settings)
+    await settings.getByRole('button', { name: '닫기', exact: true }).click()
     assert.deepEqual(errors, [])
     assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible()), false)
     console.log('설정 화면 숨김 UI 검증 통과')
@@ -967,6 +971,7 @@ try {
   await page.keyboard.press('Control+,')
   const settings = page.getByRole('dialog', { name: '설정', exact: true })
   await settings.getByRole('tab', { name: '일반', exact: true }).click()
+  await checkBrowserSettings(settings)
   await checkSettingsUpdate(settings)
   const notificationToggle = settings.getByRole('checkbox', { name: '데스크톱 알림 사용', exact: true })
   await notificationToggle.uncheck()
@@ -1619,7 +1624,7 @@ async function checkSettingsLayout() {
       for (const theme of ['light', 'dark']) {
         await settings.getByRole('tab', { name: '일반', exact: true }).click()
         await settings.getByRole('combobox', { name: '설정 테마', exact: true }).selectOption(theme)
-        for (const [tab, name] of [['general', '일반'], ['project', '프로젝트'], ['about', '프로그램 정보']]) {
+        for (const [tab, name] of [['general', '일반'], ['browser', '브라우저'], ['project', '프로젝트'], ['about', '프로그램 정보']]) {
           await settings.getByRole('tab', { name, exact: true }).click()
           const layout = await settings.evaluate((dialog) => {
             const content = dialog.querySelector('.settings-content')
@@ -1766,4 +1771,50 @@ async function checkQuestionDraft(first, second) {
   await tabs.getByRole('tab', { name: /관찰 세션/ }).click()
   assert.equal(await page.getByLabel('초안 보존 질문').inputValue(), '탭을 이동해도 유지할 답변')
   await tabs.getByRole('tab', { name: new RegExp(first.name) }).click()
+}
+
+async function checkBrowserSettings(settings) {
+  await settings.getByRole('tab', { name: '브라우저', exact: true }).click()
+  const select = settings.getByRole('combobox', { name: 'Codex 브라우저', exact: true })
+  await select.waitFor()
+  assert.equal(await select.inputValue(), 'chrome')
+  const before = await page.evaluate(() => window.desktop.getSettings())
+  await select.selectOption('msedge')
+  assert.deepEqual((await page.evaluate(() => window.desktop.getSettings())).browser, { browser: 'chrome' }, '선택만으로 저장하지 않습니다.')
+  await settings.getByRole('button', { name: '브라우저 설정 저장', exact: true }).click()
+  await settings.getByRole('status').filter({ hasText: '브라우저 설정을 저장했습니다.' }).waitFor()
+  assert.deepEqual((await page.evaluate(() => window.desktop.getSettings())).browser, { browser: 'msedge' })
+  await settings.getByRole('tab', { name: '프로그램 정보', exact: true }).click()
+  await settings.getByRole('tab', { name: '브라우저', exact: true }).click()
+  assert.equal(await select.inputValue(), 'msedge')
+  await app.evaluate(({ ipcMain }) => {
+    globalThis.browserCheckHandler = ipcMain._invokeHandlers.get('browser:check')
+    ipcMain.removeHandler('browser:check')
+    ipcMain.handle('browser:check', () => ({ ok: false, message: '테스트: 선택한 브라우저가 설치되어 있지 않습니다.' }))
+  })
+  try {
+    await settings.getByRole('button', { name: '브라우저 연결 확인', exact: true }).click()
+    await settings.getByRole('alert').filter({ hasText: '선택한 브라우저가 설치되어 있지 않습니다.' }).waitFor()
+    assert.equal(await select.inputValue(), 'msedge')
+  } finally {
+    await app.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler('browser:check')
+      ipcMain.handle('browser:check', globalThis.browserCheckHandler)
+      delete globalThis.browserCheckHandler
+    })
+  }
+  await select.selectOption('disabled')
+  await settings.getByRole('button', { name: '브라우저 설정 저장', exact: true }).click()
+  await settings.getByRole('status').filter({ hasText: '브라우저 설정을 저장했습니다.' }).waitFor()
+  assert.equal(await settings.getByRole('button', { name: '브라우저 연결 확인', exact: true }).isDisabled(), true)
+  await select.selectOption('chrome')
+  await settings.getByRole('button', { name: '브라우저 설정 저장', exact: true }).click()
+  await settings.getByRole('status').filter({ hasText: '브라우저 설정을 저장했습니다.' }).waitFor()
+  const after = await page.evaluate(() => window.desktop.getSettings())
+  assert.deepEqual(after.browser, { browser: 'chrome' })
+  assert.deepEqual(after.notifications, before.notifications)
+  assert.deepEqual(after.projects, before.projects)
+  await page.screenshot({ path: 'artifacts/browser-settings.png' })
+  await settings.getByRole('tab', { name: '일반', exact: true }).click()
+  console.log('브라우저 설정 검증 통과: Chrome 기본값, Edge·사용 안 함 저장, 재조회, 연결 실패 표시와 기존 설정 보존.')
 }

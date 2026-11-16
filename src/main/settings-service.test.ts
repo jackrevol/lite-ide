@@ -6,6 +6,35 @@ import { tmpdir } from 'node:os'
 import { SettingsService, validateDefaults } from './settings-service.ts'
 import { pathKey } from './git.ts'
 import { defaultNotificationSettings } from '../shared/notifications.ts'
+import { defaultBrowserSettings } from '../shared/browser.ts'
+
+test('브라우저 기본값은 Chrome이며 이전 설정을 이관하고 다른 설정과 함께 저장한다', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'lite-browser-settings-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const file = join(root, 'settings.json')
+  await writeFile(file, JSON.stringify({ schemaVersion: 1, projects: {} }), 'utf8')
+  const service = new SettingsService(file)
+  assert.deepEqual((await service.get()).browser, defaultBrowserSettings)
+  const defaults = { baseRef: 'HEAD', model: '한글 모델', effort: '' }
+  await Promise.all([
+    service.updateBrowser({ browser: 'msedge' }),
+    service.updateNotifications({ ...defaultNotificationSettings, volume: 42 }),
+    service.update(root, defaults),
+  ])
+  const saved = await new SettingsService(file).get()
+  assert.deepEqual(saved.browser, { browser: 'msedge' })
+  assert.equal(saved.notifications.volume, 42)
+  assert.deepEqual(saved.projects[pathKey(root)], defaults)
+  for (const value of [null, [], {}, { browser: 'firefox' }, { browser: '--malicious' }])
+    await assert.rejects(service.updateBrowser(value as never))
+  assert.deepEqual((await service.get()).browser, { browser: 'msedge' })
+  await service.updateBrowser({ browser: 'disabled' })
+  assert.equal((await new SettingsService(file).get()).browser.browser, 'disabled')
+  await mkdir(file + '.tmp')
+  await assert.rejects(service.updateBrowser({ browser: 'chrome' }))
+  assert.equal((await service.get()).browser.browser, 'disabled')
+  assert.notEqual((await readFile(file))[0], 0xef)
+})
 
 test('프로젝트별 설정을 직렬 저장하고 재시작 및 선택 프로젝트 초기화를 지원한다', async () => {
   const root = await mkdtemp(join(tmpdir(), 'lite-ide-settings-'))
