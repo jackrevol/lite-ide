@@ -39,7 +39,7 @@ jobs:
           - runner: [self-hosted, macOS, ARM64, lite-ide-mac]
             platform: mac
             arch: arm64
-          - runner: [self-hosted, macOS, ARM64, lite-ide-mac]
+          - runner: [macos-15-intel]
             platform: mac
             arch: x64
     runs-on: ${{ matrix.runner }}
