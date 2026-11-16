@@ -6,11 +6,9 @@ import { join } from 'node:path'
 const command = process.argv[2]
 if (command === 'metadata') {
   const pkg = JSON.parse(await readFile('package.json', 'utf8'))
-  const base = /^(\d+)\.(\d+)\.(\d+)$/.exec(pkg.version)
-  const run = Number(process.env.GITHUB_RUN_NUMBER)
-  if (!base || !Number.isSafeInteger(run) || run < 1)
-    throw new Error('올바른 기본 버전과 Actions 실행 번호가 필요합니다.')
-  const version = `${base[1]}.${base[2]}.${Number(base[3]) + run}`
+  const version = pkg.version
+  if (typeof version !== 'string' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version))
+    throw new Error('package.json 버전은 0.2.0과 같은 정식 버전 형식이어야 합니다.')
   const output = `version=${version}\ntag=v${version}\n`
   if (process.env.GITHUB_OUTPUT)
     await appendFile(process.env.GITHUB_OUTPUT, output, 'utf8')

@@ -1964,6 +1964,8 @@ dialog::backdrop {
   gap: 12px;
 }
 .settings-content input[type='checkbox'] { width: 14px; height: 14px; padding: 0; margin: 0; flex: 0 0 auto; }
+.browser-settings-panel .dialog-actions { flex-wrap: wrap; }
+.browser-check-result { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 150px; overflow: auto; }
 .settings-project > p { margin: 6px 0 12px; }
 .settings-project .base-branch-controls { align-items: center; }
 .settings-project .base-branch-controls label {

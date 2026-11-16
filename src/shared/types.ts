@@ -129,6 +129,8 @@ export interface DesktopApi {
   stopProcess?(input: StopProcessInput): Promise<WorkspaceProcessSnapshot>
   onTerminal(listener: (event: TerminalEvent) => void): () => void
   getSettings(): Promise<AppSettings>
+  updateBrowserSettings(settings: import('./browser').BrowserSettings): Promise<AppSettings>
+  checkBrowser(settings: import('./browser').BrowserSettings): Promise<import('./browser').BrowserCheck>
   updateNotificationSettings(settings: NotificationSettings): Promise<AppSettings>
   chooseNotificationSound(): Promise<CustomNotificationSound | null>
   previewNotificationSound(settings: NotificationSettings): Promise<void>
@@ -217,6 +219,7 @@ export interface AppSettings {
   schemaVersion: 1
   projects: Record<string, ProjectDefaults>
   notifications: NotificationSettings
+  browser: import('./browser').BrowserSettings
 }
 export type NotificationSound = 'chime' | 'bell' | 'glass' | 'pulse' | 'gentle' | 'custom'
 export interface CustomNotificationSound {

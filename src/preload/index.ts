@@ -40,6 +40,8 @@ const api: DesktopApi = {
     }
   },
   getSettings: () => ipcRenderer.invoke('settings:get'),
+  updateBrowserSettings: (settings) => ipcRenderer.invoke('settings:browser-update', settings),
+  checkBrowser: (settings) => ipcRenderer.invoke('browser:check', settings),
   updateNotificationSettings: (settings) => ipcRenderer.invoke('settings:notifications-update', settings),
   chooseNotificationSound: () => ipcRenderer.invoke('notifications:choose-sound'),
   previewNotificationSound: (settings) => ipcRenderer.invoke('notifications:preview', settings),

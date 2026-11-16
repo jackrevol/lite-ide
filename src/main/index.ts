@@ -11,7 +11,7 @@ import {
   powerSaveBlocker,
   shell,
 } from 'electron'
-import { basename, isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import {
   mkdir,
   readFile,
@@ -34,6 +34,8 @@ import {
   resolveWorktreePath,
 } from './git'
 import { SettingsService, validateDefaults } from './settings-service'
+import { BrowserService } from './browser-service'
+import type { BrowserSettings } from '../shared/browser'
 import { appInfo } from './app-info'
 import { AgentService } from './agent-service'
 import { prepareCodex } from './codex-update-service'
@@ -111,6 +113,20 @@ app.whenReady().then(() => {
   const settings = new SettingsService(
     join(app.getPath('userData'), 'settings.json'),
   )
+  const browsers = new BrowserService(join(app.getPath('userData'), 'browser-output'), {
+    command: process.execPath,
+    cli: join(dirname(require.resolve('@playwright/mcp/package.json')), 'cli.js')
+      .replace(/app\.asar([\\/])/, 'app.asar.unpacked$1'),
+  })
+  const browserConfig = async (workspace: string) => browsers.config((await settings.get()).browser, workspace)
+  ipcMain.handle('settings:browser-update', (event, value: BrowserSettings) => {
+    requireTerminalSender(event)
+    return settings.updateBrowser(value)
+  })
+  ipcMain.handle('browser:check', (event, value: BrowserSettings) => {
+    requireTerminalSender(event)
+    return browsers.check(value)
+  })
   resetAnnouncements = new ResetAnnouncementService((state) => {
     if (window && !window.isDestroyed()) window.webContents.send('codex:reset-announcements', state)
   }, (url, init) => net.fetch(url, init))
@@ -250,6 +266,7 @@ app.whenReady().then(() => {
         window.webContents.send('codex:usage-changed')
     },
     prepareCodex,
+    browserConfig,
   )
   terminals = new TerminalService(
     join(app.getPath('userData'), 'terminal-resume.json'),
@@ -271,7 +288,18 @@ app.whenReady().then(() => {
         return undefined
       if (resuming) return agents!.latestWorkspaceThread(input.workspace)
       await agents!.client.start()
-      return undefined
+      const { thread } = await agents!.client.request<{ thread: { id: string } }>('thread/start', {
+        cwd: input.workspace,
+        model: input.model || null,
+        sandbox: 'danger-full-access',
+        approvalPolicy: 'never',
+        approvalsReviewer: 'user',
+        config: {
+          ...await browserConfig(input.workspace),
+          ...(input.effort ? { model_reasoning_effort: input.effort } : {}),
+        },
+      })
+      return thread.id
     },
     async (threadId) => {
       await agents!.client.start()

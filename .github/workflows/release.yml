@@ -66,8 +66,6 @@ jobs:
           restore-keys: |
             electron-builder-v1-${{ runner.os }}-${{ matrix.arch }}-
       - run: npm ci --no-audit --no-fund
-      - name: Set build version
-        run: npm version "$RELEASE_VERSION" --no-git-tag-version --ignore-scripts
       - run: npm run build
       - name: Package installer
         env:

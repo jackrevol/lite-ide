@@ -53,6 +53,7 @@ export class AgentService {
   private emit: (session: AgentSession) => void
   private onUsageChanged: () => void
   private prepareNewSession: () => Promise<unknown>
+  private threadConfig: (workspace: string) => Promise<Record<string, unknown>>
 
   constructor(
     file: string,
@@ -60,11 +61,13 @@ export class AgentService {
     onDisconnect: (reason: string) => void = () => {},
     onUsageChanged: () => void = () => {},
     prepareNewSession: () => Promise<unknown> = async () => {},
+    threadConfig: (workspace: string) => Promise<Record<string, unknown>> = async () => ({}),
   ) {
     this.file = file
     this.emit = emit
     this.onUsageChanged = onUsageChanged
     this.prepareNewSession = prepareNewSession
+    this.threadConfig = threadConfig
     this.loaded = this.load()
     this.client.onMessage = (message) => this.handle(message)
     this.client.onDisconnect = (reason) => {
@@ -526,6 +529,7 @@ export class AgentService {
             sandbox: 'danger-full-access',
             approvalPolicy: 'never',
             approvalsReviewer: 'user',
+            ...(!session.threadId ? { config: await this.threadConfig(input.workspace) } : {}),
           },
         )
         session.threadId = result.thread.id
