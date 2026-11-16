@@ -33,16 +33,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-2025
+          - runner: [windows-2025]
             platform: win
             arch: x64
-          - os: macos-15
+          - runner: [self-hosted, macOS, ARM64, lite-ide-mac]
             platform: mac
             arch: arm64
-          - os: macos-15-intel
+          - runner: [self-hosted, macOS, ARM64, lite-ide-mac]
             platform: mac
             arch: x64
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     defaults:
       run:

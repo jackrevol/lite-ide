@@ -51,6 +51,7 @@ export class AgentService {
   >()
   private file: string
   private emit: (session: AgentSession) => void
+  private onRunningChanged: (running: boolean) => void
   private onUsageChanged: () => void
   private prepareNewSession: () => Promise<unknown>
   private threadConfig: (workspace: string) => Promise<Record<string, unknown>>
@@ -62,7 +63,9 @@ export class AgentService {
     onUsageChanged: () => void = () => {},
     prepareNewSession: () => Promise<unknown> = async () => {},
     threadConfig: (workspace: string) => Promise<Record<string, unknown>> = async () => ({}),
+    onRunningChanged: (running: boolean) => void = () => {},
   ) {
+    this.onRunningChanged = onRunningChanged
     this.file = file
     this.emit = emit
     this.onUsageChanged = onUsageChanged
@@ -143,7 +146,14 @@ export class AgentService {
     }
   }
 
+  private updateRunning() {
+    this.onRunningChanged(!this.closed && [...this.sessions.values()].some(
+      (session) => session.status === 'running',
+    ))
+  }
+
   private persist() {
+    this.updateRunning()
     const snapshot = JSON.stringify({
       sessions: [...this.sessions.values()],
       removalIntents: [...this.removalIntents],
@@ -165,6 +175,7 @@ export class AgentService {
   }
 
   private publish(session: AgentSession, activity = true) {
+    this.updateRunning()
     this.revisions.set(session.id, (this.revisions.get(session.id) ?? 0) + 1)
     if (activity) session.updatedAt = Date.now()
     this.emit(session)
@@ -1367,6 +1378,7 @@ export class AgentService {
 
   async close() {
     this.closed = true
+    this.updateRunning()
     this.client.stop()
     await Promise.allSettled([...this.observations.values(), ...this.inspections.values()])
     if (this.saveTimer) clearTimeout(this.saveTimer)
