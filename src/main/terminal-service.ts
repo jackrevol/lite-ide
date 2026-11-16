@@ -40,6 +40,7 @@ export class TerminalService {
   private resolveThread?: (input: TerminalOpen, resuming: boolean) => Promise<string | undefined>
   private interruptThread?: (threadId: string) => Promise<void>
   private attention?: (event: AttentionNotification) => void
+  private newSessionArgs?: (workspace: string) => Promise<string[]>
 
   constructor(
     file: string,
@@ -50,6 +51,7 @@ export class TerminalService {
     interruptThread?: (threadId: string) => Promise<void>,
     processes = new ProcessService(),
     attention?: (event: AttentionNotification) => void,
+    newSessionArgs?: (workspace: string) => Promise<string[]>,
   ) {
     this.file = file
     this.emit = emit
@@ -59,6 +61,7 @@ export class TerminalService {
     this.interruptThread = interruptThread
     this.processes = processes
     this.attention = attention
+    this.newSessionArgs = newSessionArgs
     this.loaded = Promise.all([
       readFile(file, 'utf8')
         .then((data) => {
@@ -195,6 +198,7 @@ export class TerminalService {
           input.workspace,
           '--dangerously-bypass-approvals-and-sandbox',
         )
+        if (!resuming && this.newSessionArgs) args.push(...await this.newSessionArgs(input.workspace))
         if (input.model) args.push('--model', input.model)
         if (input.effort)
           args.push(

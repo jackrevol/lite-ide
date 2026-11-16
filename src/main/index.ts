@@ -288,18 +288,9 @@ app.whenReady().then(() => {
         return undefined
       if (resuming) return agents!.latestWorkspaceThread(input.workspace)
       await agents!.client.start()
-      const { thread } = await agents!.client.request<{ thread: { id: string } }>('thread/start', {
-        cwd: input.workspace,
-        model: input.model || null,
-        sandbox: 'danger-full-access',
-        approvalPolicy: 'never',
-        approvalsReviewer: 'user',
-        config: {
-          ...await browserConfig(input.workspace),
-          ...(input.effort ? { model_reasoning_effort: input.effort } : {}),
-        },
-      })
-      return thread.id
+      // 첫 턴 전에는 rollout이 없을 수 있으므로 생성 직후의 ID를 resume에 넘기지 않습니다.
+      // 새 대화 생성과 첫 요청은 CLI가 함께 처리하고 브라우저 설정은 실행 인자로 전달합니다.
+      return undefined
     },
     async (threadId) => {
       await agents!.client.start()
@@ -312,6 +303,7 @@ app.whenReady().then(() => {
     },
     undefined,
     (event) => notifications.notify(event),
+    async (workspace) => browsers.terminalArgs((await settings.get()).browser, workspace),
   )
   let restoredTerminals = Promise.resolve()
   function requireTerminalSender(event: Electron.IpcMainInvokeEvent) {

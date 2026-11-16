@@ -202,7 +202,7 @@ test('Worktree 생성마다 원격을 갱신하고 추적·원격·HEAD 기준�
       assert.notEqual(git(project, 'rev-parse', 'refs/remotes/origin/main'), latest)
       const tree = await createWorktree(project, `feature/latest-${index}`, ref)
       assert.equal(git(tree.path, 'rev-parse', 'HEAD'), latest)
-      assert.equal(await readFile(join(tree.path, 'file.txt'), 'utf8'), `latest-${index}\n`)
+      assert.equal((await readFile(join(tree.path, 'file.txt'), 'utf8')).replace(/\r\n/g, '\n'), `latest-${index}\n`)
     }
     // 추적 설정이 없는 로컬 브랜치도 origin의 같은 이름 브랜치를 확인합니다.
     git(project, 'branch', '--no-track', 'main', original)

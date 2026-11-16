@@ -29,3 +29,14 @@ test('실행 파일이 없으면 연결 성공으로 표시하지 않고 오류�
   assert.match(result.message, /ENOENT/)
   assert.deepEqual(await service.check({ browser: 'disabled' }), { ok: false, message: '브라우저 자동 연결이 꺼져 있습니다.' })
 })
+
+test('CLI 브라우저 설정은 Windows 경로와 중첩 환경 변수를 TOML로 보존한다', () => {
+  const service = new BrowserService('C:\\한글 폴더\\output', { command: 'C:\\Program Files\\Lite IDE.exe', cli: 'C:\\앱\\cli.js' })
+  const args = service.terminalArgs({ browser: 'chrome' }, 'C:\\project')
+  assert.equal(args[0], '--config')
+  assert.ok(args[1].startsWith('mcp_servers.lite_ide_browser={'))
+  assert.ok(args[1].includes('"command"="C:\\\\Program Files\\\\Lite IDE.exe"'))
+  assert.ok(args[1].includes('"env"={"ELECTRON_RUN_AS_NODE"="1"}'))
+  assert.ok(args[1].includes('"enabled"=true'))
+  assert.ok(service.terminalArgs({ browser: 'disabled' }, '/project')[1].includes('"enabled"=false'))
+})

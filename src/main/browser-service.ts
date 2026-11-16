@@ -8,7 +8,7 @@ import { pathKey } from './git.ts'
 
 export const browserServerName = 'lite_ide_browser'
 
-// 개인 Codex 설정은 수정하지 않고, 새 대화의 서버 측 설정으로 전달합니다.
+// 개인 Codex 설정은 수정하지 않고 API 또는 CLI의 대화별 설정으로 전달합니다.
 export class BrowserService {
   private checking?: Promise<BrowserCheck>
   private directory: string
@@ -35,6 +35,18 @@ export class BrowserService {
         tool_timeout_sec: 60,
       },
     }
+  }
+
+  terminalArgs(value: BrowserSettings, workspace: string): string[] {
+    // CLI의 -c는 JSON 객체가 아닌 TOML 값을 받습니다. 경로와 문자열은 JSON 인용으로 보존합니다.
+    const toml = (value: unknown): string => {
+      if (Array.isArray(value)) return `[${value.map(toml).join(',')}]`
+      if (value !== null && typeof value === 'object')
+        return `{${Object.entries(value).map(([key, item]) => `${JSON.stringify(key)}=${toml(item)}`).join(',')}}`
+      if (typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') return JSON.stringify(value)
+      throw new Error('지원하지 않는 Codex 설정 값입니다.')
+    }
+    return Object.entries(this.config(value, workspace)).flatMap(([key, value]) => ['--config', `${key}=${toml(value)}`])
   }
 
   check(value: BrowserSettings): Promise<BrowserCheck> {

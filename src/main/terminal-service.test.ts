@@ -10,6 +10,39 @@ import { pathKey } from './git.ts'
 import type { TerminalEvent } from '../shared/types.ts'
 import type { AttentionNotification } from './notification-service.ts'
 
+test('새 대화는 resume 없이 브라우저 설정과 첫 요청을 전달하고 재개 시에는 반복하지 않는다', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'lite-fresh-bootstrap-'))
+  const launches: string[][] = []
+  const configurations: string[] = []
+  const factory: PtyFactory = (_file, args) => {
+    launches.push(args as string[])
+    let exit = (_event: { exitCode: number }) => {}
+    return { onData: () => ({ dispose() {} }), onExit: (receive: typeof exit) => { exit = receive; return { dispose() {} } },
+      write() {}, resize() {}, kill: () => exit({ exitCode: 0 }),
+    } as unknown as IPty
+  }
+  const file = join(directory, 'resume.json')
+  const service = new TerminalService(file, () => {}, factory, async () => '/codex',
+    async (_input, resuming) => resuming ? 'persisted-thread' : undefined,
+    undefined, undefined, undefined, async (workspace) => {
+      configurations.push(workspace)
+      return ['--config', 'mcp_servers.lite_ide_browser={enabled=false}']
+    })
+  t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }) })
+  const input = { taskId: 'fresh', workspace: directory, kind: 'codex' as const, cols: 80, rows: 24, prompt: '첫 요청', model: 'test-model', effort: 'high' }
+  await service.open(input)
+  assert.ok(!launches[0].includes('resume'))
+  assert.equal(launches[0].at(-1), input.prompt)
+  assert.ok(launches[0].includes('mcp_servers.lite_ide_browser={enabled=false}'))
+  assert.ok(launches[0].includes('model_reasoning_effort="high"'))
+  await service.open({ ...input, kind: 'shell' })
+  await service.open(input)
+  assert.deepEqual(launches[2].slice(0, 2), ['resume', 'persisted-thread'])
+  assert.ok(!launches[2].includes(input.prompt))
+  assert.ok(!launches[2].some((arg) => arg.startsWith('mcp_servers.')))
+  assert.deepEqual(configurations, [directory])
+})
+
 test('이미지 경로는 Codex 입력에 붙여넣기만 하고 전송·재연결·셸 입력을 하지 않는다', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'lite-terminal-images-'))
   const writes: string[] = []

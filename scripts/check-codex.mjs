@@ -55,7 +55,7 @@ try {
       ),
     }),
   )
-  if (process.argv.includes('--live') || process.argv.includes('--terminal')) {
+  if (process.argv.includes('--live') || process.argv.includes('--terminal') || process.argv.includes('--new-terminal')) {
     const sourceProject = join(fixture, 'project')
     await mkdir(sourceProject)
     const git = (...args) => execFileSync('git', ['-C', sourceProject, ...args], { windowsHide: true })
@@ -74,6 +74,39 @@ try {
       window.desktop.createWorktree(project.path, 'task/live-smoke', 'refs/heads/main'), project,
     )
     const model = status.models.find((entry) => entry.isDefault) ?? status.models[0]
+    if (process.argv.includes('--new-terminal')) {
+      const input = {
+        taskId: 'new-terminal-smoke', workspace: worktree.path, kind: 'codex', cols: 120, rows: 40,
+        model: model.id, effort: model.efforts.includes('low') ? 'low' : model.defaultEffort,
+        prompt: 'Reply exactly NEW_SESSION_OK. Do not use tools or change any files.',
+      }
+      await page.evaluate((input) => window.desktop.openTerminal(input), input)
+      let completed
+      let trusted = false
+      const deadline = Date.now() + 120000
+      while (Date.now() < deadline) {
+        const terminal = await page.evaluate(() => window.desktop.terminalSnapshot('new-terminal-smoke'))
+        assert.equal(terminal.running, true, terminal.output)
+        assert.doesNotMatch(terminal.output, /Failed to resume session|no rollout found|Error parsing/)
+        // 이 스크립트가 만든 임시 저장소만 신뢰합니다.
+        if (!trusted && /Trust and continue|Yes, I trust this folder/.test(terminal.output)) {
+          await page.evaluate(() => window.desktop.writeTerminal('new-terminal-smoke', '\r'))
+          trusted = true
+        }
+        completed = await page.evaluate(async (workspace) => (await window.desktop.listSessions(workspace))[0], worktree.path)
+        if (completed?.status === 'completed') break
+        await new Promise((resolve) => setTimeout(resolve, 500))
+      }
+      assert.equal(completed?.status, 'completed', JSON.stringify({ completed, terminal: await page.evaluate(() => window.desktop.terminalSnapshot('new-terminal-smoke')) }))
+      assert.ok(completed.messages.some((message) => message.kind === 'assistant' && message.text.includes('NEW_SESSION_OK')))
+      await page.evaluate(() => window.desktop.closeTerminal('new-terminal-smoke'))
+      await page.evaluate((input) => window.desktop.openTerminal(input), { ...input, prompt: undefined, threadId: completed.threadId })
+      await new Promise((resolve) => setTimeout(resolve, 8000))
+      const resumed = await page.evaluate(() => window.desktop.terminalSnapshot('new-terminal-smoke'))
+      assert.equal(resumed.running, true, resumed.output)
+      assert.doesNotMatch(resumed.output, /Failed to resume session|no rollout found|Error:/)
+      console.log('실제 Codex 새 터미널 첫 응답 및 동일 대화 재연결 확인 완료.')
+    }
     if (process.argv.includes('--terminal')) {
       await page.evaluate(async ({ workspace, model }) => {
         await window.desktop.sendMessage({
