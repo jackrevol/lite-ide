@@ -305,6 +305,14 @@ app.whenReady().then(() => {
     undefined,
     (event) => notifications.notify(event),
     async (workspace) => browsers.terminalArgs((await settings.get()).browser, workspace),
+    (taskId) => {
+      const manifest = attachments.manifestPath(taskId)
+      const server = { command: process.execPath,
+        args: [join(app.getAppPath(), 'resources', 'attachment-mcp.cjs'), manifest],
+        env: { ELECTRON_RUN_AS_NODE: '1' }, enabled: true }
+      const toml = `{command=${JSON.stringify(server.command)},args=${JSON.stringify(server.args)},env={ELECTRON_RUN_AS_NODE="1"},enabled=true}`
+      return { manifest, args: ['--config', `mcp_servers.lite_ide_attachments=${toml}`] }
+    },
   )
   let restoredTerminals = Promise.resolve()
   function requireTerminalSender(event: Electron.IpcMainInvokeEvent) {
@@ -391,16 +399,16 @@ app.whenReady().then(() => {
     requireTerminalSender(event)
     return attachments.discard(input)
   })
-  ipcMain.handle('attachments:preview', (event, target: AttachmentTarget, id: string) => {
+  ipcMain.handle('attachments:place', async (event, input: AttachmentSelection) => {
     requireTerminalSender(event)
-    return attachments.preview(target, id)
+    await requireAttachmentTarget(input)
+    await attachments.place(input, (references) => terminals!.pasteReferences(input.taskId, input.generation, references))
   })
   ipcMain.handle('attachments:insert', async (event, input: AttachmentSelection & { submit?: boolean }) => {
     requireTerminalSender(event)
     await requireAttachmentTarget(input)
     if (input.submit !== undefined && typeof input.submit !== 'boolean') throw new Error('올바른 전송 옵션이 아닙니다.')
-    await attachments.deliver(input, (files) => {
-      terminals!.pasteAttachments(input.taskId, input.generation, files)
+    await attachments.deliver(input, () => {
       if (input.submit) terminals!.write(input.taskId, '\r')
     })
   })

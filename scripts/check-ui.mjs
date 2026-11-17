@@ -82,96 +82,51 @@ async function checkFileAttachments(task) {
   const target = { taskId: task.id, generation: before.generation }
   const area = page.locator('.task-terminal-slot:not([hidden]) .attachment-area')
   const picker = area.locator('input[type="file"]')
-  const cards = area.getByRole('list', { name: '전송 대기 첨부 파일', exact: true }).getByRole('listitem')
-  const ready = async (count) => until(async () => await cards.count() === count &&
-    await area.locator('.attachment-description small').filter({ hasText: '전송 대기' }).count() === count, `첨부 ${count}개 준비`)
-  await page.locator('[aria-label="작업 터미널 입력"]:visible').focus()
-  await page.keyboard.type('FILE_REQUEST ')
-  await picker.setInputFiles([
-    { name: '한글 이미지.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') },
-    { name: '설명.md', mimeType: 'text/markdown', buffer: Buffer.from('# 첨부 설명\n<script>text only</script>') },
-    { name: 'data.csv', mimeType: 'text/csv', buffer: Buffer.from('name,value\n한글,1') },
-    { name: '문서.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-fixture') },
-    { name: 'archive.zip', mimeType: 'application/zip', buffer: Buffer.from([80, 75, 3, 4, 0]) },
-  ])
-  await ready(5)
-  const inputPreview = area.getByRole('region', { name: '입력에 추가될 내용', exact: true })
-  await inputPreview.getByText('터미널의 현재 커서 위치에 아래 순서로 삽입합니다.', { exact: false }).waitFor()
-  const staged = await page.evaluate((target) => window.desktop.listAttachments(target), target)
-  const paths = new Map(staged.map((file) => [file.name, file]))
-  const expectedInputs = ['한글 이미지.png', '설명.md', 'data.csv', '문서.pdf', 'archive.zip'].map((name) => {
-    const file = paths.get(name)
-    const quoted = JSON.stringify(file.path.replaceAll('\\', '/'))
-    return file.kind === 'image' ? quoted : ` ${quoted} `
-  })
-  assert.deepEqual(await inputPreview.locator('code').allTextContents(), expectedInputs)
-  await page.locator('.task-terminal-slot:not([hidden]) .terminal-host').evaluate((host) => {
-    const data = new DataTransfer()
-    data.items.add(new File([], 'folder'))
-    const event = new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data })
-    Object.defineProperty(event, 'dataTransfer', { value: { files: data.files, types: data.types,
-      items: [{ webkitGetAsEntry: () => ({ isDirectory: true }) }] } })
-    host.dispatchEvent(event)
-  })
-  await area.getByRole('alert').filter({ hasText: '폴더는 직접 첨부할 수 없습니다' }).waitFor()
-  assert.equal(await cards.count(), 5)
-  await area.getByRole('button', { name: '첨부 오류 닫기' }).click()
-  assert.equal((await snapshot(task.id)).output.includes('[Image #1]'), false, '첨부 준비는 PTY에 입력하지 않습니다.')
-  await area.getByRole('button', { name: '한글 이미지.png 미리보기', exact: true }).click()
-  const preview = page.getByRole('dialog', { name: '첨부 파일 미리보기', exact: true })
-  await preview.getByRole('img', { name: '한글 이미지.png' }).waitFor()
-  assert.ok((await preview.getByRole('img').getAttribute('src')).startsWith('data:image/png'))
-  await preview.getByRole('button', { name: '첨부 미리보기 닫기' }).click()
-  await area.getByRole('button', { name: '설명.md 미리보기', exact: true }).click()
-  await until(async () => (await preview.locator('pre').innerText()).includes('<script>text only</script>'), '텍스트 미리보기')
-  assert.equal(await preview.locator('script').count(), 0)
-  await page.keyboard.press('Escape')
-  await area.getByRole('button', { name: '문서.pdf 미리보기', exact: true }).click()
-  await preview.getByText('이 형식은 미리보기를 지원하지 않습니다. 파일은 요청에 첨부할 수 있습니다.').waitFor()
-  await preview.getByRole('button', { name: '첨부 미리보기 닫기' }).click()
-  await area.getByRole('button', { name: 'archive.zip 첨부 제거', exact: true }).click()
-  await ready(4)
-  for (const type of ['drop', 'drop', 'paste']) {
-    await page.locator('.task-terminal-slot:not([hidden]) .terminal-host').evaluate((host, { type, png }) => {
-      const data = new DataTransfer()
-      data.items.add(type === 'drop'
-        ? new File(['drop text'], 'drop.txt', { type: 'text/plain', lastModified: 42 })
-        : new File([Uint8Array.from(atob(png), (char) => char.charCodeAt(0))], '스크린샷.png', { type: 'image/png' }))
-      host.dispatchEvent(type === 'drop' ? new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data })
-        : new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }))
-    }, { type, png })
-    await ready(type === 'drop' ? 5 : 6)
-  }
-  // 같은 이름·크기·수정 시각이어도 내용이 다른 파일은 누락하지 않습니다.
-  await page.locator('.task-terminal-slot:not([hidden]) .terminal-host').evaluate((host) => {
-    const data = new DataTransfer()
-    data.items.add(new File(['swap text'], 'drop.txt', { type: 'text/plain', lastModified: 42 }))
-    host.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data }))
-  })
-  await ready(7)
-  await area.getByRole('button', { name: 'drop.txt 미리보기', exact: true }).nth(1).click()
-  await until(async () => await preview.locator('pre').innerText() === 'swap text', '같은 이름의 다른 파일 보존')
-  await preview.getByRole('button', { name: '첨부 미리보기 닫기' }).click()
-  await area.getByRole('button', { name: 'drop.txt 첨부 제거', exact: true }).nth(1).click()
-  await ready(6)
-  await app.evaluate(({ clipboard, nativeImage }, png) => {
-    globalThis.originalImageReader = clipboard.readImage
-    clipboard.readImage = () => nativeImage.createFromBuffer(Buffer.from(png, 'base64'))
-  }, png)
-  try {
-    await page.locator('[aria-label="작업 터미널 입력"]:visible').focus()
-    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+v' : 'Control+v')
-    await ready(7)
-  } finally { await app.evaluate(({ clipboard }) => { clipboard.readImage = globalThis.originalImageReader; delete globalThis.originalImageReader }) }
-  await picker.setInputFiles({ name: 'fake.png', mimeType: 'image/png', buffer: Buffer.from('not an image') })
-  await area.getByRole('alert').filter({ hasText: '이미지를 읽을 수 없습니다' }).waitFor()
-  await page.locator('[aria-label="작업 터미널 입력"]:visible').focus()
+  const input = page.locator('[aria-label="작업 터미널 입력"]:visible')
+  const ready = (count) => until(async () => {
+    const files = await page.evaluate((target) => window.desktop.listAttachments(target), target)
+    return files.length === count && files.every((file) => file.placed) && await area.getAttribute('aria-busy') === 'false'
+  }, `첨부 ${count}개 삽입`)
+  const type = async (text) => { await input.focus(); await page.keyboard.type(text) }
+  await type('before ')
+  await picker.setInputFiles({ name: '설명.md', mimeType: 'text/markdown', buffer: Buffer.from('# 첨부 설명\n<script>text only</script>') })
+  await ready(1)
+  await type(' between ')
+  await picker.setInputFiles({ name: '한글 이미지.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') })
+  await ready(2)
+  assert.deepEqual(await area.getByRole('list', { name: '첨부 번호와 파일명' }).getByRole('listitem').allTextContents(), ['[파일#1] 설명.md', '[파일#2] 한글 이미지.png'])
+  await type(' after')
+  await waitOutput(task.id, 'before [파일#1] between [파일#2] after')
+  const inserted = (await snapshot(task.id)).output
+  assert.equal(inserted.includes('/attachments/'), false)
+  assert.equal(inserted.includes('첨부 파일:'), false)
+  assert.equal(await area.getByRole('button', { name: '입력에 추가', exact: true }).count(), 0)
+  assert.equal(await area.locator('.attachment-card, .attachment-preview, .attachment-list').count(), 0)
+  assert.equal(await area.getByRole('button', { name: '목록 닫기', exact: true }).count(), 0)
+  await picker.setInputFiles({ name: '설명.md', mimeType: 'text/markdown', buffer: Buffer.from('# 첨부 설명\n<script>text only</script>') })
+  await ready(2)
+  await page.reload()
+  await readyTerminal()
+  await ready(2)
+  assert.equal((await snapshot(task.id)).generation, before.generation)
+  await page.screenshot({ path: 'artifacts/inline-attachments.png' })
+  await input.focus()
   await page.keyboard.press('Enter')
-  await area.getByRole('alert').filter({ hasText: '준비 중이거나 실패한 파일' }).waitFor()
-  assert.equal((await snapshot(task.id)).output.includes('FILE_ATTACHMENTS_READ:'), false)
-  await area.getByRole('button', { name: 'fake.png 첨부 제거' }).click()
-  if (await area.getByRole('button', { name: '첨부 오류 닫기' }).count())
-    await area.getByRole('button', { name: '첨부 오류 닫기' }).click()
+  await waitOutput(task.id, 'FILE_ATTACHMENTS_READ:1')
+  await waitOutput(task.id, 'IMAGE_FILES_READ:1')
+  await ready(0)
+  assert.equal(await area.getByRole('list', { name: '첨부 번호와 파일명' }).count(), 0)
+  // Delete/Backspace로 번호를 지운 이미지는 모델 입력에서도 제외됩니다.
+  await type('IGNORE_IMAGE ')
+  await picker.setInputFiles({ name: '지울 이미지.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') })
+  await ready(1)
+  const [image] = await page.evaluate((target) => window.desktop.listAttachments(target), target)
+  await input.focus()
+  for (const char of image.reference) await page.keyboard.press('Backspace')
+  await page.keyboard.press('Enter')
+  await ready(0)
+  await waitOutput(task.id, 'INLINE_COUNTS:0:0:IGNORE_IMAGE')
+  // 업로드 실패는 전송을 막고, 재시도는 표시를 한 번만 넣습니다.
   await app.evaluate(({ ipcMain }) => {
     globalThis.originalAttachmentStage = ipcMain._invokeHandlers.get('attachments:stage')
     ipcMain.removeHandler('attachments:stage')
@@ -180,54 +135,78 @@ async function checkFileAttachments(task) {
   try {
     await picker.setInputFiles({ name: 'retry.json', mimeType: 'application/json', buffer: Buffer.from('{"ready":true}') })
     await area.getByRole('alert').filter({ hasText: 'UPLOAD_RETRY_TEST' }).waitFor()
+    await input.focus(); await page.keyboard.press('Enter')
+    await area.getByRole('alert').filter({ hasText: '준비 중이거나 실패한 파일' }).waitFor()
   } finally { await app.evaluate(({ ipcMain }) => { ipcMain.removeHandler('attachments:stage'); ipcMain.handle('attachments:stage', globalThis.originalAttachmentStage); delete globalThis.originalAttachmentStage }) }
   await area.getByRole('button', { name: 'retry.json 첨부 재시도' }).click()
-  await ready(8)
-  await page.reload()
-  await readyTerminal()
-  await ready(8)
-  assert.equal((await snapshot(task.id)).generation, before.generation)
+  await ready(1)
+  await input.focus(); await page.keyboard.press('Enter')
+  await ready(0)
+  // 준비 중에 입력한 문장은 표시 뒤로 보존합니다.
   await app.evaluate(({ ipcMain }) => {
-    globalThis.originalAttachmentInsert = ipcMain._invokeHandlers.get('attachments:insert')
-    ipcMain.removeHandler('attachments:insert')
-    ipcMain.handle('attachments:insert', () => { throw new Error('ATTACHMENT_SEND_RETRY') })
+    globalThis.originalAttachmentStage = ipcMain._invokeHandlers.get('attachments:stage')
+    ipcMain.removeHandler('attachments:stage')
+    ipcMain.handle('attachments:stage', async (...args) => {
+      await new Promise((resolve) => setTimeout(resolve, 600))
+      return globalThis.originalAttachmentStage(...args)
+    })
   })
   try {
-    await area.getByRole('button', { name: '입력에 추가', exact: true }).click()
-    await area.getByRole('alert').filter({ hasText: 'ATTACHMENT_SEND_RETRY' }).waitFor()
-    assert.equal(await cards.count(), 8)
-  } finally { await app.evaluate(({ ipcMain }) => { ipcMain.removeHandler('attachments:insert'); ipcMain.handle('attachments:insert', globalThis.originalAttachmentInsert); delete globalThis.originalAttachmentInsert }) }
-  await page.screenshot({ path: 'artifacts/file-attachment-tray.png' })
-  await area.getByRole('button', { name: '입력에 추가', exact: true }).click()
-  await until(async () => await cards.count() === 0, '첨부 입력 반영')
-  assert.equal(await area.getByRole('region', { name: '입력에 추가될 내용', exact: true }).count(), 0)
-  await waitOutput(task.id, '[Image #3]')
-  const inserted = (await snapshot(task.id)).output
-  assert.ok(inserted.includes('설명.md') && inserted.includes('data.csv') && inserted.includes('문서.pdf'))
-  assert.equal(inserted.includes('FILE_ATTACHMENTS_READ:'), false)
-  await page.locator('[aria-label="작업 터미널 입력"]:visible').focus()
-  await page.keyboard.press('Enter')
-  await waitOutput(task.id, 'IMAGE_FILES_READ:3')
-  await waitOutput(task.id, 'FILE_ATTACHMENTS_READ:5')
-  await picker.setInputFiles({ name: 'auto.txt', mimeType: 'text/plain', buffer: Buffer.from('auto send') })
-  await ready(1)
-  await page.locator('[aria-label="작업 터미널 입력"]:visible').focus()
-  await page.keyboard.type('AUTO_ATTACH ')
-  await page.keyboard.press('Shift+Enter')
-  assert.equal(await cards.count(), 1)
-  assert.equal((await snapshot(task.id)).output.includes('FILE_ATTACHMENTS_READ:1'), false)
-  await page.keyboard.press('Enter')
-  await waitOutput(task.id, 'FILE_ATTACHMENTS_READ:1')
-  await until(async () => await cards.count() === 0, 'Enter 첨부 전송')
-  await assert.rejects(page.evaluate((target) => window.desktop.stageAttachments({ ...target,
-    generation: 'stale', files: [{ name: 'a.txt', data: new Uint8Array([65]) }],
-  }), target), /변경되었거나 종료/)
+    await type('PENDING ')
+    await picker.setInputFiles({ name: 'slow.txt', mimeType: 'text/plain', buffer: Buffer.from('slow') })
+    await type(' queued text')
+    await ready(1)
+    const [slow] = await page.evaluate((target) => window.desktop.listAttachments(target), target)
+    await waitOutput(task.id, `PENDING ${slow.reference} queued text`)
+    await input.focus(); await page.keyboard.press('Enter')
+    await ready(0)
+  } finally { await app.evaluate(({ ipcMain }) => { ipcMain.removeHandler('attachments:stage'); ipcMain.handle('attachments:stage', globalThis.originalAttachmentStage); delete globalThis.originalAttachmentStage }) }
+  await app.evaluate(({ clipboard, nativeImage }, png) => {
+    globalThis.originalImageReader = clipboard.readImage
+    clipboard.readImage = () => nativeImage.createFromBuffer(Buffer.from(png, 'base64'))
+  }, png)
+  try {
+    await input.focus()
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+v' : 'Control+v')
+    await page.keyboard.type(' clipboard tail')
+    await ready(1)
+    const [image] = await page.evaluate((target) => window.desktop.listAttachments(target), target)
+    await waitOutput(task.id, `${image.reference} clipboard tail`)
+    await input.focus(); await page.keyboard.press('Enter')
+    await ready(0)
+  } finally { await app.evaluate(({ clipboard }) => { clipboard.readImage = globalThis.originalImageReader; delete globalThis.originalImageReader }) }
+  for (const type of ['drop', 'paste']) {
+    await page.locator('.task-terminal-slot:not([hidden]) .terminal-host').evaluate((host, { type, png }) => {
+      const data = new DataTransfer()
+      data.items.add(new File([Uint8Array.from(atob(png), (char) => char.charCodeAt(0))], `${type}.png`, { type: 'image/png' }))
+      host.dispatchEvent(type === 'drop' ? new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data })
+        : new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }))
+    }, { type, png })
+    await ready(type === 'drop' ? 1 : 2)
+  }
+  await input.focus(); await page.keyboard.press('Enter')
+  await waitOutput(task.id, 'IMAGE_FILES_READ:2')
+  await ready(0)
+  // 업로드 직후 새로고침되어 표시를 넣지 못했으면 복원 시 한 번만 삽입합니다.
+  await app.evaluate(({ ipcMain }) => {
+    globalThis.originalAttachmentPlace = ipcMain._invokeHandlers.get('attachments:place')
+    ipcMain.removeHandler('attachments:place')
+    ipcMain.handle('attachments:place', () => { throw new Error('INLINE_PLACE_RETRY') })
+  })
+  try {
+    await picker.setInputFiles({ name: 'restore-inline.txt', mimeType: 'text/plain', buffer: Buffer.from('restore') })
+    await area.getByRole('alert').filter({ hasText: 'INLINE_PLACE_RETRY' }).waitFor()
+  } finally { await app.evaluate(({ ipcMain }) => { ipcMain.removeHandler('attachments:place'); ipcMain.handle('attachments:place', globalThis.originalAttachmentPlace); delete globalThis.originalAttachmentPlace }) }
+  await page.reload(); await readyTerminal(); await ready(1)
+  const [restored] = await page.evaluate((target) => window.desktop.listAttachments(target), target)
+  assert.equal(restored.placed, true)
+  await waitOutput(task.id, restored.reference)
+  await input.focus(); await page.keyboard.press('Enter')
+  await ready(0)
+  await assert.rejects(page.evaluate((target) => window.desktop.stageAttachments({ ...target, generation: 'stale', files: [{ name: 'a.txt', data: new Uint8Array([65]) }] }), target), /변경되었거나 종료/)
   assert.equal((await snapshot(task.id)).generation, before.generation)
-  const remaining = await page.evaluate((target) => window.desktop.listAttachments(target), target)
-  assert.equal(remaining.length, 0)
-  console.log('파일 첨부 검증 통과: 이미지·문서·CSV·압축 파일, 썸네일·미리보기·제거·중복 방지, 실패 재시도·초안 복원·Enter 전송·입력만 추가·PTY 유지.')
+  console.log('파일·이미지 인라인 첨부 검증 통과: 문장 중간 번호 삽입, 경로·설명 미삽입, 원본 읽기, 이미지 표시 삭제 시 제외, 준비 중 입력 보존, 중복 방지, 재시도, 초안 복원.')
 }
-
 async function command(text) {
   await page.locator('[aria-label="작업 터미널 입력"]:visible').focus()
   await page.keyboard.type(text)
@@ -367,6 +346,25 @@ try {
     assert.deepEqual(errors, [])
     assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible()), false)
     console.log('설정 화면 숨김 UI 검증 통과')
+  } else if (process.argv.includes('--attachments-only')) {
+    const task = await setupFocusedTerminal()
+    await checkFileAttachments(task)
+    await openTaskCreation()
+    const initialDialog = page.getByRole('dialog', { name: '새 작업', exact: true })
+    const firstPrompt = initialDialog.getByRole('textbox', { name: '첫 요청', exact: true })
+    await firstPrompt.fill('INITIAL ')
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=='
+    await initialDialog.locator('input[type="file"]').setInputFiles([
+      { name: 'initial.md', mimeType: 'text/markdown', buffer: Buffer.from('initial') },
+      { name: 'initial.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') },
+    ])
+    await until(async () => await firstPrompt.inputValue() === 'INITIAL [파일#1][파일#2]', '첫 요청 문장 속 파일·이미지 삽입')
+    await firstPrompt.fill('')
+    await until(async () => await initialDialog.getByRole('button', { name: '만들기', exact: true }).isEnabled(), '표시 삭제 후 초안 생성 선택')
+    await initialDialog.getByRole('button', { name: '취소', exact: true }).click()
+    await initialDialog.waitFor({ state: 'detached' })
+    assert.deepEqual(errors, [])
+    assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible()), false)
   } else if (process.argv.includes('--cursor-only') || process.argv.includes('--compact-only')) {
     const task = await setupFocusedTerminal()
     if (process.argv.includes('--compact-only')) {
@@ -1173,8 +1171,8 @@ async function checkStartupFlow() {
         { name: '첫 요청 설명.md', mimeType: 'text/markdown', buffer: Buffer.from('초기 첨부 내용') },
         { name: '첫 이미지.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') },
       ])
-      await until(async () => await dialog.locator('.attachment-description small').filter({ hasText: '전송 대기' }).count() === 2, '초기 첨부 준비')
-      assert.ok((await dialog.locator('.initial-request-preview pre').textContent()).includes('첫 요청 설명.md'))
+      await until(async () => (await dialog.getByRole('textbox', { name: '첫 요청', exact: true }).inputValue()).includes('[파일#1][파일#2]') && await dialog.locator('.attachment-area').getAttribute('aria-busy') === 'false', '초기 첨부 준비')
+      assert.equal(await dialog.locator('.initial-request-preview, .attachment-card, .attachment-preview').count(), 0)
       assert.equal(await dialog.getByRole('button', { name: '입력에 추가', exact: true }).count(), 0)
       await page.screenshot({ path: 'artifacts/initial-attachments.png' })
     }

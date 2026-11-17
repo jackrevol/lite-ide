@@ -3,9 +3,8 @@ import type { TerminalSnapshot, CodexStatus, Project, Worktree } from '../../../
 import type { WorkspaceTask } from '../lib/workspace-state'
 import { Button } from './ui/button'
 import { BaseBranchSelect, useBranches } from './BaseBranchSelect'
-import { AttachmentTray } from './AttachmentTray'
+import { AttachmentControls } from './AttachmentControls'
 import { useTerminalAttachments } from '../lib/use-terminal-attachments'
-import { initialAttachmentPrompt } from '../../../shared/attachments'
 
 export function NewTaskDialog({
   project,
@@ -31,15 +30,24 @@ export function NewTaskDialog({
   const dialog = useRef<HTMLDialogElement>(null)
   const [name, setName] = useState('')
   const [prompt, setPrompt] = useState('')
+  const promptInput = useRef<HTMLTextAreaElement>(null)
+  const promptSelection = useRef({ start: 0, end: 0 })
   const attachmentTarget = useRef<TerminalSnapshot | null>({ taskId: crypto.randomUUID(), generation: 'initial',
     kind: 'codex', running: true, workspace: project.path, output: '', sequence: 0, cols: 80, rows: 24 })
-  const attachments = useTerminalAttachments(attachmentTarget, true)
+  const attachments = useTerminalAttachments(attachmentTarget, true, (attachment) => {
+    const { start, end } = promptSelection.current
+    promptSelection.current = { start: start + attachment.reference.length, end: start + attachment.reference.length }
+    setPrompt((previous) => previous.slice(0, start) + attachment.reference + previous.slice(end))
+    requestAnimationFrame(() => {
+      promptInput.current?.focus()
+      promptInput.current?.setSelectionRange(promptSelection.current.start, promptSelection.current.end)
+    })
+  })
   const attachmentActions = useRef(attachments)
   attachmentActions.current = attachments
   const retained = useRef(false)
   const files = attachments.drafts.flatMap((draft) => draft.attachment ? [draft.attachment] : [])
-  const firstPrompt = initialAttachmentPrompt(prompt, files)
-  const hasRequest = !!prompt.trim() || attachments.drafts.length > 0
+  const hasRequest = !!prompt.trim()
   const attachmentsReady = attachments.drafts.every((draft) => draft.phase === 'ready')
   useEffect(() => () => {
     if (!retained.current) for (const draft of attachmentActions.current.draftsRef.current) void attachmentActions.current.remove(draft.id)
@@ -99,8 +107,8 @@ export function NewTaskDialog({
           model,
           effort,
           terminalKind: 'codex',
-          initialPrompt: firstPrompt || undefined,
-          initialImages: files.filter((file) => file.kind === 'image').map((file) => file.path),
+          initialPrompt: prompt || undefined,
+
         }
       }
       if (files.length && !retained.current) {
@@ -178,10 +186,13 @@ export function NewTaskDialog({
           <label>
             첫 요청
             <textarea
+              ref={promptInput}
+              readOnly={attachments.drafts.some((draft) => draft.phase === 'loading')}
               aria-label="첫 요청"
               placeholder="Codex에게 요청할 내용을 입력하세요. 비워 두면 초안으로 만듭니다."
               value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
+              onChange={(event) => { setPrompt(event.target.value); promptSelection.current = { start: event.target.selectionStart, end: event.target.selectionEnd } }}
+              onSelect={(event) => { if (!event.currentTarget.readOnly) promptSelection.current = { start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd } }}
               onPaste={(event) => { const files = Array.from(event.clipboardData.files); if (files.length) { event.preventDefault(); void attachments.addFiles(files) } }}
               rows={4}
             />
@@ -189,12 +200,8 @@ export function NewTaskDialog({
           <div onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault() }}
             onDrop={(event) => { event.preventDefault(); if (!pending && !created.current) void attachments.addFiles(Array.from(event.dataTransfer.files)) }}
             onPaste={(event) => { const files = Array.from(event.clipboardData.files); if (files.length) { event.preventDefault(); void attachments.addFiles(files) } }}>
-            <AttachmentTray attachments={attachments} disabled={pending || !!created.current} initial onInserted={() => {}} />
+            <AttachmentControls attachments={attachments} disabled={pending || !!created.current} onInserted={() => {}} />
           </div>
-          {files.length > 0 && <details className="initial-request-preview" open>
-            <summary>첫 요청 미리보기</summary>
-            <pre>{firstPrompt}</pre>
-          </details>}
           <div className="task-model-fields">
             <label>
               모델

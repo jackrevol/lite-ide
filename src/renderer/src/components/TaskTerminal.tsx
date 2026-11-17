@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { ChevronDown, ChevronUp, Search, X } from 'lucide-react'
-import { AttachmentTray } from './AttachmentTray'
+import { AttachmentControls } from './AttachmentControls'
 import { useTerminalAttachments } from '../lib/use-terminal-attachments'
 import './TaskTerminal.css'
 import '@xterm/xterm/css/xterm.css'
@@ -31,8 +31,17 @@ export function TaskTerminal({
   const terminal = useRef<Terminal | null>(null)
   const readySnapshot = useRef<TerminalSnapshot | null>(null)
   const attachments = useTerminalAttachments(readySnapshot)
+  const queuedInput = useRef<string[]>([])
+  const clipboardPending = useRef(false)
+  const dispatchInput = useRef<(data: string) => void>(() => {})
   const attachmentActions = useRef(attachments)
   attachmentActions.current = attachments
+  const flushQueuedInput = () => {
+    if (clipboardPending.current || attachmentActions.current.draftsRef.current.some((draft) => draft.phase === 'loading')) return
+    const queued = queuedInput.current.splice(0)
+    for (const data of queued) dispatchInput.current(data)
+  }
+  useEffect(flushQueuedInput, [attachments.drafts])
   const searchInput = useRef<HTMLInputElement>(null)
   const searchQuery = useRef('')
   const searchIndex = useRef(-1)
@@ -124,7 +133,11 @@ export function TaskTerminal({
       for (const chunk of data.match(/[\s\S]{1,16384}/gu) ?? [])
         void window.desktop.writeTerminal(task.id, chunk).catch(report)
     }
-    const input = term.onData((data) => {
+    const handleInput = (data: string) => {
+      if (clipboardPending.current || attachmentActions.current.draftsRef.current.some((draft) => draft.phase === 'loading')) {
+        queuedInput.current.push(data)
+        return
+      }
       if (/[\r\x03]/.test(data)) attachmentActions.current.setNotice('')
       // xterm이 한글 조합을 먼저 확정한 뒤 내보내는 Enter만 수정 키 시퀀스로 바꿉니다.
       if (data === '\r' && modifiedEnter) {
@@ -134,7 +147,9 @@ export function TaskTerminal({
       } else if (task.terminalKind === 'codex' && data === '\r' && attachmentActions.current.draftsRef.current.length) {
         void attachmentActions.current.insert(true)
       } else if (!attachmentActions.current.delivering.current) write(data)
-    })
+    }
+    dispatchInput.current = handleInput
+    const input = term.onData(handleInput)
     const parsed = term.onWriteParsed(() => {
       if (!searchQuery.current) return
       clearTimeout(searchTimer)
@@ -207,12 +222,15 @@ export function TaskTerminal({
         ) {
           event.preventDefault()
           if (task.terminalKind === 'codex' && ready?.running) {
+            if (clipboardPending.current) return false
+            clipboardPending.current = true
             void attachmentActions.current.pasteClipboard().then(async (handled) => {
               if (!disposed && !handled) {
                 const text = await navigator.clipboard.readText()
-                if (!disposed) term.paste(text)
+                if (!disposed) { clipboardPending.current = false; term.paste(text) }
               }
             }).catch((cause) => { if (!disposed) attachmentActions.current.setError(cause instanceof Error ? cause.message : String(cause)) })
+              .finally(() => { clipboardPending.current = false; if (!disposed) flushQueuedInput() })
             return false
           }
           void navigator.clipboard
@@ -309,6 +327,9 @@ export function TaskTerminal({
       })
     return () => {
       disposed = true
+      dispatchInput.current = () => {}
+      queuedInput.current = []
+      clipboardPending.current = false
       host.current?.removeAttribute('data-terminal-ready')
       observer.disconnect()
       if (resizeTimer) clearTimeout(resizeTimer)
@@ -389,7 +410,7 @@ export function TaskTerminal({
         <div className="terminal-starting" role="status">Codex 업데이트 확인 및 터미널 시작 중…</div>
       )}
       <div className="terminal-host" ref={host} aria-label="작업 터미널" />
-      {task.terminalKind === 'codex' && <AttachmentTray attachments={attachments}
+      {task.terminalKind === 'codex' && <AttachmentControls attachments={attachments}
         disabled={starting || exited !== null} onInserted={() => terminal.current?.focus()} />}
       {(error || exited !== null) && (
         <div className="terminal-notice" role={error ? 'alert' : 'status'}>

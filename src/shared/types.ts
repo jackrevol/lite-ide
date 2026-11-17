@@ -1,4 +1,4 @@
-import type { Attachment, AttachmentPreview, AttachmentSelection, AttachmentTarget, StageAttachmentsInput } from './attachments'
+import type { Attachment, AttachmentSelection, AttachmentTarget, StageAttachmentsInput } from './attachments'
 
 export interface Project {
   path: string
@@ -123,8 +123,8 @@ export interface DesktopApi {
   listAttachments(target: AttachmentTarget): Promise<Attachment[]>
   stageClipboardAttachment(target: AttachmentTarget): Promise<Attachment[]>
   discardAttachments(input: AttachmentSelection): Promise<void>
+  placeAttachments(input: AttachmentSelection): Promise<void>
   insertAttachments(input: AttachmentSelection & { submit?: boolean }): Promise<void>
-  previewAttachment(target: AttachmentTarget, id: string): Promise<AttachmentPreview>
   resizeTerminal(taskId: string, cols: number, rows: number): Promise<void>
   closeTerminal(taskId: string): Promise<void>
   terminalSnapshot(taskId: string): Promise<TerminalSnapshot | null>

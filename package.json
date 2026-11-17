@@ -1,6 +1,6 @@
 {
   "name": "lite-ide",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "A minimal desktop workspace for Codex",
   "author": "jackrevol",
@@ -63,6 +63,7 @@
     "files": [
       "out/**/*",
       "resources/icon.png",
+      "resources/attachment-mcp.cjs",
       "resources/icon.ico",
       "package.json",
       "LICENSE",

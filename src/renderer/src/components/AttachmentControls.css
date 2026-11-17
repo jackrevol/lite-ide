@@ -1,0 +1,10 @@
+.attachment-area { flex: 0 0 auto; min-width: 0; border-top: 1px solid var(--border); }
+.attachment-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 3px 8px; color: var(--muted-foreground); font-size: 10px; }
+.attachment-progress { display: inline-flex; align-items: center; gap: 4px; }
+.attachment-notice { min-width: 0; overflow-wrap: anywhere; }
+.attachment-error { display: flex; align-items: center; gap: 6px; padding: 4px 8px; color: #d8847b; font-size: 10px; }
+.attachment-error > span { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.attachment-references { display: flex; flex: 1; min-width: 0; gap: 12px; margin: 0; padding: 0; overflow-x: auto; list-style: none; }
+.attachment-references li { display: flex; flex: 0 0 auto; align-items: baseline; gap: 4px; max-width: 240px; }
+.attachment-reference { flex-shrink: 0; color: var(--foreground); font-family: var(--font-mono); }
+.attachment-filename { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

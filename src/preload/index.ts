@@ -25,8 +25,8 @@ const api: DesktopApi = {
   listAttachments: (target) => ipcRenderer.invoke('attachments:list', target),
   stageClipboardAttachment: (target) => ipcRenderer.invoke('attachments:clipboard', target),
   discardAttachments: (input) => ipcRenderer.invoke('attachments:discard', input),
+  placeAttachments: (input) => ipcRenderer.invoke('attachments:place', input),
   insertAttachments: (input) => ipcRenderer.invoke('attachments:insert', input),
-  previewAttachment: (target, id) => ipcRenderer.invoke('attachments:preview', target, id),
   resizeTerminal: (id, cols, rows) =>
     ipcRenderer.invoke('terminal:resize', id, cols, rows),
   closeTerminal: (id) => ipcRenderer.invoke('terminal:close', id),

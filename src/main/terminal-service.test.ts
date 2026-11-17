@@ -27,7 +27,7 @@ test('새 대화는 resume 없이 브라우저 설정과 첫 요청을 전달하
     undefined, undefined, undefined, async (workspace) => {
       configurations.push(workspace)
       return ['--config', 'mcp_servers.lite_ide_browser={enabled=false}']
-    })
+    }, () => ({ manifest: '/attachments.json', args: ['--config', 'mcp_servers.lite_ide_attachments={enabled=true}'] }))
   t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }) })
   const input = { taskId: 'fresh', workspace: directory, kind: 'codex' as const, cols: 80, rows: 24, prompt: '첫 요청', images: ['C:/한글 폴더/이미지.png', '/second.png'], model: 'test-model', effort: 'high' }
   await service.open(input)
@@ -41,11 +41,13 @@ test('새 대화는 resume 없이 브라우저 설정과 첫 요청을 전달하
   assert.deepEqual(launches[2].slice(0, 2), ['resume', 'persisted-thread'])
   assert.ok(!launches[2].includes(input.prompt))
   assert.ok(!launches[2].includes('--image'))
-  assert.ok(!launches[2].some((arg) => arg.startsWith('mcp_servers.')))
+  assert.ok(!launches[2].some((arg) => arg.startsWith('mcp_servers.lite_ide_browser')))
+  assert.ok(launches[0].includes('mcp_servers.lite_ide_attachments={enabled=true}'))
+  assert.ok(launches[2].includes('mcp_servers.lite_ide_attachments={enabled=true}'))
   assert.deepEqual(configurations, [directory])
 })
 
-test('이미지 경로는 Codex 입력에 붙여넣기만 하고 전송·재연결·셸 입력을 하지 않는다', async (t) => {
+test('파일·이미지 참조 번호만 입력하고 전송·재연결·셸 입력을 하지 않는다', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'lite-terminal-images-'))
   const writes: string[] = []
   let exit = (_event: { exitCode: number }) => {}
@@ -57,18 +59,12 @@ test('이미지 경로는 Codex 입력에 붙여넣기만 하고 전송·재연�
   const service = new TerminalService(join(directory, 'resume.json'), () => {}, factory, async () => '/codex')
   t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }) })
   const target = await service.open({ taskId: 'images', workspace: directory, kind: 'codex', cols: 80, rows: 24 })
-  service.pasteAttachments(target.taskId, target.generation, [
-    { path: '/한글 폴더/a.png', kind: 'image' }, { path: 'C:\\Users\\Test User\\b.png', kind: 'image' },
-    { path: '/문서 폴더/내용.md', kind: 'file' },
-  ])
-  assert.deepEqual(writes, ['\x1b[200~"/한글 폴더/a.png"\x1b[201~\x1b[200~"C:/Users/Test User/b.png"\x1b[201~\x1b[200~ "/문서 폴더/내용.md" \x1b[201~'])
-  assert.equal(writes[0].includes('\r'), false)
-  assert.equal(writes[0].includes('\n'), false)
-  assert.throws(() => service.pasteImages(target.taskId, 'old-generation', ['/a.png']), /변경되었거나 종료/)
-  assert.throws(() => service.pasteImages(target.taskId, target.generation, ['/a.png\nmalicious']), /문자/)
-  await service.open({ taskId: 'images', workspace: directory, kind: 'shell', cols: 80, rows: 24 })
-  const shell = service.snapshot('images')!
-  assert.throws(() => service.pasteImages(shell.taskId, shell.generation, ['/a.png']), /Codex 터미널/)
+  service.pasteReferences(target.taskId, target.generation, ['[파일#1]', '[파일#2]'])
+  assert.deepEqual(writes, ['\x1b[200~[파일#1][파일#2]\x1b[201~'])
+  assert.throws(() => service.pasteReferences(target.taskId, 'old-generation', ['[파일#1]']), /변경되었거나 종료/)
+  assert.throws(() => service.pasteReferences(target.taskId, target.generation, ['[파일#1]\r']), /올바른 첨부/)
+  const shell = await service.open({ taskId: 'images', workspace: directory, kind: 'shell', cols: 80, rows: 24 })
+  assert.throws(() => service.pasteReferences(shell.taskId, shell.generation, ['[파일#1]']), /Codex 터미널/)
   assert.equal(writes.length, 1)
 })
 

@@ -1,5 +1,4 @@
 import * as pty from 'node-pty'
-import { attachmentInput } from '../shared/attachments.ts'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { prepareCodex } from './codex-update-service.ts'
@@ -41,6 +40,7 @@ export class TerminalService {
   private resolveThread?: (input: TerminalOpen, resuming: boolean) => Promise<string | undefined>
   private interruptThread?: (threadId: string) => Promise<void>
   private attention?: (event: AttentionNotification) => void
+  private attachmentSession?: (taskId: string) => { args: string[]; manifest: string }
   private newSessionArgs?: (workspace: string) => Promise<string[]>
 
   constructor(
@@ -53,6 +53,7 @@ export class TerminalService {
     processes = new ProcessService(),
     attention?: (event: AttentionNotification) => void,
     newSessionArgs?: (workspace: string) => Promise<string[]>,
+    attachmentSession?: (taskId: string) => { args: string[]; manifest: string },
   ) {
     this.file = file
     this.emit = emit
@@ -63,6 +64,7 @@ export class TerminalService {
     this.processes = processes
     this.attention = attention
     this.newSessionArgs = newSessionArgs
+    this.attachmentSession = attachmentSession
     this.loaded = Promise.all([
       readFile(file, 'utf8')
         .then((data) => {
@@ -153,6 +155,7 @@ export class TerminalService {
     let binary: string
     let fixture = false
     if (input.kind === 'codex') {
+      const attachmentSession = this.attachmentSession?.(input.taskId)
       binary = await this.codex()
       const key = pathKey(input.workspace)
       const resuming = this.resumed.has(key) || !!input.threadId || this.threads.has(key)
@@ -168,6 +171,7 @@ export class TerminalService {
             ? ''
             : (input.prompt ?? ''),
           JSON.stringify(resuming ? [] : (input.images ?? [])),
+          attachmentSession?.manifest ?? '',
         )
       } else {
         let threadId = input.threadId ?? this.threads.get(key)
@@ -202,6 +206,7 @@ export class TerminalService {
           input.workspace,
           '--dangerously-bypass-approvals-and-sandbox',
         )
+        if (attachmentSession) args.push(...attachmentSession.args)
         if (!resuming && this.newSessionArgs) args.push(...await this.newSessionArgs(input.workspace))
         if (input.model) args.push('--model', input.model)
         if (input.effort)
@@ -401,18 +406,11 @@ export class TerminalService {
     if (terminal.kind !== 'codex') throw new Error('파일은 Codex 터미널에서 첨부할 수 있습니다.')
   }
 
-  pasteImages(id: string, generation: string, paths: string[]) {
-    this.pasteAttachments(id, generation, paths.map((path) => ({ path, kind: 'image' })))
-  }
-
-  pasteAttachments(id: string, generation: string, files: { path: string; kind: 'image' | 'file' }[]) {
+  pasteReferences(id: string, generation: string, references: string[]) {
     this.requireAttachmentTarget(id, generation)
-    // 각 경로를 별도 붙여넣기로 전달해야 Codex가 실제 이미지 첨부로 인식합니다.
-    // Enter는 보내지 않아 작성 중인 요청을 그대로 유지합니다.
-    for (const { path } of files) {
-      if (/[\x00-\x1f\x7f]/.test(path)) throw new Error('파일 경로에 사용할 수 없는 문자가 있습니다.')
-    }
-    this.write(id, files.map((file) => `\x1b[200~${attachmentInput(file)}\x1b[201~`).join(''))
+    if (!references.length || references.some((reference) => !/^\[파일#\d+\]$/.test(reference)))
+      throw new Error('올바른 첨부 표시가 아닙니다.')
+    this.write(id, `\x1b[200~${references.join('')}\x1b[201~`)
   }
 
   resize(id: string, cols: number, rows: number) {

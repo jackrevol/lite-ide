@@ -12,6 +12,17 @@ let images = []
 let files = []
 const prompt = () => process.stdout.write('codex> ')
 function run(command) {
+  if (process.argv[5] && /\[파일#\d+\]/.test(command)) {
+    const refs = JSON.parse(readFileSync(process.argv[5], 'utf8')).files
+    for (const reference of new Set(command.match(/\[파일#\d+\]/g))) {
+      const file = refs[reference]
+      if (!file) throw new Error(`알 수 없는 첨부: ${reference}`)
+      readFileSync(file.path)
+      if (file.kind === 'image') images.push(file.path)
+      else files.push(file.path)
+    }
+  }
+  if (command.startsWith('IGNORE_IMAGE ')) process.stdout.write(`INLINE_COUNTS:${files.length}:${images.length}:IGNORE_IMAGE\r\n`)
   if (files.length) {
     for (const path of files) readFileSync(path)
     process.stdout.write(`FILE_ATTACHMENTS_READ:${files.length}\r\n`)

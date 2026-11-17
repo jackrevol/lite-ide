@@ -12,12 +12,13 @@ export interface AttachmentDraft {
   attachment?: Attachment
   file?: File
   error?: string
+  placed?: boolean
 }
 
 export const attachmentErrorText = (cause: unknown) =>
   (cause instanceof Error ? cause.message : String(cause)).replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '')
 
-export function useTerminalAttachments(targetRef: RefObject<TerminalSnapshot | null>, initial = false) {
+export function useTerminalAttachments(targetRef: RefObject<TerminalSnapshot | null>, initial = false, onPlaced?: (attachment: Attachment) => void) {
   const draftsRef = useRef<AttachmentDraft[]>([])
   const removed = useRef(new Set<string>())
   const fingerprints = useRef(new Map<string, string>())
@@ -34,6 +35,12 @@ export function useTerminalAttachments(targetRef: RefObject<TerminalSnapshot | n
     const current = targetRef.current
     if (!current?.running || current.kind !== 'codex') throw new Error('Codex 터미널 연결 후 파일을 첨부해 주세요.')
     return { taskId: current.taskId, generation: current.generation }
+  }
+  const place = async (draft: AttachmentDraft, attachment: Attachment) => {
+    update(draftsRef.current.map((item) => item.id === draft.id ? { ...item, attachment } : item))
+    if (initial) onPlaced?.(attachment)
+    else await window.desktop.placeAttachments({ ...draft.target, ids: [attachment.id] })
+    update(draftsRef.current.map((item) => item.id === draft.id ? { ...item, attachment, placed: true, phase: 'ready', error: undefined } : item))
   }
   const upload = async (draft: AttachmentDraft) => {
     try {
@@ -52,7 +59,7 @@ export function useTerminalAttachments(targetRef: RefObject<TerminalSnapshot | n
         files: [{ name: draft.name, data: new Uint8Array(buffer) }] })
       if (removed.current.has(draft.id)) {
         await window.desktop.discardAttachments({ ...draft.target, ids: [attachment.id] })
-      } else update(draftsRef.current.map((item) => item.id === draft.id ? { ...item, attachment, phase: 'ready', error: undefined } : item))
+      } else if (mounted.current) await place(draft, attachment)
     } catch (cause) {
       for (const [key, id] of fingerprints.current) if (id === draft.id) fingerprints.current.delete(key)
       update(draftsRef.current.map((item) => item.id === draft.id ? { ...item, phase: 'error', error: attachmentErrorText(cause) } : item))
@@ -73,7 +80,7 @@ export function useTerminalAttachments(targetRef: RefObject<TerminalSnapshot | n
       const added: AttachmentDraft[] = unique.map((file) => ({ id: crypto.randomUUID(), name: file.name,
         size: file.size, target: owner, phase: 'loading', file }))
       update([...draftsRef.current, ...added])
-      for (const item of added) void upload(item)
+      for (const item of added) await upload(item)
     } catch (cause) { setError(attachmentErrorText(cause)) }
   }
   const restore = (owner: AttachmentTarget) => {
@@ -89,7 +96,13 @@ export function useTerminalAttachments(targetRef: RefObject<TerminalSnapshot | n
         }
         update([...keep, ...items.filter((item) => !keep.some((draft) => draft.attachment?.id === item.id))
           .map((attachment): AttachmentDraft => ({ id: attachment.id, name: attachment.name, size: attachment.size,
-            target: owner, phase: 'ready', attachment }))])
+            target: owner, phase: 'ready', placed: attachment.placed, attachment }))])
+        for (const draft of draftsRef.current) {
+          if (!draft.attachment || draft.placed || draft.phase !== 'ready') continue
+          update(draftsRef.current.map((item) => item.id === draft.id ? { ...item, phase: 'loading' } : item))
+          try { await place(draft, draft.attachment) }
+          catch (cause) { update(draftsRef.current.map((item) => item.id === draft.id ? { ...item, phase: 'error', error: attachmentErrorText(cause) } : item)) }
+        }
       } catch (cause) { if (mounted.current) setError(attachmentErrorText(cause)) }
     })()
     restoring.current = operation
@@ -100,7 +113,10 @@ export function useTerminalAttachments(targetRef: RefObject<TerminalSnapshot | n
     const draft = draftsRef.current.find((item) => item.id === id)
     if (!draft) return
     try {
-      if (draft.attachment) await window.desktop.discardAttachments({ ...draft.target, ids: [draft.attachment.id] })
+      if (draft.attachment) {
+        if (!initial && draft.placed) await window.desktop.insertAttachments({ ...draft.target, ids: [draft.attachment.id] })
+        else await window.desktop.discardAttachments({ ...draft.target, ids: [draft.attachment.id] })
+      }
       removed.current.add(id)
       for (const [key, owner] of fingerprints.current) if (owner === id) fingerprints.current.delete(key)
       update(draftsRef.current.filter((item) => item.id !== id))
@@ -120,22 +136,29 @@ export function useTerminalAttachments(targetRef: RefObject<TerminalSnapshot | n
       await window.desktop.insertAttachments({ ...owner, ids: current.map((item) => item.attachment!.id), submit })
       for (const [key, id] of fingerprints.current) if (current.some((item) => item.id === id)) fingerprints.current.delete(key)
       update(draftsRef.current.filter((item) => !current.some((sent) => sent.id === item.id)))
-      setNotice(submit ? '' : `${current.length}개 파일을 입력에 추가했습니다. Enter로 요청을 전송하세요.`)
+      setNotice('')
       return true
     } catch (cause) { setError(attachmentErrorText(cause)); return false }
     finally { delivering.current = false; if (mounted.current) setBusy(false) }
   }
   const pasteClipboard = async (): Promise<boolean> => {
+    const id = crypto.randomUUID()
     try {
       await restoring.current
       if (draftsRef.current.length >= maxAttachmentCount) throw new Error(`파일은 최대 ${maxAttachmentCount}개까지 첨부할 수 있습니다.`)
       const owner = target()
+      update([...draftsRef.current, { id, name: '붙여넣은 이미지', size: 0, target: owner, phase: 'loading' }])
       const attachments = await window.desktop.stageClipboardAttachment(owner)
-      if (!attachments.length) return false
-      update([...draftsRef.current, ...attachments.map((attachment): AttachmentDraft => ({
-        id: attachment.id, name: attachment.name, size: attachment.size, target: owner, phase: 'ready', attachment }))])
+      if (!attachments.length) { update(draftsRef.current.filter((draft) => draft.id !== id)); return false }
+      const added = attachments.map((attachment): AttachmentDraft => ({
+        id: attachment.id, name: attachment.name, size: attachment.size, target: owner, phase: 'loading', attachment }))
+      update([...draftsRef.current.filter((draft) => draft.id !== id), ...added])
+      for (const draft of added) {
+        try { if (mounted.current) await place(draft, draft.attachment!) }
+        catch (cause) { update(draftsRef.current.map((item) => item.id === draft.id ? { ...item, phase: 'error', error: attachmentErrorText(cause) } : item)) }
+      }
       setError(''); setNotice('')
-    } catch (cause) { setError(attachmentErrorText(cause)) }
+    } catch (cause) { update(draftsRef.current.filter((draft) => draft.id !== id)); setError(attachmentErrorText(cause)) }
     return true
   }
   const retry = (id: string) => {
@@ -145,7 +168,8 @@ export function useTerminalAttachments(targetRef: RefObject<TerminalSnapshot | n
       setError(''); setNotice('')
       const next = { ...draft, target: target(), phase: 'loading' as const, error: undefined }
       update(draftsRef.current.map((item) => item.id === id ? next : item))
-      void upload(next)
+      if (next.attachment) void place(next, next.attachment).catch((cause) => update(draftsRef.current.map((item) => item.id === id ? { ...item, phase: 'error', error: attachmentErrorText(cause) } : item)))
+      else void upload(next)
     } catch (cause) { setError(attachmentErrorText(cause)) }
   }
   return { drafts, draftsRef, busy, delivering, error, setError, notice, setNotice, addFiles, restore, remove, retry, insert, pasteClipboard }
