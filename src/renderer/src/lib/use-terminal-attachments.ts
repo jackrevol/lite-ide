@@ -17,7 +17,7 @@ export interface AttachmentDraft {
 export const attachmentErrorText = (cause: unknown) =>
   (cause instanceof Error ? cause.message : String(cause)).replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '')
 
-export function useTerminalAttachments(targetRef: RefObject<TerminalSnapshot | null>) {
+export function useTerminalAttachments(targetRef: RefObject<TerminalSnapshot | null>, initial = false) {
   const draftsRef = useRef<AttachmentDraft[]>([])
   const removed = useRef(new Set<string>())
   const fingerprints = useRef(new Map<string, string>())
@@ -48,7 +48,7 @@ export function useTerminalAttachments(targetRef: RefObject<TerminalSnapshot | n
       }
       if (removed.current.has(draft.id)) return
       fingerprints.current.set(key, draft.id)
-      const [attachment] = await window.desktop.stageAttachments({ ...draft.target,
+      const [attachment] = await (initial ? window.desktop.stageInitialAttachments : window.desktop.stageAttachments)({ ...draft.target,
         files: [{ name: draft.name, data: new Uint8Array(buffer) }] })
       if (removed.current.has(draft.id)) {
         await window.desktop.discardAttachments({ ...draft.target, ids: [attachment.id] })

@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import type { CodexStatus, Project, Worktree } from '../../../shared/types'
+import type { TerminalSnapshot, CodexStatus, Project, Worktree } from '../../../shared/types'
 import type { WorkspaceTask } from '../lib/workspace-state'
 import { Button } from './ui/button'
 import { BaseBranchSelect, useBranches } from './BaseBranchSelect'
+import { AttachmentTray } from './AttachmentTray'
+import { useTerminalAttachments } from '../lib/use-terminal-attachments'
+import { initialAttachmentPrompt } from '../../../shared/attachments'
 
 export function NewTaskDialog({
   project,
@@ -28,6 +31,19 @@ export function NewTaskDialog({
   const dialog = useRef<HTMLDialogElement>(null)
   const [name, setName] = useState('')
   const [prompt, setPrompt] = useState('')
+  const attachmentTarget = useRef<TerminalSnapshot | null>({ taskId: crypto.randomUUID(), generation: 'initial',
+    kind: 'codex', running: true, workspace: project.path, output: '', sequence: 0, cols: 80, rows: 24 })
+  const attachments = useTerminalAttachments(attachmentTarget, true)
+  const attachmentActions = useRef(attachments)
+  attachmentActions.current = attachments
+  const retained = useRef(false)
+  const files = attachments.drafts.flatMap((draft) => draft.attachment ? [draft.attachment] : [])
+  const firstPrompt = initialAttachmentPrompt(prompt, files)
+  const hasRequest = !!prompt.trim() || attachments.drafts.length > 0
+  const attachmentsReady = attachments.drafts.every((draft) => draft.phase === 'ready')
+  useEffect(() => () => {
+    if (!retained.current) for (const draft of attachmentActions.current.draftsRef.current) void attachmentActions.current.remove(draft.id)
+  }, [])
   const [branch, setBranch] = useState(
     () =>
       `task/${new Date().toISOString().slice(0, 10)}-${crypto.randomUUID().slice(0, 8)}`,
@@ -62,7 +78,7 @@ export function NewTaskDialog({
       setEffort(selected.defaultEffort)
   }, [connection.models, model, effort])
   async function submit() {
-    if (submitting.current || (!created.current && invalidBaseRef)) return
+    if (submitting.current || !attachmentsReady || (!created.current && invalidBaseRef)) return
     submitting.current = true
     setPending(true)
     setError('')
@@ -75,7 +91,7 @@ export function NewTaskDialog({
         )
         const target = tree.path
         created.current = {
-          id: crypto.randomUUID(),
+          id: attachmentTarget.current!.taskId,
           project: project.path,
           path: target,
           branch: tree.branch,
@@ -83,8 +99,13 @@ export function NewTaskDialog({
           model,
           effort,
           terminalKind: 'codex',
-          initialPrompt: prompt || undefined,
+          initialPrompt: firstPrompt || undefined,
+          initialImages: files.filter((file) => file.kind === 'image').map((file) => file.path),
         }
+      }
+      if (files.length && !retained.current) {
+        await window.desktop.retainInitialAttachments({ taskId: attachmentTarget.current!.taskId, generation: 'initial', ids: files.map((file) => file.id) })
+        retained.current = true
       }
       await onCreate(created.current)
       onClose()
@@ -161,9 +182,19 @@ export function NewTaskDialog({
               placeholder="Codex에게 요청할 내용을 입력하세요. 비워 두면 초안으로 만듭니다."
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
+              onPaste={(event) => { const files = Array.from(event.clipboardData.files); if (files.length) { event.preventDefault(); void attachments.addFiles(files) } }}
               rows={4}
             />
           </label>
+          <div onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault() }}
+            onDrop={(event) => { event.preventDefault(); if (!pending && !created.current) void attachments.addFiles(Array.from(event.dataTransfer.files)) }}
+            onPaste={(event) => { const files = Array.from(event.clipboardData.files); if (files.length) { event.preventDefault(); void attachments.addFiles(files) } }}>
+            <AttachmentTray attachments={attachments} disabled={pending || !!created.current} initial onInserted={() => {}} />
+          </div>
+          {files.length > 0 && <details className="initial-request-preview" open>
+            <summary>첫 요청 미리보기</summary>
+            <pre>{firstPrompt}</pre>
+          </details>}
           <div className="task-model-fields">
             <label>
               모델
@@ -225,7 +256,7 @@ export function NewTaskDialog({
             확인하거나 이번 작업에 사용할 값을 선택해 주세요.
           </p>
         )}
-        {prompt.trim() &&
+        {hasRequest &&
           (!connection.connected || !connection.authenticated) && (
             <p>Codex 연결과 로그인을 완료한 후 요청을 시작할 수 있습니다.</p>
           )}
@@ -242,12 +273,13 @@ export function NewTaskDialog({
             type="submit"
             disabled={
               pending ||
+              !attachmentsReady ||
               invalidModel ||
               invalidEffort ||
               !branch.trim() ||
               !worktrees.length ||
               (!created.current && invalidBaseRef) ||
-              (!!prompt.trim() &&
+              (hasRequest &&
                 (!connection.connected || !connection.authenticated))
             }
           >
@@ -255,7 +287,7 @@ export function NewTaskDialog({
               ? '시작 중…'
               : created.current
                 ? '다시 시도'
-                : prompt.trim()
+                : hasRequest
                   ? '만들고 시작'
                   : '만들기'}
           </Button>

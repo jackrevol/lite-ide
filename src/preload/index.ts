@@ -19,6 +19,8 @@ const api: DesktopApi = {
   },
   openTerminal: (input) => ipcRenderer.invoke('terminal:open', input),
   writeTerminal: (id, data) => ipcRenderer.invoke('terminal:write', id, data),
+  stageInitialAttachments: (input) => ipcRenderer.invoke('attachments:stage-initial', input),
+  retainInitialAttachments: (input) => ipcRenderer.invoke('attachments:retain-initial', input),
   stageAttachments: (input) => ipcRenderer.invoke('attachments:stage', input),
   listAttachments: (target) => ipcRenderer.invoke('attachments:list', target),
   stageClipboardAttachment: (target) => ipcRenderer.invoke('attachments:clipboard', target),

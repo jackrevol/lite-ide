@@ -76,7 +76,7 @@ export class AttachmentService {
         name = name.slice(0, name.length - extname(name).length) + image
       const id = crypto.randomUUID()
       return { target: { taskId: input.taskId, generation: input.generation },
-        attachment: { id, name, size: file.data.byteLength, digest: createHash('sha256').update(file.data).digest('hex'), kind: image ? 'image' : 'file' },
+        attachment: { id, name, path: join(this.directory, id, name), size: file.data.byteLength, digest: createHash('sha256').update(file.data).digest('hex'), kind: image ? 'image' : 'file' },
         path: join(this.directory, id, name), ready: false, delivering: false }
     })
     // 첫 await 전에 예약하여 동시 업로드도 전체 개수와 크기 제한을 지킵니다.

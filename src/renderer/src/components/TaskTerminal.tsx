@@ -283,6 +283,7 @@ export function TaskTerminal({
         model: task.model,
         effort: task.effort,
         prompt: task.initialPrompt,
+        images: task.initialImages,
         threadId: task.threadId,
       })
       .then((snapshot) => {

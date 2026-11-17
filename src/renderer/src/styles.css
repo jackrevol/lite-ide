@@ -2432,3 +2432,8 @@ dialog::backdrop {
 .process-table td small { display: block; color: var(--muted-foreground); font-size: 9px; }
 .process-table code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
 .process-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 0; font-size: 11px; }
+
+.initial-request-preview { min-width: 0; font-size: 11px; }
+.initial-request-preview pre { max-height: 140px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px; border: 1px solid var(--border); border-radius: 6px; font: 11px/1.5 var(--font-mono); }
+.new-task-dialog .attachment-tools { flex-wrap: wrap; }
+.new-task-dialog .attachment-hint { flex-basis: 180px; }

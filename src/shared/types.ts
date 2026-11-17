@@ -29,6 +29,7 @@ export interface TerminalOpen {
   model?: string
   effort?: string
   prompt?: string
+  images?: string[]
   threadId?: string
 }
 export interface TerminalSnapshot {
@@ -116,6 +117,8 @@ export interface DesktopApi {
   onStartup(listener: (snapshot: StartupSnapshot) => void): () => void
   openTerminal(input: TerminalOpen): Promise<TerminalSnapshot>
   writeTerminal(taskId: string, data: string): Promise<void>
+  stageInitialAttachments(input: StageAttachmentsInput): Promise<Attachment[]>
+  retainInitialAttachments(input: AttachmentSelection): Promise<void>
   stageAttachments(input: StageAttachmentsInput): Promise<Attachment[]>
   listAttachments(target: AttachmentTarget): Promise<Attachment[]>
   stageClipboardAttachment(target: AttachmentTarget): Promise<Attachment[]>

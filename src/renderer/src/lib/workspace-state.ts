@@ -10,6 +10,7 @@ export interface WorkspaceTask {
   effort: string
   terminalKind: TerminalKind
   initialPrompt?: string
+  initialImages?: string[]
   draft?: string
   threadId?: string
 }
@@ -39,6 +40,7 @@ function validTask(value: unknown): value is WorkspaceTask {
     !!task.branch &&
     canonical(task.project) !== canonical(task.path) &&
     ['codex', 'shell'].includes(task.terminalKind) &&
+    (task.initialImages === undefined || (Array.isArray(task.initialImages) && task.initialImages.every((path) => typeof path === 'string'))) &&
     ['initialPrompt', 'draft', 'threadId'].every(
       (key) =>
         task[key as keyof WorkspaceTask] === undefined ||

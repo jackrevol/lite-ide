@@ -1,4 +1,5 @@
 import * as pty from 'node-pty'
+import { attachmentInput } from '../shared/attachments.ts'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { prepareCodex } from './codex-update-service.ts'
@@ -145,6 +146,8 @@ export class TerminalService {
 
   private async launch(input: TerminalOpen) {
     await this.loaded
+    if (input.images !== undefined && (!Array.isArray(input.images) || input.images.length > 20 || input.images.some((path) => typeof path !== 'string' || !path || /[\x00-\x1f\x7f]/.test(path))))
+      throw new Error('올바른 초기 이미지 첨부가 아닙니다.')
     await this.stop(input.taskId)
     const args: string[] = []
     let binary: string
@@ -164,6 +167,7 @@ export class TerminalService {
           this.resumed.has(pathKey(input.workspace))
             ? ''
             : (input.prompt ?? ''),
+          JSON.stringify(resuming ? [] : (input.images ?? [])),
         )
       } else {
         let threadId = input.threadId ?? this.threads.get(key)
@@ -205,6 +209,7 @@ export class TerminalService {
             '--config',
             `model_reasoning_effort=${JSON.stringify(input.effort)}`,
           )
+        if (!resuming) for (const path of input.images ?? []) args.push('--image', path)
         if (input.prompt && !resuming)
           args.push(input.prompt)
       }
@@ -220,7 +225,7 @@ export class TerminalService {
     if (this.closed || this.deleting.has(pathKey(input.workspace)))
       throw new Error('작업이 종료되었거나 삭제 중입니다.')
     const terminal: RunningTerminal = {
-      input: { ...input, prompt: undefined },
+      input: { ...input, prompt: undefined, images: undefined },
       taskId: input.taskId,
       generation: crypto.randomUUID(),
       workspace: input.workspace,
@@ -407,10 +412,7 @@ export class TerminalService {
     for (const { path } of files) {
       if (/[\x00-\x1f\x7f]/.test(path)) throw new Error('파일 경로에 사용할 수 없는 문자가 있습니다.')
     }
-    this.write(id, files.map(({ path, kind }) => {
-      const quoted = JSON.stringify(path.replaceAll('\\', '/'))
-      return `\x1b[200~${kind === 'image' ? quoted : ` ${quoted} `}\x1b[201~`
-    }).join(''))
+    this.write(id, files.map((file) => `\x1b[200~${attachmentInput(file)}\x1b[201~`).join(''))
   }
 
   resize(id: string, cols: number, rows: number) {

@@ -357,6 +357,20 @@ app.whenReady().then(() => {
     }
     return items
   }
+  const requireInitialAttachmentTarget = (target: AttachmentTarget) => {
+    if (!target || target.generation !== 'initial' || !/^[\w-]{1,100}$/.test(target.taskId))
+      throw new Error('올바른 새 작업 첨부 대상이 아닙니다.')
+  }
+  ipcMain.handle('attachments:stage-initial', (event, input: StageAttachmentsInput) => {
+    requireTerminalSender(event)
+    requireInitialAttachmentTarget(input)
+    return attachments.stage(input)
+  })
+  ipcMain.handle('attachments:retain-initial', (event, input: AttachmentSelection) => {
+    requireTerminalSender(event)
+    requireInitialAttachmentTarget(input)
+    return attachments.deliver(input, () => {})
+  })
   ipcMain.handle('attachments:stage', async (event, input: StageAttachmentsInput) => {
     requireTerminalSender(event)
     return stageAttachments(input)

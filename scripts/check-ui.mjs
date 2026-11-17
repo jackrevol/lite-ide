@@ -82,7 +82,7 @@ async function checkFileAttachments(task) {
   const target = { taskId: task.id, generation: before.generation }
   const area = page.locator('.task-terminal-slot:not([hidden]) .attachment-area')
   const picker = area.locator('input[type="file"]')
-  const cards = area.getByRole('listitem')
+  const cards = area.getByRole('list', { name: '전송 대기 첨부 파일', exact: true }).getByRole('listitem')
   const ready = async (count) => until(async () => await cards.count() === count &&
     await area.locator('.attachment-description small').filter({ hasText: '전송 대기' }).count() === count, `첨부 ${count}개 준비`)
   await page.locator('[aria-label="작업 터미널 입력"]:visible').focus()
@@ -95,6 +95,16 @@ async function checkFileAttachments(task) {
     { name: 'archive.zip', mimeType: 'application/zip', buffer: Buffer.from([80, 75, 3, 4, 0]) },
   ])
   await ready(5)
+  const inputPreview = area.getByRole('region', { name: '입력에 추가될 내용', exact: true })
+  await inputPreview.getByText('터미널의 현재 커서 위치에 아래 순서로 삽입합니다.', { exact: false }).waitFor()
+  const staged = await page.evaluate((target) => window.desktop.listAttachments(target), target)
+  const paths = new Map(staged.map((file) => [file.name, file]))
+  const expectedInputs = ['한글 이미지.png', '설명.md', 'data.csv', '문서.pdf', 'archive.zip'].map((name) => {
+    const file = paths.get(name)
+    const quoted = JSON.stringify(file.path.replaceAll('\\', '/'))
+    return file.kind === 'image' ? quoted : ` ${quoted} `
+  })
+  assert.deepEqual(await inputPreview.locator('code').allTextContents(), expectedInputs)
   await page.locator('.task-terminal-slot:not([hidden]) .terminal-host').evaluate((host) => {
     const data = new DataTransfer()
     data.items.add(new File([], 'folder'))
@@ -190,6 +200,7 @@ async function checkFileAttachments(task) {
   await page.screenshot({ path: 'artifacts/file-attachment-tray.png' })
   await area.getByRole('button', { name: '입력에 추가', exact: true }).click()
   await until(async () => await cards.count() === 0, '첨부 입력 반영')
+  assert.equal(await area.getByRole('region', { name: '입력에 추가될 내용', exact: true }).count(), 0)
   await waitOutput(task.id, '[Image #3]')
   const inserted = (await snapshot(task.id)).output
   assert.ok(inserted.includes('설명.md') && inserted.includes('data.csv') && inserted.includes('문서.pdf'))
@@ -1156,6 +1167,17 @@ async function checkStartupFlow() {
     const dialog = page.getByRole('dialog', { name: '새 작업', exact: true })
     await dialog.getByRole('textbox', { name: '새 작업 이름', exact: true }).fill(name)
     await dialog.getByRole('textbox', { name: '첫 요청', exact: true }).fill(`FIRST_PROMPT_${name}`)
+    if (name === 'Startup 성공' || name === 'Startup 실패') {
+      const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=='
+      await dialog.locator('input[type="file"]').setInputFiles([
+        { name: '첫 요청 설명.md', mimeType: 'text/markdown', buffer: Buffer.from('초기 첨부 내용') },
+        { name: '첫 이미지.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') },
+      ])
+      await until(async () => await dialog.locator('.attachment-description small').filter({ hasText: '전송 대기' }).count() === 2, '초기 첨부 준비')
+      assert.ok((await dialog.locator('.initial-request-preview pre').textContent()).includes('첫 요청 설명.md'))
+      assert.equal(await dialog.getByRole('button', { name: '입력에 추가', exact: true }).count(), 0)
+      await page.screenshot({ path: 'artifacts/initial-attachments.png' })
+    }
     await dialog.getByRole('button', { name: '만들고 시작', exact: true }).click()
     await dialog.waitFor({ state: 'detached' })
     await until(async () => (await tasks()).some((task) => task.name === name), '초기화 작업 생성')
@@ -1183,6 +1205,8 @@ async function checkStartupFlow() {
   await page.locator('.task-row').and(page.getByTitle(original.path, { exact: true })).click()
   await until(async () => (await startup(successful))?.status === 'completed', 'Startup 성공')
   await waitOutput(successful.id, 'FIRST_PROMPT_Startup 성공')
+  await waitOutput(successful.id, 'FILE_ATTACHMENTS_READ:1')
+  await waitOutput(successful.id, 'IMAGE_FILES_READ:1')
   await page.locator('.task-row').and(page.getByTitle(successful.path, { exact: true })).click()
   await readyTerminal()
   await waitScreen('FIRST_PROMPT_Startup 성공')
@@ -1209,6 +1233,8 @@ async function checkStartupFlow() {
   await page.getByRole('button', { name: 'Startup 실행', exact: true }).click()
   await readyTerminal()
   await waitOutput(failed.id, 'FIRST_PROMPT_Startup 실패')
+  await waitOutput(failed.id, 'FILE_ATTACHMENTS_READ:1')
+  await waitOutput(failed.id, 'IMAGE_FILES_READ:1')
   assert.equal(await page.locator('.startup-panel').count(), 0)
   assert.match((await startup(failed)).output, /LATEST_SCRIPT_RECOVERED/)
   // 자동 실행을 꺼 둔 프로젝트는 기존처럼 바로 에이전트를 시작합니다.

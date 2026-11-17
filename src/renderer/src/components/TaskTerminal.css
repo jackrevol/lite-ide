@@ -94,3 +94,11 @@
   text-align: center;
   font: 10px var(--font-mono);
 }
+
+.attachment-input-preview { padding: 8px 12px; border-top: 1px solid var(--border); font-size: 11px; }
+.attachment-input-preview > strong { font-weight: 500; }
+.attachment-input-preview p { margin: 4px 0; color: var(--muted-foreground); font-size: 10px; }
+.attachment-input-preview ol { max-height: 140px; overflow: auto; margin: 6px 0; padding-left: 22px; }
+.attachment-input-preview li { padding: 3px 0; }
+.attachment-input-preview li > span { display: block; color: var(--muted-foreground); font-size: 10px; }
+.attachment-input-preview code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; font: 11px/1.5 var(--font-mono); }

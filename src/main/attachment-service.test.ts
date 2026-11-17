@@ -4,7 +4,7 @@ import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AttachmentService, attachmentName } from './attachment-service.ts'
-import { maxAttachmentBytes, maxAttachmentTotalBytes } from '../shared/attachments.ts'
+import { initialAttachmentPrompt, maxAttachmentBytes, maxAttachmentTotalBytes } from '../shared/attachments.ts'
 
 const target = { taskId: 'task', generation: 'generation' }
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==', 'base64')
@@ -26,6 +26,12 @@ test('파일 종류와 원본 이름·내용을 보존하고 첨부 준비는 Co
   assert.equal(files[0].name, '한글 이미지.png')
   assert.ok(files.slice(1).every((file) => file.kind === 'file'))
   assert.equal(service.list(target).length, uploads.length)
+  const firstPrompt = initialAttachmentPrompt('첫 요청', files)
+  assert.ok(firstPrompt.startsWith('첫 요청\n\n첨부 파일:\n'))
+  assert.equal(firstPrompt.includes(files[0].name), false)
+  assert.deepEqual(firstPrompt.split('\n').slice(3).map((line) => JSON.parse(line)), files.slice(1).map((file) => file.path.replaceAll('\\', '/')))
+  assert.equal(initialAttachmentPrompt('', [files[0]]), '첨부 파일을 확인해 주세요.')
+  assert.equal(initialAttachmentPrompt('', []), '')
   assert.deepEqual(service.list({ ...target, generation: 'other' }), [])
   assert.equal((await service.preview(target, files[1].id)).text, uploads[1].data.toString())
   assert.equal((await service.preview(target, files[3].id)).text, undefined)
@@ -39,6 +45,7 @@ test('파일 종류와 원본 이름·내용을 보존하고 첨부 준비는 Co
   let delivered: { path: string; kind: string }[] = []
   await service.deliver({ ...target, ids }, (items) => { delivered = items })
   assert.equal(delivered.length, ids.length)
+  assert.deepEqual(delivered, files.filter((file) => ids.includes(file.id)).map((file) => ({ path: file.path, kind: file.kind })))
   assert.deepEqual(await readFile(delivered[0].path), png)
   assert.equal(delivered[1].path.endsWith('설명.md'), true)
   assert.deepEqual(service.list(target), [])

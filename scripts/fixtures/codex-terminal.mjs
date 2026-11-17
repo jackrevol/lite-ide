@@ -70,6 +70,9 @@ function run(command) {
   } else process.stdout.write('OK\r\n')
   prompt()
 }
+images = JSON.parse(process.argv[4] || '[]')
+const initialPaths = process.argv[3]?.split('\n\n첨부 파일:\n')[1]
+if (initialPaths) files = initialPaths.split('\n').map((path) => JSON.parse(path))
 if (process.argv[3]) {
   process.stdout.write(`codex> ${process.argv[3]}\r\n`)
   run(process.argv[3])

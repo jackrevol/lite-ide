@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { File, FileArchive, FileCode, FileText, Image, LoaderCircle, Paperclip, RefreshCw, X } from 'lucide-react'
-import type { AttachmentPreview } from '../../../shared/attachments'
+import { attachmentInput, type AttachmentPreview } from '../../../shared/attachments'
 import { attachmentErrorText, type AttachmentDraft, type useTerminalAttachments } from '../lib/use-terminal-attachments'
 import { Button } from './ui/button'
 
@@ -14,8 +14,9 @@ function FileIcon({ name, image }: { name: string; image?: boolean }) {
   return <Icon size={22} aria-hidden="true" />
 }
 
-export function AttachmentTray({ attachments, disabled, onInserted }: {
+export function AttachmentTray({ attachments, disabled, onInserted, initial = false }: {
   attachments: ReturnType<typeof useTerminalAttachments>
+  initial?: boolean
   disabled: boolean
   onInserted: () => void
 }) {
@@ -58,6 +59,18 @@ export function AttachmentTray({ attachments, disabled, onInserted }: {
           </div>}
         </div>)}
       </div>}
+      {attachments.drafts.length > 0 && <section className="attachment-input-preview" aria-label="입력에 추가될 내용">
+        <strong>입력에 추가될 내용</strong>
+        <p>{initial ? '일반 파일 경로는 첫 요청 끝의 첨부 파일 목록에 추가하며, 이미지는 첫 요청에 이미지로 첨부합니다.' : '터미널의 현재 커서 위치에 아래 순서로 삽입합니다. 일반 파일은 경로 앞뒤에 공백을 넣습니다.'}</p>
+        <ol>
+          {attachments.drafts.map((draft) => <li key={draft.id}>
+            <span>{draft.attachment?.kind === 'image' ? '이미지 첨부' : '파일 경로'} · {draft.name}</span>
+            {draft.phase === 'ready' && draft.attachment ? <code>{initial ? JSON.stringify(draft.attachment.path.replaceAll('\\', '/')) : attachmentInput(draft.attachment)}</code>
+              : <span>{draft.phase === 'error' ? '추가 실패 · 재시도 후 확인해 주세요.' : '경로 준비 중…'}</span>}
+          </li>)}
+        </ol>
+        {!initial && <p>이미지 경로는 Codex에서 이미지 첨부 표시로 바뀔 수 있습니다. Enter는 삽입 후 전송하며, ‘입력에 추가’는 삽입만 합니다.</p>}
+      </section>}
       <div className="attachment-tools">
         <input type="file" ref={picker} multiple hidden aria-label="첨부할 파일 선택" onChange={(event) => {
           const files = Array.from(event.currentTarget.files ?? []); event.currentTarget.value = ''; void attachments.addFiles(files).then(onInserted)
@@ -66,14 +79,14 @@ export function AttachmentTray({ attachments, disabled, onInserted }: {
           <Paperclip size={13} />파일 첨부
         </Button>
         <span className="attachment-hint" title="최대 20개 · 파일당 50MB · 합계 100MB. 이미지는 이미지로, 그 외 파일은 참조 경로로 전달합니다.">
-          {attachments.notice || (attachments.drafts.length ? `${attachments.drafts.length}개 · Enter로 요청과 함께 전송` : '파일을 끌어 놓거나 이미지를 붙여넣으세요.')}
+          {attachments.notice || (attachments.drafts.length ? `${attachments.drafts.length}개 · ${initial ? '첫 요청과 함께 첨부' : 'Enter로 요청과 함께 전송'}` : '파일을 끌어 놓거나 이미지를 붙여넣으세요.')}
         </span>
         {attachments.drafts.length > 0 && <>
           <Button type="button" variant="ghost" size="xs" disabled={attachments.busy} onClick={() => {
             for (const draft of attachments.drafts) void attachments.remove(draft.id)
           }}>모두 제거</Button>
-          <Button type="button" variant="outline" size="xs" disabled={disabled || attachments.busy || attachments.drafts.some((draft) => draft.phase !== 'ready')}
-            onClick={() => void attachments.insert().then((ok) => { if (ok) onInserted() })}>{attachments.busy ? '전달 중…' : '입력에 추가'}</Button>
+          {!initial && <Button type="button" variant="outline" size="xs" disabled={disabled || attachments.busy || attachments.drafts.some((draft) => draft.phase !== 'ready')}
+            onClick={() => void attachments.insert().then((ok) => { if (ok) onInserted() })}>{attachments.busy ? '전달 중…' : '입력에 추가'}</Button>}
         </>}
       </div>
       {attachments.error && <div className="attachment-error" role="alert"><span>{attachments.error}</span>
