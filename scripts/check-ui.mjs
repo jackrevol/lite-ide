@@ -336,7 +336,20 @@ try {
   page = await app.firstWindow()
   observeErrors(page)
   page.setDefaultTimeout(15000)
-  if (process.argv.includes('--settings-only')) {
+  if (process.argv.includes('--repository-only')) {
+    const first = await setupFocusedTerminal()
+    await createDraftTask()
+    const second = (await tasks()).find((task) => task.id !== first.id)
+    await page.locator('.task-row').and(page.getByTitle(first.path, { exact: true })).click()
+    await readyTerminal()
+    await mkdir(join(first.path, 'src', 'nested'), { recursive: true })
+    await writeFile(join(first.path, 'src', 'nested', '한글.ts'), 'repository UI\n', 'utf8')
+    await page.getByRole('button', { name: '변경 사항 새로고침', exact: true }).click()
+    await page.getByRole('treeitem', { name: 'src/nested/한글.ts', exact: true }).click()
+    await checkRepositoryTree(first, second)
+    assert.deepEqual(errors, [])
+    assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible()), false)
+  } else if (process.argv.includes('--settings-only')) {
     await setupFocusedTerminal()
     await checkSettingsLayout()
     await page.getByRole('button', { name: '설정', exact: true }).click()
@@ -900,6 +913,7 @@ try {
   await folder.click()
   assert.equal(await nested.getAttribute('aria-selected'), 'true')
   await checkBackgroundRefresh(first)
+  await checkRepositoryTree(first, second)
   await page.screenshot({ path: 'artifacts/changes-diff.png' })
   await writeFile(join(second.path, 'dirty.txt'), '다른 Worktree 파일\n', 'utf8')
   await page.locator('.task-row').and(page.getByTitle(second.path, { exact: true })).click()
@@ -1319,6 +1333,137 @@ async function checkBackgroundRefresh(task) {
       for (const [channel, original] of globalThis.refreshHandlers) { ipcMain.removeHandler(channel); ipcMain.handle(channel, original) }
       delete globalThis.refreshHandlers
     })
+  }
+}
+
+async function checkRepositoryTree(first, second) {
+  const exclude = join(project, '.git', 'info', 'exclude')
+  const previousExclude = await readFile(exclude, 'utf8')
+  const external = join(fixture, 'external-overview')
+  const externalBranch = 'external/ui-overview'
+  const generation = (await snapshot(first.id)).generation
+  const ignoredPath = 'ignored-ui/nested/cache[1].txt'
+  const localPath = 'overview-local.txt'
+  const otherPath = 'overview-other.txt'
+  await writeFile(exclude, `${previousExclude}\nignored-ui/\n`, 'utf8')
+  await mkdir(join(first.path, 'ignored-ui', 'nested'), { recursive: true })
+  await writeFile(join(first.path, ignoredPath), 'IGNORED_UI_CONTENT\n', 'utf8')
+  await writeFile(join(project, localPath), 'LOCAL_OVERVIEW_CONTENT\n', 'utf8')
+  await writeFile(join(second.path, otherPath), 'OTHER_WORKTREE_CONTENT\n', 'utf8')
+  git('worktree', 'add', '-b', externalBranch, external)
+  await writeFile(join(external, 'external.txt'), 'EXTERNAL_WORKTREE_CONTENT\n', 'utf8')
+  const graphRemote = join(fixture, 'graph-remote.git')
+  execFileSync('git', ['init', '--bare', '--initial-branch=main', graphRemote], { windowsHide: true })
+  const remoteCommit = git('-c', 'user.name=UI Test', '-c', 'user.email=test@example.invalid', 'commit-tree', `${baseCommit}^{tree}`, '-p', baseCommit, '-m', 'REMOTE_ONLY_GRAPH').trim()
+  const mergeCommit = git('-c', 'user.name=UI Test', '-c', 'user.email=test@example.invalid', 'commit-tree', `${baseCommit}^{tree}`, '-p', git('rev-parse', 'HEAD').trim(), '-p', remoteCommit, '-m', 'MERGE_GRAPH').trim()
+  git('branch', 'graph-merge', mergeCommit)
+  git('remote', 'add', 'graph', graphRemote)
+  git('push', 'graph', `${mergeCommit}:refs/heads/main`, `${remoteCommit}:refs/heads/remote-only`)
+  git('branch', 'graph/remote-only', remoteCommit)
+  const locatorBranches = []
+  let locatorTip = mergeCommit
+  for (let index = 0; index < 24; index++) {
+    locatorTip = git('-c', 'user.name=UI Test', '-c', 'user.email=test@example.invalid', 'commit-tree', `${baseCommit}^{tree}`, '-p', locatorTip, '-m', `HIDDEN_TITLE_${index}`).trim()
+    const name = `graph-locator/${String(index).padStart(2, '0')}`
+    git('branch', name, locatorTip)
+    locatorBranches.push(name)
+  }
+  try {
+    await page.getByRole('button', { name: '변경 사항 새로고침', exact: true }).click()
+    const ignored = page.locator('.changes-panel').getByRole('region', { name: 'Git 무시 파일', exact: true })
+    await ignored.getByRole('button', { name: 'ignored-ui/', exact: true }).click()
+    await ignored.getByRole('button', { name: 'ignored-ui/nested/', exact: true }).click()
+    await ignored.getByRole('button', { name: ignoredPath, exact: true }).click()
+    await page.locator('.agent-panel .main-diff').getByText('+IGNORED_UI_CONTENT', { exact: false }).waitFor()
+    await page.getByRole('button', { name: '변경 내용 닫기', exact: true }).click()
+    await readyTerminal()
+    await page.getByRole('button', { name: '한글 project Git 트리', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: '한글 project · Git 트리', exact: true })
+    await dialog.getByRole('heading', { name: '전체 브랜치 트리', exact: true }).waitFor()
+    const graph = dialog.getByLabel('모든 브랜치 그래프', { exact: true })
+    await graph.locator('[data-branch-ref="refs/remotes/graph/remote-only"]').waitFor()
+    await graph.locator(`[data-commit="${mergeCommit}"]`).waitFor()
+    const expected = await page.evaluate((path) => window.desktop.inspectRepositoryOverview(path), project)
+    assert.equal(await graph.locator('[data-branch-ref]').count(), expected.branches.length)
+    assert.equal(await graph.locator('[data-workspace]').count(), expected.workspaces.length)
+    assert.equal(await dialog.locator('.repository-details, .main-diff').count(), 0)
+    assert.doesNotMatch(await graph.innerText(), /MERGE_GRAPH|REMOTE_ONLY_GRAPH|HIDDEN_TITLE_|LOCAL_OVERVIEW_CONTENT/)
+    const picker = dialog.getByRole('combobox', { name: '위치를 추적할 브랜치', exact: true })
+    const remoteRef = 'refs/remotes/graph/remote-only'
+    const remoteLabel = graph.locator(`[data-branch-ref="${remoteRef}"]`)
+    const located = async () => graph.evaluate((element, ref) => {
+      if (Number(element.querySelector('.repository-commit-list').style.zoom) < .9) return false
+      const target = [...element.querySelectorAll('[data-branch-ref]')].find((node) => node.dataset.branchRef === ref)
+      if (!target) return false
+      const boundary = element.getBoundingClientRect(), position = target.getBoundingClientRect()
+      return position.top >= boundary.top && position.bottom <= boundary.bottom && position.left >= boundary.left && position.right <= boundary.right
+    }, remoteRef)
+    await dialog.getByRole('button', { name: '전체 맞춤', exact: true }).click()
+    await picker.selectOption(remoteRef)
+    await until(located, '원격 브랜치 위치 이동')
+    assert.equal(await remoteLabel.getAttribute('aria-pressed'), 'true')
+    assert.ok(await graph.evaluate((element) => element.scrollTop > 0))
+    assert.ok(await graph.locator('.repository-commit-list').evaluate((element) => Number(element.style.zoom) >= .9))
+    assert.equal(await graph.locator('.repository-location-ring').count(), 1)
+    await graph.evaluate((element) => { element.scrollTop = 0; element.scrollLeft = 0 })
+    await dialog.getByRole('button', { name: '선택 브랜치로 이동', exact: true }).click()
+    await until(located, '선택한 브랜치로 다시 이동')
+    await picker.selectOption('refs/heads/graph/remote-only')
+    assert.equal(await remoteLabel.getAttribute('aria-pressed'), 'false')
+    assert.equal(await graph.locator('[data-branch-ref="refs/heads/graph/remote-only"]').getAttribute('aria-pressed'), 'true')
+    await picker.selectOption(remoteRef)
+    await graph.locator(`[data-branch-ref="refs/heads/${externalBranch}"]`).click()
+    assert.equal(await graph.locator('[data-branch-ref]').count(), expected.branches.length)
+    assert.equal(await graph.locator('[data-workspace]').count(), expected.workspaces.length)
+    await dialog.getByRole('textbox', { name: '브랜치 검색', exact: true }).fill(externalBranch)
+    assert.equal(await graph.locator('[data-branch-ref]').count(), expected.branches.length)
+    assert.ok(await graph.locator('.search-match').count() > 0)
+    assert.equal(await graph.locator('[data-workspace]').count(), expected.workspaces.length)
+    await dialog.getByRole('textbox', { name: '브랜치 검색', exact: true }).fill('')
+    await picker.selectOption(remoteRef)
+    const movedCommit = execFileSync('git', ['--git-dir', graphRemote, '-c', 'user.name=UI Test', '-c', 'user.email=test@example.invalid', 'commit-tree', `${baseCommit}^{tree}`, '-p', mergeCommit, '-m', 'MOVED_REMOTE_TITLE'], { windowsHide: true, encoding: 'utf8' }).trim()
+    execFileSync('git', ['--git-dir', graphRemote, 'update-ref', 'refs/heads/remote-only', movedCommit], { windowsHide: true })
+    execFileSync('git', ['--git-dir', graphRemote, 'update-ref', 'refs/heads/fetched-later', remoteCommit], { windowsHide: true })
+    await dialog.getByRole('button', { name: '원격 브랜치 갱신', exact: true }).click()
+    await graph.locator('[data-branch-ref="refs/remotes/graph/fetched-later"]').waitFor()
+    await until(async () => await graph.getAttribute('data-tracked-commit') === movedCommit && await located(), 'fetch 후 브랜치의 새 위치 추적')
+    assert.equal(await graph.getAttribute('data-tracked-ref'), remoteRef)
+    assert.equal(await graph.locator('.repository-commit.selected').getAttribute('data-commit'), movedCommit)
+    assert.doesNotMatch(await graph.innerText(), /MOVED_REMOTE_TITLE/)
+    await page.screenshot({ path: 'artifacts/repository-branch-location.png' })
+    await writeFile(join(external, 'later.txt'), 'REFRESHED_OVERVIEW\n', 'utf8')
+    await until(async () => await dialog.getByRole('button', { name: 'Git 트리 새로고침', exact: true }).isEnabled(), 'Git 트리 갱신 준비')
+    await dialog.getByRole('button', { name: 'Git 트리 새로고침', exact: true }).click()
+    await until(async () => await graph.innerText().then((text) => text.includes(externalBranch) && text.includes('변경 2')), 'Worktree 변경 수 갱신')
+    await dialog.getByRole('button', { name: '전체 맞춤', exact: true }).click()
+    await page.screenshot({ path: 'artifacts/repository-tree.png' })
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(960, 600))
+    await dialog.getByRole('button', { name: '전체 맞춤', exact: true }).click()
+    await page.screenshot({ path: 'artifacts/repository-tree-compact.png' })
+    await until(async () => dialog.evaluate((element) => element.scrollWidth <= element.clientWidth), '최소 창 크기 Git 트리 가로 배치')
+    await page.keyboard.press('Escape')
+    await dialog.waitFor({ state: 'detached' })
+    assert.equal((await snapshot(first.id)).generation, generation)
+    assert.equal(git('ls-files', '--', 'ignored-ui/').trim(), '')
+    console.log('Git 트리 UI 검증 통과: 제목·내용 없는 전체 형상, 로컬·원격 브랜치 위치 이동·강조·재탐색, fetch 후 새 위치 추적, 동명 브랜치 구분, 검색 중 전체 가지 보존, 무시 파일과 터미널 보존.')
+  } catch (cause) {
+    console.error('GIT_TREE_FAILURE', cause)
+    throw cause
+  } finally {
+    const close = page.getByRole('button', { name: 'Git 트리 닫기', exact: true })
+    if (await close.count()) await close.click()
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1320, 850))
+    await writeFile(exclude, previousExclude, 'utf8')
+    await rm(join(first.path, 'ignored-ui'), { recursive: true, force: true })
+    await rm(join(project, localPath), { force: true })
+    await rm(join(second.path, otherPath), { force: true })
+    git('worktree', 'remove', '--force', external)
+    git('branch', '-D', externalBranch)
+    git('branch', '-D', 'graph-merge')
+    git('branch', '-D', 'graph/remote-only')
+    for (const branch of locatorBranches) git('branch', '-D', branch)
+    git('remote', 'remove', 'graph')
+    await page.getByRole('tab', { name: '한글.ts', exact: true }).click()
   }
 }
 

@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { lstat, readFile, realpath, rmdir } from 'node:fs/promises'
+import { lstat, opendir, readFile, realpath, rmdir } from 'node:fs/promises'
 import { setTimeout as delay } from 'node:timers/promises'
 import {
   basename,
@@ -13,6 +13,10 @@ import {
 } from 'node:path'
 import type {
   ChangedFile,
+  IgnoredDirectory,
+  RepositoryCommit,
+  RepositoryBranch,
+  RepositoryOverview,
   RepositorySnapshot,
   Worktree,
   WorktreeDeletionPreview,
@@ -24,12 +28,13 @@ async function git(
   directory: string,
   args: string[],
   timeout = 15_000,
+  maxBuffer = 16 * 1024 * 1024,
 ): Promise<string> {
   const { stdout } = await execute('git', ['--literal-pathspecs', '-C', directory, ...args], {
     encoding: 'utf8',
     windowsHide: true,
     timeout,
-    maxBuffer: 16 * 1024 * 1024,
+    maxBuffer,
     env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
   })
   return stdout
@@ -81,6 +86,8 @@ export async function inspectRepository(
       worktrees: [],
       changes: [],
       totalChanges: 0,
+      ignored: [],
+      totalIgnored: 0,
     }
   }
   const [status, worktreeList] = await Promise.all([
@@ -89,6 +96,7 @@ export async function inspectRepository(
       '--porcelain=v1',
       '-z',
       '--untracked-files=all',
+      '--ignored=matching',
     ]),
     git(directory, ['worktree', 'list', '--porcelain', '-z']).catch(() =>
       git(directory, [
@@ -100,7 +108,9 @@ export async function inspectRepository(
       ]),
     ),
   ])
-  const changes = parseStatus(status)
+  const files = parseStatus(status)
+  const changes = files.filter((file) => file.status !== '!!')
+  const ignored = files.filter((file) => file.status === '!!')
   return {
     isGitRepository: true,
     worktrees: await Promise.all(
@@ -111,17 +121,125 @@ export async function inspectRepository(
     ),
     changes: changes.slice(0, 200),
     totalChanges: changes.length,
+    ignored: ignored.slice(0, 200),
+    totalIgnored: ignored.length,
   }
+}
+
+async function scopedFile(directory: string, file: string, allowMissing = false): Promise<string> {
+  if (typeof file !== 'string' || !file || file.includes('\0'))
+    throw new Error('잘못된 파일 경로입니다.')
+  const root = await realpath(directory)
+  const absolute = resolve(root, file)
+  if (!workspaceContains(root, absolute) || pathKey(root) === pathKey(absolute) ||
+    relative(root, absolute).split(sep).some((part) => part.toLowerCase() === '.git'))
+    throw new Error('프로젝트 내부 파일만 확인할 수 있습니다.')
+  const canonical = await realpath(absolute).catch((cause: NodeJS.ErrnoException) => {
+    if (allowMissing && cause.code === 'ENOENT') return absolute
+    throw cause
+  })
+  if (!workspaceContains(root, canonical) || relative(root, canonical).split(sep).some((part) => part.toLowerCase() === '.git'))
+    throw new Error('프로젝트 내부 파일만 확인할 수 있습니다.')
+  return absolute
+}
+
+export async function readIgnoredDirectory(directory: string, file: string, offset = 0): Promise<IgnoredDirectory> {
+  if (!Number.isSafeInteger(offset) || offset < 0)
+    throw new Error('잘못된 목록 위치입니다.')
+  const absolute = await scopedFile(directory, file)
+  if ((await lstat(absolute)).isSymbolicLink()) throw new Error('심볼릭 링크는 펼칠 수 없습니다.')
+  const ignored = await git(directory, ['--no-literal-pathspecs', 'check-ignore', '--no-index', '--', file]).catch((cause: { code?: number }) => {
+    if (cause.code === 1) return ''
+    throw cause
+  })
+  if (!ignored) throw new Error('무시된 폴더만 펼칠 수 있습니다.')
+  const tracked = new Set((await git(directory, ['ls-files', '--cached', '-z', '--', file])).split('\0'))
+  const entries: ChangedFile[] = []
+  let index = 0
+  // 큰 의존성 폴더도 요청한 구간만 읽고 하위 폴더는 펼칠 때 조회합니다.
+  for await (const entry of await opendir(absolute)) {
+    if (entry.name.toLowerCase() === '.git') continue
+    const path = `${file.replaceAll('\\', '/').replace(/\/$/, '')}/${entry.name}`
+    if (tracked.has(path)) continue
+    if (index++ < offset) continue
+    if (entries.length === 200) return { entries, hasMore: true }
+    entries.push({ path: `${path}${entry.isDirectory() ? '/' : ''}`, status: '!!' })
+  }
+  return { entries, hasMore: false }
+}
+
+export function compactRepositoryCommits(commits: RepositoryCommit[], tips: string[]): RepositoryCommit[] {
+  const children = new Map<string, number>()
+  for (const commit of commits) for (const parent of commit.parents)
+    children.set(parent, (children.get(parent) ?? 0) + 1)
+  const keep = new Set(tips)
+  for (const commit of commits)
+    if (commit.parents.length !== 1 || (children.get(commit.hash) ?? 0) > 1) keep.add(commit.hash)
+  for (const commit of commits)
+    if (commit.parents.length > 1) for (const parent of commit.parents) keep.add(parent)
+  // 일반 커밋의 연속 구간만 접고 모든 브랜치 끝·분기점·병합점·루트는 보존합니다.
+  const ancestors = new Map<string, string>()
+  for (let index = commits.length - 1; index >= 0; index--) {
+    const commit = commits[index]
+    ancestors.set(commit.hash, keep.has(commit.hash) ? commit.hash : ancestors.get(commit.parents[0]) ?? commit.parents[0])
+  }
+  return commits.filter((commit) => keep.has(commit.hash)).map((commit) => ({
+    ...commit, parents: [...new Set(commit.parents.map((parent) => ancestors.get(parent) ?? parent))],
+  }))
+}
+
+export async function refreshRepositoryRemotes(directory: string): Promise<void> {
+  await git(directory, ['fetch', '--all', '--no-tags'], 120_000)
+}
+
+export async function inspectRepositoryOverview(directory: string): Promise<RepositoryOverview> {
+  const snapshot = await inspectRepository(directory)
+  if (!snapshot.isGitRepository) throw new Error('Git 저장소가 아닙니다.')
+  const branchOutput = await git(directory, ['for-each-ref', '--sort=refname',
+    '--format=%(refname)%00%(objectname)%00%(subject)%00%(upstream:short)%00%(upstream:track)%00%(symref)', 'refs/heads/', 'refs/remotes/'])
+  const branches: RepositoryBranch[] = branchOutput.split(/\r?\n/).filter(Boolean).flatMap((line) => {
+    const [ref, commit, subject, upstream, tracking, symbolic] = line.split('\0')
+    if (symbolic) return []
+    return [{ ref, kind: ref.startsWith('refs/heads/') ? 'local' : 'remote',
+      name: ref.replace(/^refs\/(heads|remotes)\//, ''), commit, subject, upstream, tracking }]
+  })
+  const workspaces = []
+  // 동시에 실행되는 Git 프로세스 수를 제한해 Worktree가 많아도 UI를 방해하지 않습니다.
+  for (let index = 0; index < snapshot.worktrees.length; index += 4) {
+    workspaces.push(...await Promise.all(snapshot.worktrees.slice(index, index + 4).map(async (tree, offset) => {
+      try {
+        const state = index + offset === 0 && pathKey(tree.path) === pathKey(directory)
+          ? snapshot : await inspectRepository(tree.path)
+        if (!state.isGitRepository) throw new Error('Worktree의 Git 연결을 확인할 수 없습니다.')
+        const commit = (await git(tree.path, ['rev-parse', '--verify', 'HEAD']).catch(() => '')).trim()
+        return { ...tree, commit, main: index + offset === 0, changes: state.changes,
+          totalChanges: state.totalChanges, ignored: state.ignored, totalIgnored: state.totalIgnored }
+      } catch (cause) {
+        return { ...tree, commit: '', main: index + offset === 0, changes: [], totalChanges: 0,
+          ignored: [], totalIgnored: 0, error: cause instanceof Error ? cause.message : String(cause) }
+      }
+    })))
+  }
+  const tips = [...new Set([...branches.map((branch) => branch.commit), ...workspaces.map((tree) => tree.commit)].filter(Boolean))]
+  const workspaceTips = [...new Set(workspaces.map((tree) => tree.commit).filter(Boolean))]
+  const history = tips.length ? await git(directory, ['log', '--topo-order', '--branches', '--remotes',
+    '--format=%H%x00%P%x00%s', ...workspaceTips, '--'], 60_000, 64 * 1024 * 1024) : ''
+  const commits = history.split(/\r?\n/).filter(Boolean).map((line) => {
+    const [hash, parents, subject] = line.split('\0')
+    return { hash, parents: parents.split(' ').filter(Boolean), subject }
+  })
+  const graph = compactRepositoryCommits(commits, tips)
+  return { branches, workspaces, commits: graph, totalCommits: commits.length, collapsedCommits: commits.length - graph.length }
 }
 
 export async function readDiff(
   directory: string,
   file: string,
 ): Promise<string> {
+  await scopedFile(directory, file, true)
   const untracked = await git(directory, [
     'ls-files',
     '--others',
-    '--exclude-standard',
     '-z',
     '--',
     file,

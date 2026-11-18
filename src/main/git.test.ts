@@ -11,6 +11,10 @@ import {
   requireLinkedWorktree,
   inspectWorktreeDeletion,
   inspectRepository,
+  inspectRepositoryOverview,
+  compactRepositoryCommits,
+  refreshRepositoryRemotes,
+  readIgnoredDirectory,
 } from './git.ts'
 import { validateCloneInput } from './clone.ts'
 import { execFileSync, spawn } from 'node:child_process'
@@ -24,9 +28,207 @@ import {
   rm,
   realpath,
   rmdir,
+  symlink,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+
+test('무시된 파일은 변경 수에서 분리하고 큰 폴더는 나눠 조회하며 Git 인덱스를 보존한다', async (t) => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'lite-ignored-')))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const git = (...args: string[]) => execFileSync('git', ['--literal-pathspecs', '-C', root, ...args], { encoding: 'utf8', windowsHide: true })
+  git('init', '--initial-branch=main')
+  await writeFile(join(root, '.gitignore'), '.env\ncache/\n*.log\n', 'utf8')
+  await writeFile(join(root, 'tracked.log'), 'before\n', 'utf8')
+  git('add', '.gitignore')
+  git('add', '-f', 'tracked.log')
+  git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'base')
+  await writeFile(join(root, 'tracked.log'), 'after\n', 'utf8')
+  await writeFile(join(root, '.env'), 'IGNORED_CONTENT\n', 'utf8')
+  await writeFile(join(root, 'untracked.txt'), 'new\n', 'utf8')
+  await mkdir(join(root, 'cache', '하위'), { recursive: true })
+  await writeFile(join(root, 'cache', '하위', 'file[1].txt'), '중첩 무시 파일\n', 'utf8')
+  await Promise.all(Array.from({ length: 201 }, (_, index) => writeFile(join(root, 'cache', `${index}.log`), 'cache\n', 'utf8')))
+  const snapshot = await inspectRepository(root)
+  assert.deepEqual(snapshot.ignored.map((file) => file.path).sort(), ['.env', 'cache/'])
+  assert.equal(snapshot.totalIgnored, 2)
+  assert.equal(snapshot.totalChanges, 2)
+  assert.equal(snapshot.changes.some((file) => file.status === '!!'), false)
+  await writeFile(join(root, 'cache', 'keep.txt'), 'tracked\n', 'utf8')
+  git('add', '-f', 'cache/keep.txt')
+  git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'tracked cache')
+  const first = await readIgnoredDirectory(root, 'cache/')
+  const second = await readIgnoredDirectory(root, 'cache/', 200)
+  assert.equal(first.entries.length, 200)
+  assert.equal(first.hasMore, true)
+  assert.equal(second.entries.length, 2)
+  assert.equal(second.hasMore, false)
+  assert.equal(new Set([...first.entries, ...second.entries].map((file) => file.path)).size, 202)
+  assert.equal([...first.entries, ...second.entries].some((file) => file.path === 'cache/keep.txt'), false)
+  assert.match(await readDiff(root, '.env'), /\+IGNORED_CONTENT/)
+  assert.match(await readDiff(root, 'cache/하위/file[1].txt'), /\+중첩 무시 파일/)
+  assert.match(await readDiff(root, 'tracked.log'), /-before\n\+after/)
+  assert.equal(git('diff', '--cached'), '')
+  assert.equal(git('ls-files', '--error-unmatch', 'tracked.log').trim(), 'tracked.log')
+  await assert.rejects(readIgnoredDirectory(root, 'cache/', -1), /목록 위치/)
+  await assert.rejects(readIgnoredDirectory(root, '.git'), /프로젝트 내부/)
+  await assert.rejects(readDiff(root, '.git/config'), /프로젝트 내부/)
+  await assert.rejects(readDiff(root, '../outside'), /프로젝트 내부/)
+  await writeFile(join(root, 'cache', 'binary'), Buffer.from([0, 1, 2]))
+  assert.match(await readDiff(root, 'cache/binary'), /바이너리/)
+  await writeFile(join(root, 'cache', 'large'), 'x'.repeat(1024 * 1024 + 1), 'utf8')
+  assert.match(await readDiff(root, 'cache/large'), /1MB/)
+  await rm(join(root, 'tracked.log'))
+  assert.match(await readDiff(root, 'tracked.log'), /deleted file/)
+})
+
+test('무시된 폴더의 외부 심볼릭 링크는 내용을 읽거나 펼치지 않는다', async (t) => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'lite-ignored-link-')))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const git = (...args: string[]) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', windowsHide: true })
+  git('init')
+  await writeFile(join(root, '.gitignore'), 'cache/\n', 'utf8')
+  await mkdir(join(root, 'cache'))
+  const outside = await realpath(await mkdtemp(join(tmpdir(), 'lite-ignored-outside-')))
+  t.after(() => rm(outside, { recursive: true, force: true }))
+  await writeFile(join(outside, 'secret.txt'), 'outside', 'utf8')
+  await symlink(outside, join(root, 'cache', 'link'), process.platform === 'win32' ? 'junction' : 'dir')
+  await assert.rejects(readIgnoredDirectory(root, 'cache/link'), /프로젝트 내부/)
+  await assert.rejects(readDiff(root, 'cache/link/secret.txt'), /프로젝트 내부/)
+  await symlink(join(root, '.git'), join(root, 'cache', 'metadata'), process.platform === 'win32' ? 'junction' : 'dir')
+  await assert.rejects(readDiff(root, 'cache/metadata/config'), /프로젝트 내부/)
+})
+
+test('브랜치 트리는 로컬·외부 Worktree·Detached HEAD와 커밋 분기 및 변경을 함께 반환한다', async (t) => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'lite-overview-')))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', windowsHide: true })
+  const commit = (cwd: string, subject: string) => git(cwd, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-m', subject)
+  git(root, 'init', '--initial-branch=main')
+  await writeFile(join(root, '.gitignore'), '*.log\n', 'utf8')
+  git(root, 'add', '.')
+  commit(root, 'base')
+  const base = git(root, 'rev-parse', 'HEAD').trim()
+  git(root, 'branch', 'unattached')
+  const linked = join(root, '외부 Worktree')
+  const detached = join(root, 'detached')
+  git(root, 'worktree', 'add', '-b', 'feature/test', linked)
+  commit(linked, 'feature')
+  commit(root, 'main change')
+  git(root, 'worktree', 'add', '--detach', detached, base)
+  commit(detached, 'detached change')
+  await writeFile(join(root, 'local.txt'), 'local\n', 'utf8')
+  await writeFile(join(linked, 'working.txt'), 'worktree\n', 'utf8')
+  await writeFile(join(linked, 'cache.log'), 'ignored\n', 'utf8')
+  const overview = await inspectRepositoryOverview(linked)
+  assert.deepEqual(overview.branches.map((branch) => branch.name), ['feature/test', 'main', 'unattached'])
+  assert.equal(overview.workspaces.length, 3)
+  assert.equal(overview.workspaces.find((tree) => tree.main)?.path, root)
+  assert.ok(overview.workspaces.find((tree) => tree.path === root)?.changes.some((file) => file.path === 'local.txt'))
+  const work = overview.workspaces.find((tree) => tree.path === linked)!
+  assert.equal(work.totalChanges, 1)
+  assert.equal(work.totalIgnored, 1)
+  const orphan = overview.workspaces.find((tree) => tree.path === detached)!
+  assert.equal(orphan.branch, 'Detached HEAD')
+  assert.ok(overview.commits.some((item) => item.hash === orphan.commit && item.subject === 'detached change'))
+  assert.equal(overview.commits.filter((item) => item.parents.includes(base)).length, 3)
+  assert.equal(overview.totalCommits, 4)
+  assert.equal(overview.collapsedCommits, 0)
+  await rm(linked, { recursive: true, force: true })
+  const broken = (await inspectRepositoryOverview(root)).workspaces.find((tree) => tree.path === linked)!
+  assert.ok(broken.error)
+})
+
+test('전체 형상은 300개보다 오래된 브랜치·분기·병합을 보존하고 중간 경로만 접는다', () => {
+  const chain = Array.from({ length: 501 }, (_, index) => ({
+    hash: `c${500 - index}`, parents: index === 500 ? [] : [`c${499 - index}`], subject: 'middle',
+  }))
+  const graph = compactRepositoryCommits([
+    { hash: 'merge', parents: ['c500', 'feature'], subject: 'merge' },
+    { hash: 'feature', parents: ['c100'], subject: 'feature' },
+    ...chain,
+  ], ['merge', 'c500', 'c10', 'feature'])
+  assert.deepEqual(graph.map((item) => item.hash), ['merge', 'feature', 'c500', 'c100', 'c10', 'c0'])
+  assert.deepEqual(graph.find((item) => item.hash === 'c500')?.parents, ['c100'])
+  assert.deepEqual(graph.find((item) => item.hash === 'c100')?.parents, ['c10'])
+  assert.deepEqual(graph.find((item) => item.hash === 'merge')?.parents, ['c500', 'feature'])
+})
+
+test('브랜치 참조가 사라진 병합도 양쪽 부모 경로를 보존한다', () => {
+  const graph = compactRepositoryCommits([
+    { hash: 'merge', parents: ['left', 'right'], subject: 'merge' },
+    { hash: 'left', parents: ['left-middle'], subject: 'left' },
+    { hash: 'left-middle', parents: ['base'], subject: '' },
+    { hash: 'right', parents: ['right-middle'], subject: 'right' },
+    { hash: 'right-middle', parents: ['base'], subject: '' },
+    { hash: 'base', parents: [], subject: 'base' },
+  ], ['merge'])
+  assert.deepEqual(graph.map((commit) => commit.hash), ['merge', 'left', 'right', 'base'])
+  assert.deepEqual(graph[0].parents, ['left', 'right'])
+  assert.deepEqual(graph[1].parents, ['base'])
+  assert.deepEqual(graph[2].parents, ['base'])
+})
+
+test('원격 전용 브랜치와 같은 이름의 로컬 브랜치를 구분하고 원격 HEAD 별칭은 제외한다', async (t) => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'lite-overview-remote-')))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const git = (...args: string[]) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', windowsHide: true })
+  git('init', '--initial-branch=main')
+  git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-m', 'base')
+  const base = git('rev-parse', 'HEAD').trim()
+  const remote = git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit-tree', `${base}^{tree}`, '-p', base, '-m', 'remote only').trim()
+  git('update-ref', 'refs/remotes/origin/only', remote)
+  git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/only')
+  git('branch', 'origin/only', base)
+  const overview = await inspectRepositoryOverview(root)
+  assert.equal(overview.branches.filter((branch) => branch.name === 'origin/only').length, 2)
+  assert.ok(overview.branches.some((branch) => branch.ref === 'refs/remotes/origin/only' && branch.kind === 'remote'))
+  assert.ok(overview.branches.some((branch) => branch.ref === 'refs/heads/origin/only' && branch.kind === 'local'))
+  assert.equal(overview.branches.some((branch) => branch.name === 'origin/HEAD'), false)
+  assert.ok(overview.commits.some((commit) => commit.hash === remote && commit.subject === 'remote only'))
+})
+
+test('원격 갱신은 원격 전용 브랜치를 가져오고 로컬 브랜치와 작업 파일을 보존한다', async (t) => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'lite-overview-fetch-')))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', windowsHide: true })
+  const remote = join(root, 'remote.git'), source = join(root, 'source'), local = join(root, 'local')
+  git(root, 'init', '--bare', '--initial-branch=main', remote)
+  git(root, 'init', '--initial-branch=main', source)
+  git(source, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-m', 'base')
+  git(source, 'remote', 'add', 'origin', remote)
+  git(source, 'push', '-u', 'origin', 'main')
+  git(root, 'clone', remote, local)
+  const head = git(local, 'rev-parse', 'HEAD')
+  git(source, 'switch', '-c', 'remote-feature')
+  git(source, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-m', 'remote change')
+  git(source, 'push', 'origin', 'remote-feature')
+  await writeFile(join(local, 'working.txt'), 'keep local changes', 'utf8')
+  assert.equal((await inspectRepositoryOverview(local)).branches.some((branch) => branch.name === 'origin/remote-feature'), false)
+  await refreshRepositoryRemotes(local)
+  const overview = await inspectRepositoryOverview(local)
+  assert.ok(overview.branches.some((branch) => branch.name === 'origin/remote-feature' && branch.kind === 'remote'))
+  assert.ok(overview.commits.some((commit) => commit.subject === 'remote change'))
+  assert.equal(git(local, 'rev-parse', 'HEAD'), head)
+  assert.equal(await readFile(join(local, 'working.txt'), 'utf8'), 'keep local changes')
+  git(local, 'remote', 'set-url', 'origin', join(root, 'missing.git'))
+  await assert.rejects(refreshRepositoryRemotes(local))
+  assert.equal(git(local, 'rev-parse', 'HEAD'), head)
+})
+
+test('커밋 전 저장소에서도 브랜치 트리와 무시된 파일을 확인한다', async (t) => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'lite-overview-unborn-')))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  execFileSync('git', ['-C', root, 'init', '--initial-branch=main'], { windowsHide: true })
+  await writeFile(join(root, '.gitignore'), '*.log\n', 'utf8')
+  await writeFile(join(root, 'new.log'), 'ignored\n', 'utf8')
+  const overview = await inspectRepositoryOverview(root)
+  assert.deepEqual(overview.branches, [])
+  assert.deepEqual(overview.commits, [])
+  assert.equal(overview.workspaces[0].branch, 'main')
+  assert.equal(overview.workspaces[0].totalIgnored, 1)
+  assert.match(await readDiff(root, 'new.log'), /\+ignored/)
+})
 
 test('Git 삭제 후 빈 폴더만 재시도하고 새로 생긴 파일은 보존한다', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'lite-ide-empty-worktree-'))

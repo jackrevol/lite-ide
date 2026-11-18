@@ -92,6 +92,9 @@ const api: DesktopApi = {
   cloneProject: (url, parent, name) =>
     ipcRenderer.invoke('project:clone', url, parent, name),
   inspectRepository: (path) => ipcRenderer.invoke('repository:inspect', path),
+  inspectRepositoryOverview: (path) => ipcRenderer.invoke('repository:overview', path),
+  refreshRepositoryRemotes: (path) => ipcRenderer.invoke('repository:fetch', path),
+  readIgnoredDirectory: (workspace, path, offset) => ipcRenderer.invoke('repository:ignored-directory', workspace, path, offset),
   readDiff: (path, file) => ipcRenderer.invoke('repository:diff', path, file),
   codexStatus: () => ipcRenderer.invoke('codex:status'),
   codexUsage: () => ipcRenderer.invoke('codex:usage'),

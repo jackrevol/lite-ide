@@ -7,6 +7,7 @@ import {
   FolderOpen,
   GitBranch,
   GitCompareArrows,
+  GitFork,
   LoaderCircle,
   Moon,
   MoreHorizontal,
@@ -30,6 +31,8 @@ import { TaskTabs } from './components/TaskTabs'
 import { SessionStatusIndicator } from './components/SessionStatusIndicator'
 import { TaskTerminal } from './components/TaskTerminal'
 import { ChangedFilesTree } from './components/ChangedFilesTree'
+import { IgnoredFiles } from './components/IgnoredFiles'
+import { RepositoryTreeDialog } from './components/RepositoryTreeDialog'
 import { StartupPanel } from './components/StartupPanel'
 import { DiffView } from './components/DiffView'
 import { SessionTab } from './components/SessionTab'
@@ -60,6 +63,8 @@ const emptyRepository: RepositorySnapshot = {
   worktrees: [],
   changes: [],
   totalChanges: 0,
+  ignored: [],
+  totalIgnored: 0,
 }
 const errorText = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause)
@@ -110,6 +115,7 @@ export function App() {
   const [collapsed, setCollapsed] = useState<string[]>([])
   const [newTaskProject, setNewTaskProject] = useState<Project | null>(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [treeProject, setTreeProject] = useState<Project | null>(null)
   const [settingsProject, setSettingsProject] = useState('')
   const [defaults, setDefaults] = useState<ProjectDefaults>({
     baseRef: 'HEAD',
@@ -744,6 +750,13 @@ export function App() {
                         <GitBranch size={14} />
                       </button>
                       <button
+                        aria-label={`${item.name} Git 트리`}
+                        title="브랜치 · 로컬 · 모든 Worktree 작업 상태"
+                        onClick={() => setTreeProject(item)}
+                      >
+                        <GitFork size={14} />
+                      </button>
+                      <button
                         className="project-new-task"
                         aria-label={`${item.name} 새 작업`}
                         title={`${item.name} 새 작업`}
@@ -968,7 +981,7 @@ export function App() {
                   <span>{current?.branch ?? '작업 공간'}</span>
                   <span className="muted">Working tree</span>
                 </div>
-                {repository.changes.length > 0 && (
+                {(repository.changes.length > 0 || repository.totalIgnored > 0) && (
                   <label className="file-search">
                     <Search size={13} />
                     <input
@@ -998,14 +1011,14 @@ export function App() {
                         {!current?.path
                           ? '작업을 선택해 주세요'
                           : repository.isGitRepository
-                            ? '모든 변경 사항이 반영되었습니다'
+                            ? 'Git 변경 사항이 없습니다'
                             : 'Git 저장소가 아닙니다'}
                       </strong>
                       <p>
                         {!current?.path
                           ? '전용 Worktree의 변경 사항이 여기에 표시됩니다.'
                           : repository.isGitRepository
-                            ? '작업 중인 변경 파일이 여기에 표시됩니다.'
+                            ? repository.totalIgnored > 0 ? '무시된 파일·폴더는 아래에서 확인할 수 있습니다.' : '작업 중인 변경 파일이 여기에 표시됩니다.'
                             : 'Worktree 연결을 확인하거나 작업 삭제에서 로컬 기록을 정리해 주세요.'}
                       </p>
                     </div>
@@ -1017,6 +1030,7 @@ export function App() {
                       200 / {repository.totalChanges}개 표시
                     </p>
                   )}
+                  {current && repository.totalIgnored > 0 && <IgnoredFiles key={current.path} files={repository.ignored} total={repository.totalIgnored} workspace={current.path} query={fileQuery} selected={selectedFile} onSelect={openDiff} refresh={refresh} />}
                 </div>
                 <footer className="changes-footer">
                   <span
@@ -1048,6 +1062,7 @@ export function App() {
           onClose={() => setOpening(false)}
         />
       )}
+      {treeProject && <RepositoryTreeDialog project={treeProject} onClose={() => setTreeProject(null)} />}
       {newTaskProject && (
         <NewTaskDialog
           project={newTaskProject}

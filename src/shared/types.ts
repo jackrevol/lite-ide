@@ -107,6 +107,47 @@ export interface RepositorySnapshot {
   worktrees: Worktree[]
   changes: ChangedFile[]
   totalChanges: number
+  ignored: ChangedFile[]
+  totalIgnored: number
+}
+
+export interface IgnoredDirectory {
+  entries: ChangedFile[]
+  hasMore: boolean
+}
+
+export interface RepositoryBranch {
+  ref: string
+  kind: 'local' | 'remote'
+  name: string
+  commit: string
+  subject: string
+  upstream: string
+  tracking: string
+}
+
+export interface RepositoryCommit {
+  hash: string
+  parents: string[]
+  subject: string
+}
+
+export interface RepositoryWorkspace extends Worktree {
+  commit: string
+  main: boolean
+  changes: ChangedFile[]
+  totalChanges: number
+  ignored: ChangedFile[]
+  totalIgnored: number
+  error?: string
+}
+
+export interface RepositoryOverview {
+  branches: RepositoryBranch[]
+  commits: RepositoryCommit[]
+  workspaces: RepositoryWorkspace[]
+  totalCommits: number
+  collapsedCommits: number
 }
 
 export interface DesktopApi {
@@ -164,6 +205,9 @@ export interface DesktopApi {
   defaultCloneDirectory(): Promise<string>
   cloneProject(url: string, parent: string, name: string): Promise<Project>
   inspectRepository(projectPath: string): Promise<RepositorySnapshot>
+  inspectRepositoryOverview(projectPath: string): Promise<RepositoryOverview>
+  refreshRepositoryRemotes(projectPath: string): Promise<void>
+  readIgnoredDirectory(workspace: string, path: string, offset?: number): Promise<IgnoredDirectory>
   inspectWorktreeDeletion(
     projectPath: string,
     target: string,

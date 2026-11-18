@@ -1,0 +1,36 @@
+.repository-tree-dialog { width: min(1500px, 96vw); height: min(960px, 92vh); max-width: none; --graph-0: #819adc; --graph-1: #79af8a; --graph-2: #c794d4; --graph-3: #ceac72; --graph-focus: #d6a55f; }
+.repository-tree-dialog[open] { display: flex; flex-direction: column; }
+.repository-tree-heading { display: flex; align-items: center; gap: 8px; padding: 16px 20px; border-bottom: 1px solid var(--border); }
+.repository-tree-heading > div { min-width: 0; flex: 1; }
+.repository-tree-heading h2 { display: flex; align-items: center; gap: 8px; font-size: 15px; }
+.repository-tree-heading p { margin-top: 5px; color: var(--muted-foreground); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repository-tree-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 12px 20px; }
+.repository-tree-toolbar label { display: flex; align-items: center; gap: 8px; }
+.repository-tree-toolbar input, .repository-tree-toolbar select { border: 1px solid var(--input); border-radius: 5px; background: var(--background); color: inherit; padding: 6px 8px; max-width: 300px; }
+.repository-tree-toolbar > span { color: var(--muted-foreground); font-size: 11px; }
+.repository-tracking-status { flex-shrink: 0; padding: 0 20px 12px; border-bottom: 1px solid var(--border); color: var(--muted-foreground); font-size: 11px; overflow-wrap: anywhere; }
+.repository-tree-empty { padding: 24px; color: var(--muted-foreground); }
+.repository-history { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.repository-commit-list { min-width: max-content; width: 100%; }
+.repository-commit { display: flex; align-items: center; height: 40px; padding-right: 20px; }
+.repository-commit.selected { background: #d6a55f18; box-shadow: inset 3px 0 var(--graph-focus); }
+.repository-commit.search-match:not(.selected) { background: #819adc20; box-shadow: inset 3px 0 var(--graph-0); }
+.repository-commit > svg { align-self: stretch; }
+.repository-node-refs { display: flex; align-items: center; gap: 6px; }
+.repository-ref, .repository-tree-ref { font-size: 11px; border-radius: 4px; padding: 4px 6px; white-space: nowrap; }
+button.repository-ref { display: flex; align-items: center; gap: 4px; background: var(--selected); color: var(--graph-0); }
+button.repository-ref.remote { color: var(--graph-1); background: #79af8a18; }
+button.repository-ref[aria-pressed='true'] { color: var(--foreground); background: #d6a55f28; outline: 2px solid var(--graph-focus); outline-offset: 1px; }
+.repository-tree-ref { display: flex; gap: 12px; color: var(--muted-foreground); border: 1px solid var(--input); }
+.repository-tree-ref small { font-size: 10px; color: var(--subtle); }
+.repository-graph-heading { flex-shrink: 0; display: flex; align-items: center; gap: 4px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.repository-graph-heading > div { flex: 1; min-width: 0; }
+.repository-graph-heading p { margin-top: 5px; color: var(--muted-foreground); font-size: 11px; }
+.repository-graph-viewport { flex: 1; min-height: 0; overflow: auto; padding-top: 8px; }
+.repository-graph-legend { flex-shrink: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 10px 16px; border-top: 1px solid var(--border); color: var(--muted-foreground); font-size: 10px; }
+.ignored-files { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+.ignored-files h3 { padding: 0 12px; color: var(--muted-foreground); font-size: 11px; }
+.ignored-note { padding: 6px 12px; font-size: 11px; line-height: 1.6; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.file-status.ignored { color: var(--muted-foreground); }
+.ignored-more { margin: 6px 12px; color: var(--muted-foreground); font-size: 11px; }
+.changes-content:has(.ignored-files) > .panel-empty { height: auto; min-height: 100px; }

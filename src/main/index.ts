@@ -24,6 +24,9 @@ import { readFileSync } from 'node:fs'
 import {
   createWorktree,
   inspectRepository,
+  inspectRepositoryOverview,
+  refreshRepositoryRemotes,
+  readIgnoredDirectory,
   readDiff,
   removeWorktree,
   pathKey,
@@ -787,6 +790,19 @@ app.whenReady().then(() => {
         cloning = false
       }
     },
+  )
+  ipcMain.handle('repository:overview', async (_event, projectPath: string) => {
+    const directory = await requireProject(projectPath)
+    const overview = await inspectRepositoryOverview(directory)
+    for (const tree of overview.workspaces)
+      if (!deletedWorkspaces.has(pathKey(tree.path))) workspaces.add(resolve(tree.path))
+    return overview
+  })
+  ipcMain.handle('repository:fetch', async (_event, projectPath: string) =>
+    refreshRepositoryRemotes(await requireProject(projectPath)),
+  )
+  ipcMain.handle('repository:ignored-directory', async (_event, workspace: unknown, path: string, offset?: number) =>
+    readIgnoredDirectory(requireWorkspace(workspace), path, offset),
   )
   ipcMain.handle('repository:inspect', async (_event, projectPath: unknown) => {
     const directory = requireWorkspace(projectPath)
