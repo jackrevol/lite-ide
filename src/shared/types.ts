@@ -20,6 +20,10 @@ export interface WorktreeDeletionPreview {
   branch: string | null
   totalChanges: number
 }
+export type TaskAgentSettings =
+  | { style: 'single' }
+  | { style: 'delegated'; model: string; effort: string; maxConcurrent?: number }
+
 export interface TerminalOpen {
   taskId: string
   workspace: string
@@ -28,6 +32,7 @@ export interface TerminalOpen {
   rows: number
   model?: string
   effort?: string
+  agentSettings?: TaskAgentSettings
   prompt?: string
   images?: string[]
   threadId?: string

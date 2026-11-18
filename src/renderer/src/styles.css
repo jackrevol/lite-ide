@@ -1838,7 +1838,23 @@ dialog::backdrop {
 }
 .new-task-dialog textarea {
   resize: vertical;
-  min-height: 80px;
+}
+.new-task-advanced {
+  border-top: 1px solid var(--border);
+}
+.new-task-advanced summary {
+  padding: 10px 0;
+  cursor: pointer;
+  color: var(--foreground);
+  font-size: 12px;
+}
+.new-task-advanced-fields {
+  display: grid;
+  gap: 12px;
+}
+.new-task-advanced-fields > p:first-child,
+.new-task-dialog .new-task-branch-warning {
+  margin-bottom: 0;
 }
 .task-model-fields {
   display: grid;

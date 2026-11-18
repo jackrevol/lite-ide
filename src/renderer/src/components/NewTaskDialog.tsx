@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { TerminalSnapshot, CodexStatus, Project, Worktree } from '../../../shared/types'
+import type { TerminalSnapshot, CodexStatus, Project, TaskAgentSettings, Worktree } from '../../../shared/types'
 import type { WorkspaceTask } from '../lib/workspace-state'
 import { Button } from './ui/button'
 import { BaseBranchSelect, useBranches } from './BaseBranchSelect'
@@ -29,25 +29,31 @@ export function NewTaskDialog({
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const [name, setName] = useState('')
-  const [prompt, setPrompt] = useState('')
-  const promptInput = useRef<HTMLTextAreaElement>(null)
-  const promptSelection = useRef({ start: 0, end: 0 })
+  const [purpose, setPurpose] = useState('')
+  const [requirements, setRequirements] = useState('')
+  const requirementsInput = useRef<HTMLTextAreaElement>(null)
+  const requirementsSelection = useRef({ start: 0, end: 0 })
+  const advancedSettings = useRef<HTMLDetailsElement>(null)
   const attachmentTarget = useRef<TerminalSnapshot | null>({ taskId: crypto.randomUUID(), generation: 'initial',
     kind: 'codex', running: true, workspace: project.path, output: '', sequence: 0, cols: 80, rows: 24 })
   const attachments = useTerminalAttachments(attachmentTarget, true, (attachment) => {
-    const { start, end } = promptSelection.current
-    promptSelection.current = { start: start + attachment.reference.length, end: start + attachment.reference.length }
-    setPrompt((previous) => previous.slice(0, start) + attachment.reference + previous.slice(end))
+    const { start, end } = requirementsSelection.current
+    requirementsSelection.current = { start: start + attachment.reference.length, end: start + attachment.reference.length }
+    setRequirements((previous) => previous.slice(0, start) + attachment.reference + previous.slice(end))
     requestAnimationFrame(() => {
-      promptInput.current?.focus()
-      promptInput.current?.setSelectionRange(promptSelection.current.start, promptSelection.current.end)
+      requirementsInput.current?.focus()
+      requirementsInput.current?.setSelectionRange(requirementsSelection.current.start, requirementsSelection.current.end)
     })
   })
   const attachmentActions = useRef(attachments)
   attachmentActions.current = attachments
   const retained = useRef(false)
   const files = attachments.drafts.flatMap((draft) => draft.attachment ? [draft.attachment] : [])
-  const hasRequest = !!prompt.trim()
+  const prompt = [
+    purpose.trim() && `## 목적\n${purpose.trim()}`,
+    requirements.trim() && `## 요구사항\n${requirements.trim()}`,
+  ].filter(Boolean).join('\n\n')
+  const hasRequest = !!prompt
   const attachmentsReady = attachments.drafts.every((draft) => draft.phase === 'ready')
   useEffect(() => () => {
     if (!retained.current) for (const draft of attachmentActions.current.draftsRef.current) void attachmentActions.current.remove(draft.id)
@@ -58,6 +64,10 @@ export function NewTaskDialog({
   )
   const [model, setModel] = useState(initialModel)
   const [effort, setEffort] = useState(initialEffort)
+  const [workStyle, setWorkStyle] = useState<TaskAgentSettings['style']>('single')
+  const [subagentModel, setSubagentModel] = useState('')
+  const [subagentEffort, setSubagentEffort] = useState('')
+  const [subagentLimit, setSubagentLimit] = useState('')
   const [baseRef, setBaseRef] = useState(initialBaseRef)
   const branchList = useBranches(project.path)
   const invalidBaseRef = branchList.loading || !!branchList.error ||
@@ -70,6 +80,13 @@ export function NewTaskDialog({
   const invalidModel = !!model && !selectedModel
   const invalidEffort =
     !!effort && !!selectedModel && !selectedModel.efforts.includes(effort)
+  const delegated = workStyle === 'delegated'
+  const subagentModelInfo = connection.models.find((item) => item.id === (subagentModel || model))
+  const invalidSubagentModel = delegated && !!subagentModel && !subagentModelInfo
+  const invalidSubagentEffort = delegated && !!subagentEffort && !subagentModelInfo?.efforts.includes(subagentEffort)
+  const maxConcurrent = subagentLimit === '' ? undefined : Number(subagentLimit)
+  const invalidSubagentLimit = delegated && maxConcurrent !== undefined &&
+    (!Number.isSafeInteger(maxConcurrent + 1) || maxConcurrent < 1)
   useEffect(() => {
     dialog.current?.showModal()
   }, [])
@@ -85,8 +102,15 @@ export function NewTaskDialog({
     if (!effort && selected.efforts.includes(selected.defaultEffort))
       setEffort(selected.defaultEffort)
   }, [connection.models, model, effort])
+  function addRequirementFiles(files: File[]) {
+    if (!files.length || submitting.current || created.current) return
+    if (advancedSettings.current) advancedSettings.current.open = true
+    void attachments.addFiles(files)
+  }
+
   async function submit() {
-    if (submitting.current || !attachmentsReady || (!created.current && invalidBaseRef)) return
+    if (submitting.current || !attachmentsReady || invalidSubagentModel ||
+      invalidSubagentEffort || invalidSubagentLimit || (!created.current && invalidBaseRef)) return
     submitting.current = true
     setPending(true)
     setError('')
@@ -106,9 +130,11 @@ export function NewTaskDialog({
           name: name.trim() || tree.branch,
           model,
           effort,
+          agentSettings: delegated
+            ? { style: 'delegated', model: subagentModel || model, effort: subagentEffort, maxConcurrent }
+            : { style: 'single' },
           terminalKind: 'codex',
           initialPrompt: prompt || undefined,
-
         }
       }
       if (files.length && !retained.current) {
@@ -145,34 +171,6 @@ export function NewTaskDialog({
         <h2 id="new-task-title">새 작업</h2>
         <p title={project.path}>{project.name}에서 작업을 시작합니다.</p>
         <fieldset disabled={pending || !!created.current}>
-          <p>
-            선택한 기준 브랜치의 최신 형상을 확인한 뒤 작업 전용 브랜치와 폴더를 생성합니다.
-          </p>
-          <BaseBranchSelect
-            label="기준 브랜치"
-            ariaLabel="이번 작업 기준 브랜치"
-            value={baseRef}
-            onChange={setBaseRef}
-            {...branchList}
-          />
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onManageBaseBranch}
-          >
-            기본 기준 브랜치 관리
-          </Button>
-          <label>
-            새 브랜치 이름
-            <input
-              aria-label="새 브랜치 이름"
-              value={branch}
-              onChange={(event) => setBranch(event.target.value)}
-              required
-              maxLength={100}
-            />
-          </label>
           <label>
             작업 이름
             <input
@@ -183,30 +181,11 @@ export function NewTaskDialog({
               maxLength={100}
             />
           </label>
-          <label>
-            첫 요청
-            <textarea
-              ref={promptInput}
-              readOnly={attachments.drafts.some((draft) => draft.phase === 'loading')}
-              aria-label="첫 요청"
-              placeholder="Codex에게 요청할 내용을 입력하세요. 비워 두면 초안으로 만듭니다."
-              value={prompt}
-              onChange={(event) => { setPrompt(event.target.value); promptSelection.current = { start: event.target.selectionStart, end: event.target.selectionEnd } }}
-              onSelect={(event) => { if (!event.currentTarget.readOnly) promptSelection.current = { start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd } }}
-              onPaste={(event) => { const files = Array.from(event.clipboardData.files); if (files.length) { event.preventDefault(); void attachments.addFiles(files) } }}
-              rows={4}
-            />
-          </label>
-          <div onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault() }}
-            onDrop={(event) => { event.preventDefault(); if (!pending && !created.current) void attachments.addFiles(Array.from(event.dataTransfer.files)) }}
-            onPaste={(event) => { const files = Array.from(event.clipboardData.files); if (files.length) { event.preventDefault(); void attachments.addFiles(files) } }}>
-            <AttachmentControls attachments={attachments} disabled={pending || !!created.current} onInserted={() => {}} />
-          </div>
           <div className="task-model-fields">
             <label>
-              모델
+              메인 에이전트 모델
               <select
-                aria-label="새 작업 모델"
+                aria-label="메인 에이전트 모델"
                 value={model}
                 disabled={!connection.models.length}
                 onChange={(event) => {
@@ -231,9 +210,9 @@ export function NewTaskDialog({
               </select>
             </label>
             <label>
-              추론 수준
+              메인 에이전트 추론 수준
               <select
-                aria-label="새 작업 추론 수준"
+                aria-label="메인 에이전트 추론 수준"
                 value={effort}
                 disabled={
                   !selectedModel ||
@@ -255,13 +234,185 @@ export function NewTaskDialog({
               </select>
             </label>
           </div>
+          <label>
+            목적
+            <textarea
+              placeholder="이 작업으로 어떤 결과를 얻고 싶은지 적어 주세요."
+              value={purpose}
+              onChange={(event) => setPurpose(event.target.value)}
+              rows={2}
+            />
+          </label>
+          <label>
+            요구사항
+            <textarea
+              ref={requirementsInput}
+              readOnly={attachments.drafts.some((draft) => draft.phase === 'loading')}
+              placeholder="작업 범위, 지켜야 할 조건, 완료 기준을 적어 주세요."
+              value={requirements}
+              onChange={(event) => {
+                setRequirements(event.target.value)
+                requirementsSelection.current = {
+                  start: event.target.selectionStart,
+                  end: event.target.selectionEnd,
+                }
+              }}
+              onSelect={(event) => {
+                if (!event.currentTarget.readOnly) {
+                  requirementsSelection.current = {
+                    start: event.currentTarget.selectionStart,
+                    end: event.currentTarget.selectionEnd,
+                  }
+                }
+              }}
+              onPaste={(event) => {
+                const files = Array.from(event.clipboardData.files)
+                if (files.length) {
+                  event.preventDefault()
+                  addRequirementFiles(files)
+                }
+              }}
+              onDragOver={(event) => {
+                if (event.dataTransfer.types.includes('Files')) event.preventDefault()
+              }}
+              onDrop={(event) => {
+                const files = Array.from(event.dataTransfer.files)
+                if (files.length) {
+                  event.preventDefault()
+                  addRequirementFiles(files)
+                }
+              }}
+              rows={4}
+            />
+          </label>
+          <details ref={advancedSettings} className="new-task-advanced">
+            <summary>고급 설정</summary>
+            <div className="new-task-advanced-fields">
+              <label>
+                작업 스타일
+                <select
+                  value={workStyle}
+                  onChange={(event) => setWorkStyle(event.target.value === 'delegated' ? 'delegated' : 'single')}
+                >
+                  <option value="single">단일 에이전트</option>
+                  <option value="delegated">서브에이전트에 위임</option>
+                </select>
+              </label>
+              {delegated && (
+                <>
+                  <p>
+                    메인이 계획·분담·검수를 맡고 구현과 테스트를 위임합니다.
+                    모델과 추론 수준은 메인이 서브에이전트를 시작할 때 요청합니다.
+                  </p>
+                  <div className="task-model-fields">
+                    <label>
+                      서브에이전트 모델
+                      <select
+                        value={subagentModel}
+                        disabled={!connection.models.length}
+                        onChange={(event) => {
+                          setSubagentModel(event.target.value)
+                          setSubagentEffort('')
+                        }}
+                      >
+                        <option value="">메인과 동일</option>
+                        {invalidSubagentModel && <option value={subagentModel}>{subagentModel} (현재 사용 불가)</option>}
+                        {connection.models.map((item) => (
+                          <option key={item.id} value={item.id}>{item.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      서브에이전트 추론 수준
+                      <select
+                        value={subagentEffort}
+                        disabled={!subagentModelInfo?.efforts.length && !invalidSubagentEffort}
+                        onChange={(event) => setSubagentEffort(event.target.value)}
+                      >
+                        <option value="">모델 기본값</option>
+                        {invalidSubagentEffort && <option value={subagentEffort}>{subagentEffort} (현재 사용 불가)</option>}
+                        {subagentModelInfo?.efforts.map((item) => (
+                          <option key={item} value={item}>{item}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <label>
+                    서브에이전트 최대 동시 실행 수
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      placeholder="Codex 기본값"
+                      value={subagentLimit}
+                      onChange={(event) => setSubagentLimit(event.target.value)}
+                    />
+                  </label>
+                </>
+              )}
+              <p>
+                선택한 기준 브랜치의 최신 형상을 확인한 뒤 작업 전용 브랜치와 폴더를 생성합니다.
+              </p>
+              <BaseBranchSelect
+                label="기준 브랜치"
+                ariaLabel="이번 작업 기준 브랜치"
+                value={baseRef}
+                onChange={setBaseRef}
+                {...branchList}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={onManageBaseBranch}
+              >
+                기본 기준 브랜치 관리
+              </Button>
+              <label>
+                새 브랜치 이름
+                <input
+                  aria-label="새 브랜치 이름"
+                  value={branch}
+                  onChange={(event) => setBranch(event.target.value)}
+                  required
+                  maxLength={100}
+                />
+              </label>
+              <div
+                onDragOver={(event) => {
+                  if (event.dataTransfer.types.includes('Files')) event.preventDefault()
+                }}
+                onDrop={(event) => {
+                  event.preventDefault()
+                  addRequirementFiles(Array.from(event.dataTransfer.files))
+                }}
+                onPaste={(event) => {
+                  const files = Array.from(event.clipboardData.files)
+                  if (files.length) {
+                    event.preventDefault()
+                    addRequirementFiles(files)
+                  }
+                }}
+              >
+                <AttachmentControls attachments={attachments} disabled={pending || !!created.current} onInserted={() => {}} />
+              </div>
+            </div>
+          </details>
         </fieldset>
+        {!created.current && !branchList.loading && invalidBaseRef && (
+          <p className="new-task-branch-warning" role="alert">
+            고급 설정에서 기준 브랜치를 확인해 주세요.
+          </p>
+        )}
         {error && <p role="alert">{error}</p>}
         {(invalidModel || invalidEffort) && (
           <p role="alert">
             프로젝트 기본 모델 또는 추론 수준을 현재 사용할 수 없습니다. 연결을
             확인하거나 이번 작업에 사용할 값을 선택해 주세요.
           </p>
+        )}
+        {(invalidSubagentModel || invalidSubagentEffort || invalidSubagentLimit) && (
+          <p role="alert">고급 설정에서 서브에이전트 모델, 추론 수준 및 최대 동시 실행 수를 확인해 주세요.</p>
         )}
         {hasRequest &&
           (!connection.connected || !connection.authenticated) && (
@@ -283,6 +434,9 @@ export function NewTaskDialog({
               !attachmentsReady ||
               invalidModel ||
               invalidEffort ||
+              invalidSubagentModel ||
+              invalidSubagentEffort ||
+              invalidSubagentLimit ||
               !branch.trim() ||
               !worktrees.length ||
               (!created.current && invalidBaseRef) ||

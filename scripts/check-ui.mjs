@@ -364,15 +364,16 @@ try {
     await checkFileAttachments(task)
     await openTaskCreation()
     const initialDialog = page.getByRole('dialog', { name: '새 작업', exact: true })
-    const firstPrompt = initialDialog.getByRole('textbox', { name: '첫 요청', exact: true })
-    await firstPrompt.fill('INITIAL ')
+    const requirements = initialDialog.getByRole('textbox', { name: '요구사항', exact: true })
+    await requirements.fill('INITIAL ')
+    await initialDialog.getByText('고급 설정', { exact: true }).click()
     const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=='
     await initialDialog.locator('input[type="file"]').setInputFiles([
       { name: 'initial.md', mimeType: 'text/markdown', buffer: Buffer.from('initial') },
       { name: 'initial.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') },
     ])
-    await until(async () => await firstPrompt.inputValue() === 'INITIAL [파일#1][파일#2]', '첫 요청 문장 속 파일·이미지 삽입')
-    await firstPrompt.fill('')
+    await until(async () => await requirements.inputValue() === 'INITIAL [파일#1][파일#2]', '요구사항 문장 속 파일·이미지 삽입')
+    await requirements.fill('')
     await until(async () => await initialDialog.getByRole('button', { name: '만들기', exact: true }).isEnabled(), '표시 삭제 후 초안 생성 선택')
     await initialDialog.getByRole('button', { name: '취소', exact: true }).click()
     await initialDialog.waitFor({ state: 'detached' })
@@ -496,12 +497,26 @@ try {
   const creation = page.getByRole('dialog', { name: '새 작업', exact: true })
   const baseBranch = creation.getByRole('combobox', {
     name: '이번 작업 기준 브랜치', exact: true,
+    includeHidden: true,
   })
+  assert.equal(await creation.getByRole('textbox', { name: '목적', exact: true }).isVisible(), true)
+  assert.equal(await creation.getByRole('textbox', { name: '요구사항', exact: true }).isVisible(), true)
+  assert.equal(await creation.getByRole('textbox', { name: '새 작업 이름', exact: true }).isVisible(), true)
+  assert.equal(await creation.getByRole('combobox', { name: '메인 에이전트 모델', exact: true }).isVisible(), true)
+  assert.equal(await creation.getByRole('combobox', { name: '메인 에이전트 추론 수준', exact: true }).isVisible(), true)
+  assert.equal(await baseBranch.isVisible(), false)
+  const advanced = creation.getByText('고급 설정', { exact: true })
+  await advanced.press('Enter')
+  assert.equal(await baseBranch.isVisible(), true)
   assert.equal(await baseBranch.inputValue(), 'refs/heads/settings-base')
   assert.equal((await tasks()).length, 0)
   await baseBranch.selectOption('refs/heads/main')
   await creation.getByRole('textbox', { name: '새 작업 이름', exact: true }).fill('작성 중인 작업')
-  await creation.getByRole('textbox', { name: '첫 요청', exact: true }).fill('입력 보존 확인')
+  await creation.getByRole('textbox', { name: '요구사항', exact: true }).fill('입력 보존 확인')
+  await creation.getByRole('textbox', { name: '목적', exact: true }).fill('작업 목표 보존 확인')
+  await advanced.click()
+  assert.equal(await baseBranch.isVisible(), false)
+  await advanced.click()
   await creation.getByRole('button', { name: '기본 기준 브랜치 관리', exact: true }).click()
   await projectSettings.waitFor()
   assert.equal(await projectSettings.getByRole('tab', { name: '프로젝트', exact: true })
@@ -509,7 +524,8 @@ try {
   await projectSettings.getByRole('button', { name: '닫기', exact: true }).click()
   assert.equal(await baseBranch.inputValue(), 'refs/heads/main')
   assert.equal(await creation.getByRole('textbox', { name: '새 작업 이름', exact: true }).inputValue(), '작성 중인 작업')
-  assert.equal(await creation.getByRole('textbox', { name: '첫 요청', exact: true }).inputValue(), '입력 보존 확인')
+  assert.equal(await creation.getByRole('textbox', { name: '목적', exact: true }).inputValue(), '작업 목표 보존 확인')
+  assert.equal(await creation.getByRole('textbox', { name: '요구사항', exact: true }).inputValue(), '입력 보존 확인')
   git('branch', 'task-refresh-base', baseCommit)
   await creation.getByRole('button', { name: '브랜치 목록 새로고침' }).click()
   await until(() => baseBranch.isEnabled(), '새 작업 브랜치 새로고침')
@@ -524,6 +540,7 @@ try {
   await createDraftTask()
   const first = (await tasks())[0]
   assert.equal(first.name, first.branch)
+  assert.deepEqual(first.agentSettings, { style: 'single' })
   assert.equal(execFileSync('git', ['-C', first.path, 'rev-parse', 'HEAD'], {
     windowsHide: true, encoding: 'utf8',
   }).trim(), baseCommit)
@@ -667,7 +684,16 @@ try {
   await creation.waitFor({ state: 'detached' })
   await page.keyboard.press('Control+n')
   await creation.waitFor()
+  await advanced.click()
   await baseBranch.selectOption('refs/heads/main')
+  const workStyle = creation.getByRole('combobox', { name: '작업 스타일', exact: true })
+  const subagentEffort = creation.getByRole('combobox', { name: '서브에이전트 추론 수준', exact: true })
+  assert.equal(await workStyle.inputValue(), 'single')
+  assert.equal(await subagentEffort.isVisible(), false)
+  await workStyle.selectOption('delegated')
+  await creation.getByRole('combobox', { name: '서브에이전트 모델', exact: true }).selectOption('fixture-model-alt')
+  await subagentEffort.selectOption('low')
+  await creation.getByRole('spinbutton', { name: '서브에이전트 최대 동시 실행 수', exact: true }).fill('2')
   await creation.getByRole('textbox', { name: '새 작업 이름', exact: true })
     .fill('단축키 작업')
   await creation.getByRole('button', { name: '만들기', exact: true }).click()
@@ -678,6 +704,7 @@ try {
   await readyTerminal()
   const second = (await tasks()).find((task) => task.id !== first.id)
   assert.equal(second.name, '단축키 작업')
+  assert.deepEqual(second.agentSettings, { style: 'delegated', model: 'fixture-model-alt', effort: 'low', maxConcurrent: 2 })
   assert.equal(execFileSync('git', ['-C', second.path, 'rev-parse', 'HEAD'], {
     windowsHide: true, encoding: 'utf8',
   }).trim(), git('rev-parse', 'main').trim())
@@ -1194,15 +1221,17 @@ async function checkStartupFlow() {
   const create = async (name) => {
     await openTaskCreation()
     const dialog = page.getByRole('dialog', { name: '새 작업', exact: true })
+    await dialog.getByText('고급 설정', { exact: true }).click()
     await dialog.getByRole('textbox', { name: '새 작업 이름', exact: true }).fill(name)
-    await dialog.getByRole('textbox', { name: '첫 요청', exact: true }).fill(`FIRST_PROMPT_${name}`)
+    await dialog.getByRole('textbox', { name: '목적', exact: true }).fill('초기화 후 요청 전달')
+    await dialog.getByRole('textbox', { name: '요구사항', exact: true }).fill(`FIRST_PROMPT_${name}`)
     if (name === 'Startup 성공' || name === 'Startup 실패') {
       const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=='
       await dialog.locator('input[type="file"]').setInputFiles([
         { name: '첫 요청 설명.md', mimeType: 'text/markdown', buffer: Buffer.from('초기 첨부 내용') },
         { name: '첫 이미지.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') },
       ])
-      await until(async () => (await dialog.getByRole('textbox', { name: '첫 요청', exact: true }).inputValue()).includes('[파일#1][파일#2]') && await dialog.locator('.attachment-area').getAttribute('aria-busy') === 'false', '초기 첨부 준비')
+      await until(async () => (await dialog.getByRole('textbox', { name: '요구사항', exact: true }).inputValue()).includes('[파일#1][파일#2]') && await dialog.locator('.attachment-area').getAttribute('aria-busy') === 'false', '초기 첨부 준비')
       assert.equal(await dialog.locator('.initial-request-preview, .attachment-card, .attachment-preview').count(), 0)
       assert.equal(await dialog.getByRole('button', { name: '입력에 추가', exact: true }).count(), 0)
       await page.screenshot({ path: 'artifacts/initial-attachments.png' })
@@ -1228,6 +1257,7 @@ async function checkStartupFlow() {
   await settings.getByText('프로젝트 기본값을 저장했습니다. 다음 새 작업부터 적용됩니다.', { exact: true }).waitFor()
   await settings.getByRole('button', { name: '닫기', exact: true }).click()
   const successful = await create('Startup 성공')
+  assert.equal(successful.initialPrompt, '## 목적\n초기화 후 요청 전달\n\n## 요구사항\nFIRST_PROMPT_Startup 성공[파일#1][파일#2]')
   assert.equal((await startup(successful)).status, 'running')
   await assertBlocked(successful)
   const original = (await tasks()).find((task) => task.name === '통합 작업')

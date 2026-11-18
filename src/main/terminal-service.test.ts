@@ -29,13 +29,18 @@ test('새 대화는 resume 없이 브라우저 설정과 첫 요청을 전달하
       return ['--config', 'mcp_servers.lite_ide_browser={enabled=false}']
     }, () => ({ manifest: '/attachments.json', args: ['--config', 'mcp_servers.lite_ide_attachments={enabled=true}'] }))
   t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }) })
-  const input = { taskId: 'fresh', workspace: directory, kind: 'codex' as const, cols: 80, rows: 24, prompt: '첫 요청', images: ['C:/한글 폴더/이미지.png', '/second.png'], model: 'test-model', effort: 'high' }
+  const input = { taskId: 'fresh', workspace: directory, kind: 'codex' as const, cols: 80, rows: 24, prompt: '첫 요청', images: ['C:/한글 폴더/이미지.png', '/second.png'], model: 'test-model', effort: 'high',
+    agentSettings: { style: 'delegated' as const, model: 'worker-model', effort: 'low', maxConcurrent: 2 } }
   await service.open(input)
   assert.ok(!launches[0].includes('resume'))
   assert.equal(launches[0].at(-1), input.prompt)
   assert.deepEqual(launches[0].slice(-5, -1), ['--image', ...input.images.slice(0, 1), '--image', input.images[1]])
   assert.ok(launches[0].includes('mcp_servers.lite_ide_browser={enabled=false}'))
   assert.ok(launches[0].includes('model_reasoning_effort="high"'))
+  const agentConfig = launches[0].find((arg) => arg.startsWith('features.multi_agent_v2='))
+  assert.ok(agentConfig)
+  assert.ok(agentConfig.includes('max_concurrent_threads_per_session=3'))
+  assert.ok(agentConfig.includes(String.raw`model=\"worker-model\", reasoning_effort=\"low\"`))
   await service.open({ ...input, kind: 'shell' })
   await service.open(input)
   assert.deepEqual(launches[2].slice(0, 2), ['resume', 'persisted-thread'])
@@ -44,6 +49,7 @@ test('새 대화는 resume 없이 브라우저 설정과 첫 요청을 전달하
   assert.ok(!launches[2].some((arg) => arg.startsWith('mcp_servers.lite_ide_browser')))
   assert.ok(launches[0].includes('mcp_servers.lite_ide_attachments={enabled=true}'))
   assert.ok(launches[2].includes('mcp_servers.lite_ide_attachments={enabled=true}'))
+  assert.ok(launches[2].includes(agentConfig))
   assert.deepEqual(configurations, [directory])
 })
 

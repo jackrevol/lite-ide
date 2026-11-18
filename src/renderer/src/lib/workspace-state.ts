@@ -1,4 +1,4 @@
-import type { TerminalKind } from '../../../shared/types'
+import type { TaskAgentSettings, TerminalKind } from '../../../shared/types'
 
 export interface WorkspaceTask {
   id: string
@@ -8,6 +8,7 @@ export interface WorkspaceTask {
   name: string
   model: string
   effort: string
+  agentSettings?: TaskAgentSettings
   terminalKind: TerminalKind
   initialPrompt?: string
   initialImages?: string[]

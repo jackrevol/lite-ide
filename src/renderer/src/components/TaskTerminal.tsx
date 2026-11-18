@@ -300,6 +300,7 @@ export function TaskTerminal({
         rows: term.rows,
         model: task.model,
         effort: task.effort,
+        agentSettings: task.agentSettings,
         prompt: task.initialPrompt,
         images: task.initialImages,
         threadId: task.threadId,

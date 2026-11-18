@@ -11,9 +11,45 @@ import type {
   TerminalOpen,
   TerminalSnapshot,
   StopProcessInput,
+  TaskAgentSettings,
 } from '../shared/types.ts'
 
 const outputLimit = 2_000_000
+
+function agentConfigArgs(settings: TaskAgentSettings | undefined): string[] {
+  if (settings === undefined) return []
+  if (settings?.style === 'single')
+    return ['--config', 'features.multi_agent=false', '--config',
+      'features.multi_agent_v2={enabled=true,disable_native_tools=true,max_concurrent_threads_per_session=1}']
+  if (settings?.style !== 'delegated' ||
+    typeof settings.model !== 'string' || !/^[A-Za-z0-9._:/-]{0,300}$/.test(settings.model) ||
+    typeof settings.effort !== 'string' || !/^[a-z0-9_-]{0,32}$/.test(settings.effort) ||
+    (settings.maxConcurrent !== undefined && (typeof settings.maxConcurrent !== 'number' ||
+      !Number.isSafeInteger(settings.maxConcurrent + 1) || settings.maxConcurrent < 1)))
+    throw new Error('서브에이전트 작업 설정이 올바르지 않습니다.')
+
+  const spawnOverrides = [
+    settings.model && `model=${JSON.stringify(settings.model)}`,
+    settings.effort && `reasoning_effort=${JSON.stringify(settings.effort)}`,
+  ].filter(Boolean).join(', ')
+  const instructions = [
+    '메인 에이전트는 계획, 작업 분담, 결과 통합과 최종 검수를 맡습니다. 구현과 테스트는 서브에이전트에 위임하세요.',
+    '서브에이전트에게 구체적인 작업 범위를 전달하고, 작업 결과를 받은 뒤 요구사항 충족 여부를 검수하세요.',
+    spawnOverrides && `서브에이전트를 시작할 때마다 spawn_agent에 ${spawnOverrides} 값을 명시하세요.`,
+  ].filter(Boolean).join(' ')
+  // 원격 TUI는 thread/start에 features를 전달합니다. agents 테이블은 전달하지 않습니다.
+  const fields = [
+    'enabled=true',
+    'disable_native_tools=false',
+    'expose_spawn_agent_model_overrides=true',
+    `root_agent_usage_hint_text=${JSON.stringify(instructions)}`,
+  ]
+  // V2의 한도는 메인 에이전트까지 포함합니다.
+  if (settings.maxConcurrent !== undefined)
+    fields.push(`max_concurrent_threads_per_session=${settings.maxConcurrent + 1}`)
+  return ['--config', `features.multi_agent_v2={${fields.join(',')}}`]
+}
+
 type RunningTerminal = TerminalSnapshot & {
   input: TerminalOpen
   process?: pty.IPty
@@ -150,6 +186,7 @@ export class TerminalService {
     await this.loaded
     if (input.images !== undefined && (!Array.isArray(input.images) || input.images.length > 20 || input.images.some((path) => typeof path !== 'string' || !path || /[\x00-\x1f\x7f]/.test(path))))
       throw new Error('올바른 초기 이미지 첨부가 아닙니다.')
+    const agentArgs = input.kind === 'codex' ? agentConfigArgs(input.agentSettings) : []
     await this.stop(input.taskId)
     const args: string[] = []
     let binary: string
@@ -214,6 +251,7 @@ export class TerminalService {
             '--config',
             `model_reasoning_effort=${JSON.stringify(input.effort)}`,
           )
+        args.push(...agentArgs)
         if (!resuming) for (const path of input.images ?? []) args.push('--image', path)
         if (input.prompt && !resuming)
           args.push(input.prompt)
