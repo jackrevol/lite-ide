@@ -714,6 +714,7 @@ try {
   assert.equal(await firstDot.evaluate((dot) => getComputedStyle(dot).color), 'rgb(108, 177, 123)')
   const terminalIndicator = workTabs.getByRole('tab', { name: first.name, exact: true }).locator('.session-indicator')
   const sessionIndicator = workTabs.getByRole('tab', { name: '세션 · 관찰 세션', exact: true }).locator('.session-indicator')
+  const firstDelete = page.getByRole('button', { name: `${first.name} 작업 삭제`, exact: true })
   await workTabs.getByRole('tab', { name: '세션 · 관찰 세션', exact: true }).click()
   for (const [status, label, color] of [
     ['running', '작업 중', 'rgb(108, 177, 123)'],
@@ -741,6 +742,7 @@ try {
       const animation = await indicator.locator('svg').evaluate((element) => getComputedStyle(element).animationName)
       assert.equal(animation, status === 'running' ? 'spin' : 'none')
     }
+    await firstDelete.waitFor({ state: label === '작업 완료됨' ? 'visible' : 'hidden' })
     assert.equal((await snapshot(first.id)).generation, firstGeneration)
     assert.equal((await snapshot(first.id)).running, true)
     if (status === 'completed') await page.screenshot({ path: 'artifacts/session-status-completed.png' })
@@ -958,16 +960,31 @@ try {
     /확인/,
   )
   assert.equal((await snapshot(second.id)).running, true)
-  await taskAction(second, '작업 삭제')
+  await app.evaluate(({ BrowserWindow }, workspace) => {
+    BrowserWindow.getAllWindows()[0].webContents.send('codex:session', {
+      workspace, title: '다른 워크트리 세션', id: 'ui-other', status: 'completed',
+      messages: [], requests: [], updatedAt: Date.now(), canAcceptDirectInput: false,
+    })
+  }, second.path)
+  const secondDelete = page.getByRole('button', { name: `${second.name} 작업 삭제`, exact: true })
+  await secondDelete.focus()
+  await page.keyboard.press('Enter')
   await deleting.getByText(`현재 연결된 로컬 브랜치: ${switchedBranch}`, { exact: true }).waitFor()
   assert.equal(
     await page.getByRole('dialog', { name: '작업 삭제', exact: true }).count(),
     1,
   )
+  await deleting.getByRole('button', { name: '취소', exact: true }).click()
+  assert.equal((await tasks()).length, 2)
+  assert.equal((await snapshot(second.id)).running, true)
+  assert.equal(await readFile(join(second.path, '확인 후 삭제.txt'), 'utf8'), '버릴 변경 사항\n')
+  await secondDelete.click()
   await deleting
     .getByRole('button', { name: '변경 사항 포함 삭제', exact: true })
     .click()
   await deleting.waitFor({ state: 'hidden' })
+  await secondDelete.waitFor({ state: 'detached' })
+  assert.equal(await page.locator('.task-row').and(page.getByTitle(first.path, { exact: true })).getAttribute('aria-current'), 'page')
   assert.equal((await tasks()).length, 1)
   assert.equal(await stat(second.path).catch(() => null), null)
   assert.equal(git('branch', '--list', switchedBranch).trim(), '')
@@ -1058,7 +1075,7 @@ try {
   page.setDefaultTimeout(15000)
   await page.getByText(/작업 경로를 사용할 수 없습니다/).first().waitFor()
   assert.equal((await tasks()).length, 2)
-  await taskAction(stale, '작업 삭제')
+  await page.getByRole('button', { name: `${stale.name} 작업 삭제`, exact: true }).click()
   const cleanup = page.getByRole('dialog', { name: '작업 삭제', exact: true })
   await cleanup.getByRole('button', { name: '로컬 기록 정리', exact: true }).click()
   await cleanup.waitFor({ state: 'hidden' })

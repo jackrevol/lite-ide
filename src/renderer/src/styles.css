@@ -1713,6 +1713,7 @@ dialog::backdrop {
   min-width: 0;
 }
 .row-action,
+.task-delete-action,
 .project-base-branch,
 .project-new-task {
   display: grid;
@@ -1731,6 +1732,10 @@ dialog::backdrop {
 }
 .row-action:disabled {
   opacity: 0.3;
+}
+.task-delete-action:is(:hover, :focus-visible) {
+  background: var(--accent);
+  color: var(--destructive-foreground);
 }
 .sidebar-menu-positioner {
   z-index: 50;

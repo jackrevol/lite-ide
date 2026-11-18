@@ -770,7 +770,10 @@ export function App() {
                       state.tasks
                         .filter((task) => task.project === item.path)
                         .map((task) => {
-                          const status = workspaceTaskStatus(Object.values(sessions), task.path, window.desktop.platform, terminals[task.id])
+                          const terminal = terminals[task.id]
+                          const startupRunning = startupSnapshots[task.path]?.status === 'running'
+                          const status = workspaceTaskStatus(Object.values(sessions), task.path, window.desktop.platform, terminal)
+                          const showDelete = ready && !startupRunning && (status.state === 'completed' || !terminal?.running)
                           return (
                           <div className="managed-row" key={task.id}>
                             <button
@@ -787,6 +790,17 @@ export function App() {
                                 <small>{task.branch}</small>
                               </span>
                             </button>
+                            {showDelete ? (
+                              <button
+                                type="button"
+                                className="task-delete-action"
+                                aria-label={`${task.name} 작업 삭제`}
+                                title={`${task.name} 작업 삭제`}
+                                onClick={() => manageTask(task, 'delete')}
+                              >
+                                <Trash2 size={14} aria-hidden="true" />
+                              </button>
+                            ) : null}
                             <SidebarActionMenu
                               className="row-action"
                               label={`${task.name} 작업 메뉴`}
@@ -795,8 +809,8 @@ export function App() {
                               actions={[
                                 { label: 'Codex 터미널', icon: <Terminal size={13} />, onClick: () => openTaskTerminal(task, 'codex') },
                                 { label: '셸 터미널', icon: <Terminal size={13} />, onClick: () => openTaskTerminal(task, 'shell') },
-                                { label: '터미널 종료', icon: <Square size={13} />, disabled: !terminals[task.id]?.running, onClick: () => { void window.desktop.closeTerminal(task.id).catch((cause) => setError(errorText(cause))) } },
-                                { label: 'Startup 다시 실행', icon: <RefreshCw size={13} />, disabled: startupSnapshots[task.path]?.status === 'running', onClick: () => { void runTaskStartup(task) } },
+                                { label: '터미널 종료', icon: <Square size={13} />, disabled: !terminal?.running, onClick: () => { void window.desktop.closeTerminal(task.id).catch((cause) => setError(errorText(cause))) } },
+                                { label: 'Startup 다시 실행', icon: <RefreshCw size={13} />, disabled: startupRunning, onClick: () => { void runTaskStartup(task) } },
                                 {
                                   label: '이름 변경',
                                   icon: <Pencil size={13} />,
