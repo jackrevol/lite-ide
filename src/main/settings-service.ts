@@ -6,6 +6,7 @@ import type { NotificationSettings } from '../shared/types.ts'
 import { defaultNotificationSettings, validateNotificationSettings } from '../shared/notifications.ts'
 import { validateStartupScriptPath } from './startup-script.ts'
 import { defaultBrowserSettings, validateBrowserSettings, type BrowserSettings } from '../shared/browser.ts'
+import { validateTaskAgentSettings } from '../shared/task-agent-settings.ts'
 
 export function validateDefaults(value: unknown): ProjectDefaults {
   if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -31,6 +32,7 @@ export function validateDefaults(value: unknown): ProjectDefaults {
     baseRef,
     model: (input.model as string).trim(),
     effort: (input.effort as string).trim(),
+    ...(input.agentSettings !== undefined ? { agentSettings: validateTaskAgentSettings(input.agentSettings) } : {}),
     ...(input.startupScript !== undefined ? { startupScript: input.startupScript as string } : {}),
     ...(input.startupScriptPath !== undefined ? { startupScriptPath: validateStartupScriptPath(input.startupScriptPath) } : {}),
     ...(input.startupAutoRun !== undefined ? { startupAutoRun: input.startupAutoRun as boolean } : {}),

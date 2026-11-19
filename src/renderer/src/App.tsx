@@ -1091,6 +1091,7 @@ export function App() {
             ''
           }
           initialEffort={defaults.effort}
+          initialAgentSettings={defaults.agentSettings}
           initialBaseRef={defaults.baseRef}
           onManageBaseBranch={() => manageBaseBranch(newTaskProject)}
           onCreate={createTask}

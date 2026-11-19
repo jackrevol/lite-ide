@@ -5,6 +5,7 @@ import { Button } from './ui/button'
 import { BaseBranchSelect, useBranches } from './BaseBranchSelect'
 import { AttachmentControls } from './AttachmentControls'
 import { useTerminalAttachments } from '../lib/use-terminal-attachments'
+import { invalidAgentLimit, TaskAgentFields, taskAgentForm, taskAgentSettings } from './TaskAgentFields'
 
 export function NewTaskDialog({
   project,
@@ -12,6 +13,7 @@ export function NewTaskDialog({
   connection,
   initialModel,
   initialEffort,
+  initialAgentSettings,
   initialBaseRef,
   onManageBaseBranch,
   onCreate,
@@ -22,6 +24,7 @@ export function NewTaskDialog({
   connection: CodexStatus
   initialModel: string
   initialEffort: string
+  initialAgentSettings?: TaskAgentSettings
   initialBaseRef: string
   onManageBaseBranch: () => void
   onCreate: (task: WorkspaceTask) => Promise<void>
@@ -64,10 +67,7 @@ export function NewTaskDialog({
   )
   const [model, setModel] = useState(initialModel)
   const [effort, setEffort] = useState(initialEffort)
-  const [workStyle, setWorkStyle] = useState<TaskAgentSettings['style']>('single')
-  const [subagentModel, setSubagentModel] = useState('')
-  const [subagentEffort, setSubagentEffort] = useState('')
-  const [subagentLimit, setSubagentLimit] = useState('')
+  const [agentForm, setAgentForm] = useState(() => taskAgentForm(initialAgentSettings))
   const [baseRef, setBaseRef] = useState(initialBaseRef)
   const branchList = useBranches(project.path)
   const invalidBaseRef = branchList.loading || !!branchList.error ||
@@ -80,13 +80,13 @@ export function NewTaskDialog({
   const invalidModel = !!model && !selectedModel
   const invalidEffort =
     !!effort && !!selectedModel && !selectedModel.efforts.includes(effort)
-  const delegated = workStyle === 'delegated'
-  const subagentModelInfo = connection.models.find((item) => item.id === (subagentModel || model))
-  const invalidSubagentModel = delegated && !!subagentModel && !subagentModelInfo
-  const invalidSubagentEffort = delegated && !!subagentEffort && !subagentModelInfo?.efforts.includes(subagentEffort)
-  const maxConcurrent = subagentLimit === '' ? undefined : Number(subagentLimit)
-  const invalidSubagentLimit = delegated && maxConcurrent !== undefined &&
-    (!Number.isSafeInteger(maxConcurrent + 1) || maxConcurrent < 1)
+  const delegated = agentForm.style === 'delegated'
+  const subagentModel = agentForm.model ? connection.models.find((item) => item.id === agentForm.model) : selectedModel
+  const invalidSubagentSettings = delegated && (
+    (!!agentForm.model && !subagentModel) ||
+    (!!agentForm.effort && !subagentModel?.efforts.includes(agentForm.effort)) ||
+    invalidAgentLimit(agentForm)
+  )
   useEffect(() => {
     dialog.current?.showModal()
   }, [])
@@ -109,8 +109,7 @@ export function NewTaskDialog({
   }
 
   async function submit() {
-    if (submitting.current || !attachmentsReady || invalidSubagentModel ||
-      invalidSubagentEffort || invalidSubagentLimit || (!created.current && invalidBaseRef)) return
+    if (submitting.current || !attachmentsReady || invalidSubagentSettings || (!created.current && invalidBaseRef)) return
     submitting.current = true
     setPending(true)
     setError('')
@@ -130,9 +129,7 @@ export function NewTaskDialog({
           name: name.trim() || tree.branch,
           model,
           effort,
-          agentSettings: delegated
-            ? { style: 'delegated', model: subagentModel || model, effort: subagentEffort, maxConcurrent }
-            : { style: 'single' },
+          agentSettings: taskAgentSettings(agentForm, model),
           terminalKind: 'codex',
           initialPrompt: prompt || undefined,
         }
@@ -288,68 +285,7 @@ export function NewTaskDialog({
           <details ref={advancedSettings} className="new-task-advanced">
             <summary>고급 설정</summary>
             <div className="new-task-advanced-fields">
-              <label>
-                작업 스타일
-                <select
-                  value={workStyle}
-                  onChange={(event) => setWorkStyle(event.target.value === 'delegated' ? 'delegated' : 'single')}
-                >
-                  <option value="single">단일 에이전트</option>
-                  <option value="delegated">서브에이전트에 위임</option>
-                </select>
-              </label>
-              {delegated && (
-                <>
-                  <p>
-                    메인이 계획·분담·검수를 맡고 구현과 테스트를 위임합니다.
-                    모델과 추론 수준은 메인이 서브에이전트를 시작할 때 요청합니다.
-                  </p>
-                  <div className="task-model-fields">
-                    <label>
-                      서브에이전트 모델
-                      <select
-                        value={subagentModel}
-                        disabled={!connection.models.length}
-                        onChange={(event) => {
-                          setSubagentModel(event.target.value)
-                          setSubagentEffort('')
-                        }}
-                      >
-                        <option value="">메인과 동일</option>
-                        {invalidSubagentModel && <option value={subagentModel}>{subagentModel} (현재 사용 불가)</option>}
-                        {connection.models.map((item) => (
-                          <option key={item.id} value={item.id}>{item.name}</option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      서브에이전트 추론 수준
-                      <select
-                        value={subagentEffort}
-                        disabled={!subagentModelInfo?.efforts.length && !invalidSubagentEffort}
-                        onChange={(event) => setSubagentEffort(event.target.value)}
-                      >
-                        <option value="">모델 기본값</option>
-                        {invalidSubagentEffort && <option value={subagentEffort}>{subagentEffort} (현재 사용 불가)</option>}
-                        {subagentModelInfo?.efforts.map((item) => (
-                          <option key={item} value={item}>{item}</option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                  <label>
-                    서브에이전트 최대 동시 실행 수
-                    <input
-                      type="number"
-                      min={1}
-                      step={1}
-                      placeholder="Codex 기본값"
-                      value={subagentLimit}
-                      onChange={(event) => setSubagentLimit(event.target.value)}
-                    />
-                  </label>
-                </>
-              )}
+              <TaskAgentFields value={agentForm} onChange={setAgentForm} models={connection.models} mainModel={selectedModel} />
               <p>
                 선택한 기준 브랜치의 최신 형상을 확인한 뒤 작업 전용 브랜치와 폴더를 생성합니다.
               </p>
@@ -366,7 +302,7 @@ export function NewTaskDialog({
                 size="sm"
                 onClick={onManageBaseBranch}
               >
-                기본 기준 브랜치 관리
+                프로젝트 기본값 관리
               </Button>
               <label>
                 새 브랜치 이름
@@ -411,7 +347,7 @@ export function NewTaskDialog({
             확인하거나 이번 작업에 사용할 값을 선택해 주세요.
           </p>
         )}
-        {(invalidSubagentModel || invalidSubagentEffort || invalidSubagentLimit) && (
+        {invalidSubagentSettings && (
           <p role="alert">고급 설정에서 서브에이전트 모델, 추론 수준 및 최대 동시 실행 수를 확인해 주세요.</p>
         )}
         {hasRequest &&
@@ -434,9 +370,7 @@ export function NewTaskDialog({
               !attachmentsReady ||
               invalidModel ||
               invalidEffort ||
-              invalidSubagentModel ||
-              invalidSubagentEffort ||
-              invalidSubagentLimit ||
+              invalidSubagentSettings ||
               !branch.trim() ||
               !worktrees.length ||
               (!created.current && invalidBaseRef) ||

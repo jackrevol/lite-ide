@@ -486,6 +486,17 @@ try {
   await projectSettings
     .getByRole('combobox', { name: '기본 기준 브랜치', exact: true })
     .selectOption('refs/heads/settings-base')
+  const projectStyle = projectSettings.getByRole('combobox', { name: '작업 스타일', exact: true })
+  const projectSubagentModel = projectSettings.getByRole('combobox', { name: '서브에이전트 모델', exact: true })
+  const projectSubagentEffort = projectSettings.getByRole('combobox', { name: '서브에이전트 추론 수준', exact: true })
+  const projectSubagentLimit = projectSettings.getByRole('spinbutton', { name: '서브에이전트 최대 동시 실행 수', exact: true })
+  assert.equal(await projectStyle.inputValue(), 'single')
+  await projectStyle.selectOption('delegated')
+  await projectSubagentModel.selectOption('fixture-model-alt')
+  await projectSubagentEffort.selectOption('high')
+  await projectSubagentLimit.fill('0')
+  assert.equal(await projectSettings.getByRole('button', { name: '저장', exact: true }).isDisabled(), true)
+  await projectSubagentLimit.fill('3')
   await projectSettings.getByRole('button', { name: '저장', exact: true }).click()
   await projectSettings.getByText(
     '프로젝트 기본값을 저장했습니다. 다음 새 작업부터 적용됩니다.',
@@ -517,10 +528,14 @@ try {
   await advanced.click()
   assert.equal(await baseBranch.isVisible(), false)
   await advanced.click()
-  await creation.getByRole('button', { name: '기본 기준 브랜치 관리', exact: true }).click()
+  await creation.getByRole('button', { name: '프로젝트 기본값 관리', exact: true }).click()
   await projectSettings.waitFor()
   assert.equal(await projectSettings.getByRole('tab', { name: '프로젝트', exact: true })
     .getAttribute('aria-selected'), 'true')
+  await until(async () => (await projectStyle.inputValue()) === 'delegated', '프로젝트 작업 스타일 다시 열기')
+  assert.equal(await projectSubagentModel.inputValue(), 'fixture-model-alt')
+  assert.equal(await projectSubagentEffort.inputValue(), 'high')
+  assert.equal(await projectSubagentLimit.inputValue(), '3')
   await projectSettings.getByRole('button', { name: '닫기', exact: true }).click()
   assert.equal(await baseBranch.inputValue(), 'refs/heads/main')
   assert.equal(await creation.getByRole('textbox', { name: '새 작업 이름', exact: true }).inputValue(), '작성 중인 작업')
@@ -540,7 +555,8 @@ try {
   await createDraftTask()
   const first = (await tasks())[0]
   assert.equal(first.name, first.branch)
-  assert.deepEqual(first.agentSettings, { style: 'single' })
+  const projectAgentSettings = { style: 'delegated', model: 'fixture-model-alt', effort: 'high', maxConcurrent: 3 }
+  assert.deepEqual(first.agentSettings, projectAgentSettings)
   assert.equal(execFileSync('git', ['-C', first.path, 'rev-parse', 'HEAD'], {
     windowsHide: true, encoding: 'utf8',
   }).trim(), baseCommit)
@@ -688,7 +704,9 @@ try {
   await baseBranch.selectOption('refs/heads/main')
   const workStyle = creation.getByRole('combobox', { name: '작업 스타일', exact: true })
   const subagentEffort = creation.getByRole('combobox', { name: '서브에이전트 추론 수준', exact: true })
-  assert.equal(await workStyle.inputValue(), 'single')
+  assert.equal(await workStyle.inputValue(), 'delegated')
+  assert.equal(await subagentEffort.inputValue(), 'high')
+  await workStyle.selectOption('single')
   assert.equal(await subagentEffort.isVisible(), false)
   await workStyle.selectOption('delegated')
   await creation.getByRole('combobox', { name: '서브에이전트 모델', exact: true }).selectOption('fixture-model-alt')
@@ -712,6 +730,10 @@ try {
     const key = window.desktop.platform === 'win32' ? path.toLowerCase() : path
     return (await window.desktop.getSettings()).projects[key].baseRef
   }, project), 'refs/heads/settings-base')
+  assert.deepEqual(await page.evaluate(async (path) => {
+    const key = window.desktop.platform === 'win32' ? path.toLowerCase() : path
+    return (await window.desktop.getSettings()).projects[key].agentSettings
+  }, project), projectAgentSettings)
   await windowWrite(first.id, 'BACKGROUND_ONCE\r')
   await waitOutput(first.id, 'BACKGROUND_ONCE')
   const workTabs = page.getByRole('tablist', { name: '작업 탭' })

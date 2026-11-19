@@ -6,6 +6,7 @@ import { pathKey, workspaceContains } from './git.ts'
 import { ProcessService, type TerminalProcessRoot } from './process-service.ts'
 import { CodexNotificationParser } from './codex-notification-parser.ts'
 import type { AttentionNotification } from './notification-service.ts'
+import { validateTaskAgentSettings } from '../shared/task-agent-settings.ts'
 import type {
   TerminalEvent,
   TerminalOpen,
@@ -16,18 +17,12 @@ import type {
 
 const outputLimit = 2_000_000
 
-function agentConfigArgs(settings: TaskAgentSettings | undefined): string[] {
-  if (settings === undefined) return []
-  if (settings?.style === 'single')
+function agentConfigArgs(input: TaskAgentSettings | undefined): string[] {
+  if (input === undefined) return []
+  const settings = validateTaskAgentSettings(input)
+  if (settings.style === 'single')
     return ['--config', 'features.multi_agent=false', '--config',
       'features.multi_agent_v2={enabled=true,disable_native_tools=true,max_concurrent_threads_per_session=1}']
-  if (settings?.style !== 'delegated' ||
-    typeof settings.model !== 'string' || !/^[A-Za-z0-9._:/-]{0,300}$/.test(settings.model) ||
-    typeof settings.effort !== 'string' || !/^[a-z0-9_-]{0,32}$/.test(settings.effort) ||
-    (settings.maxConcurrent !== undefined && (typeof settings.maxConcurrent !== 'number' ||
-      !Number.isSafeInteger(settings.maxConcurrent + 1) || settings.maxConcurrent < 1)))
-    throw new Error('서브에이전트 작업 설정이 올바르지 않습니다.')
-
   const spawnOverrides = [
     settings.model && `model=${JSON.stringify(settings.model)}`,
     settings.effort && `reasoning_effort=${JSON.stringify(settings.effort)}`,

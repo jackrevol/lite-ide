@@ -11,6 +11,7 @@ import { UpdatePanel } from './UpdatePanel'
 import { BaseBranchSelect, useBranches } from './BaseBranchSelect'
 import { NotificationSettingsPanel } from './NotificationSettingsPanel'
 import { BrowserSettingsPanel } from './BrowserSettingsPanel'
+import { invalidAgentLimit, TaskAgentFields, taskAgentForm, taskAgentSettings } from './TaskAgentFields'
 
 export const projectSettingsKey = (path: string) =>
   window.desktop.platform === 'win32' ? path.toLowerCase() : path
@@ -45,6 +46,8 @@ export function SettingsDialog({
     currentProject || projects[0]?.path || '',
   )
   const [defaults, setDefaults] = useState<ProjectDefaults>(emptyDefaults)
+  const [agentForm, setAgentForm] = useState(() => taskAgentForm())
+  const invalidLimit = invalidAgentLimit(agentForm)
   const branchList = useBranches(project)
   const invalidBaseRef =
     branchList.loading || !!branchList.error ||
@@ -90,12 +93,12 @@ export function SettingsDialog({
     }
   }, [])
   useEffect(() => {
-    setDefaults(
-      settings?.projects[projectSettingsKey(project)] ?? emptyDefaults,
-    )
+    const next = settings?.projects[projectSettingsKey(project)] ?? emptyDefaults
+    setDefaults(next)
+    setAgentForm(taskAgentForm(next.agentSettings))
   }, [project, settings])
   async function save(reset = false) {
-    if (!project || busy.current || !settings || (!reset && invalidBaseRef)) return
+    if (!project || busy.current || !settings || (!reset && (invalidBaseRef || invalidLimit))) return
     busy.current = true
     setPending(true)
     setError('')
@@ -103,7 +106,7 @@ export function SettingsDialog({
     try {
       const next = reset
         ? await window.desktop.resetProjectSettings(project)
-        : await window.desktop.updateProjectSettings(project, defaults)
+        : await window.desktop.updateProjectSettings(project, { ...defaults, agentSettings: taskAgentSettings(agentForm) })
       setSettings(next)
       setNotice(
         reset
@@ -246,13 +249,14 @@ export function SettingsDialog({
                       <select
                         aria-label="기본 모델"
                         value={defaults.model}
-                        onChange={(event) =>
+                        onChange={(event) => {
                           setDefaults({
                             ...defaults,
                             model: event.target.value,
                             effort: '',
                           })
-                        }
+                          if (!agentForm.model) setAgentForm({ ...agentForm, effort: '' })
+                        }}
                       >
                         <option value="">Codex 기본 모델</option>
                         {missingModel && (
@@ -296,6 +300,8 @@ export function SettingsDialog({
                       저장된 모델을 현재 연결에서 확인할 수 없습니다. 새 작업에서 사용 가능한 모델을 선택해 주세요.
                     </p>
                   )}
+                  <TaskAgentFields value={agentForm} onChange={setAgentForm} models={connection.models} mainModel={selectedModel} />
+                  {invalidLimit && <p role="alert">최대 동시 실행 수는 1 이상의 정수로 입력해 주세요.</p>}
                   <div className="settings-startup-heading">
                     <h3>Startup 스크립트</h3>
                     <span>선택 사항</span>
@@ -398,7 +404,7 @@ export function SettingsDialog({
             <Button type="button" variant="outline" size="sm" disabled={pending || !settings} onClick={() => void save(true)}>
               프로젝트 기본값 초기화
             </Button>
-            <Button type="submit" form="project-settings-form" size="sm" disabled={pending || !settings || invalidBaseRef}>
+            <Button type="submit" form="project-settings-form" size="sm" disabled={pending || !settings || invalidBaseRef || invalidLimit}>
               {pending ? '저장 중…' : '저장'}
             </Button>
           </div>}

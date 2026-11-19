@@ -46,6 +46,7 @@ test('프로젝트별 설정을 직렬 저장하고 재시작 및 선택 프로�
     baseRef: 'refs/heads/main',
     model: 'offline-model',
     effort: 'high',
+    agentSettings: { style: 'delegated' as const, model: '', effort: 'low', maxConcurrent: 3 },
   }
   const second = { baseRef: 'HEAD', model: 'second-model', effort: '' }
   try {
@@ -99,6 +100,7 @@ test('잘못된 설정과 저장 실패를 거부하고 성공하지 않은 값�
     { baseRef: '--detach', model: '', effort: '' },
     { baseRef: 'refs/tags/v1', model: '', effort: '' },
     { baseRef: 'HEAD', model: 'line\nbreak', effort: '' },
+    { baseRef: 'HEAD', model: '', effort: '', agentSettings: { style: 'delegated', model: '', effort: '', maxConcurrent: 0 } },
   ])
     assert.throws(() => validateDefaults(invalid))
   const root = await mkdtemp(join(tmpdir(), 'lite-ide-settings-fail-'))

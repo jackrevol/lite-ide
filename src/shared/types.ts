@@ -253,6 +253,7 @@ export interface ProjectDefaults {
   baseRef: string
   model: string
   effort: string
+  agentSettings?: TaskAgentSettings
   /** 이전 명령문을 파일로 옮길 때만 표시하며 실행에는 사용하지 않습니다. */
   startupScript?: string
   startupScriptPath?: string
