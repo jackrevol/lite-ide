@@ -1027,13 +1027,57 @@ try {
   assert.equal((await tasks()).length, 2)
   assert.equal((await snapshot(second.id)).running, true)
   assert.equal(await readFile(join(second.path, '확인 후 삭제.txt'), 'utf8'), '버릴 변경 사항\n')
-  await secondDelete.click()
-  await deleting
-    .getByRole('button', { name: '변경 사항 포함 삭제', exact: true })
-    .click()
-  await deleting.waitFor({ state: 'hidden' })
-  await secondDelete.waitFor({ state: 'detached' })
-  assert.equal(await page.locator('.task-row').and(page.getByTitle(first.path, { exact: true })).getAttribute('aria-current'), 'page')
+  const firstRow = page.locator('.task-row').and(page.getByTitle(first.path, { exact: true }))
+  const secondRow = page.locator('.task-row').and(page.getByTitle(second.path, { exact: true }))
+  await app.evaluate(({ ipcMain }) => {
+    globalThis.originalWorktreeDelete = ipcMain._invokeHandlers.get('worktree:delete')
+    ipcMain.removeHandler('worktree:delete')
+    ipcMain.handle('worktree:delete', async (...args) => {
+      const shouldDelete = await new Promise((resolve) => { globalThis.finishWorktreeDeletion = resolve })
+      delete globalThis.finishWorktreeDeletion
+      if (!shouldDelete) throw new Error('BACKGROUND_DELETE_FAILURE')
+      return globalThis.originalWorktreeDelete(...args)
+    })
+  })
+  try {
+    const confirmDeletion = async () => {
+      await secondDelete.click()
+      await deleting.getByRole('button', { name: '변경 사항 포함 삭제', exact: true }).click()
+      await deleting.waitFor({ state: 'hidden' })
+      await secondRow.waitFor({ state: 'detached' })
+      await until(() => app.evaluate(() => !!globalThis.finishWorktreeDeletion), '백그라운드 삭제 요청')
+      assert.equal((await tasks()).length, 2)
+    }
+    await secondRow.click()
+    await confirmDeletion()
+    await firstRow.click()
+    await readyTerminal()
+    await app.evaluate(() => globalThis.finishWorktreeDeletion(false))
+    await secondRow.waitFor()
+    await page.getByRole('alert').filter({ hasText: `${second.name} 작업을 삭제하지 못했습니다.` }).waitFor()
+    assert.equal(await firstRow.getAttribute('aria-current'), 'page')
+    assert.equal((await tasks()).length, 2)
+    assert.equal(await readFile(join(second.path, '확인 후 삭제.txt'), 'utf8'), '버릴 변경 사항\n')
+    await page.getByRole('button', { name: '오류 닫기', exact: true }).click()
+
+    await confirmDeletion()
+    await taskAction({ ...first, name: '통합 작업' }, '이름 변경')
+    const renaming = page.getByRole('dialog', { name: '작업 이름 변경', exact: true })
+    await renaming.getByRole('textbox', { name: '작업 이름', exact: true }).waitFor()
+    await app.evaluate(() => globalThis.finishWorktreeDeletion(true))
+    await until(async () => (await tasks()).length === 1, '백그라운드 삭제 완료')
+    assert.equal(await renaming.isVisible(), true)
+    await renaming.getByRole('button', { name: '취소', exact: true }).click()
+    assert.equal(await secondRow.count(), 0)
+  } finally {
+    await app.evaluate(({ ipcMain }) => {
+      globalThis.finishWorktreeDeletion?.(false)
+      ipcMain.removeHandler('worktree:delete')
+      ipcMain.handle('worktree:delete', globalThis.originalWorktreeDelete)
+      delete globalThis.originalWorktreeDelete
+    })
+  }
+  assert.equal(await firstRow.getAttribute('aria-current'), 'page')
   assert.equal((await tasks()).length, 1)
   assert.equal(await stat(second.path).catch(() => null), null)
   assert.equal(git('branch', '--list', switchedBranch).trim(), '')
@@ -1128,7 +1172,7 @@ try {
   const cleanup = page.getByRole('dialog', { name: '작업 삭제', exact: true })
   await cleanup.getByRole('button', { name: '로컬 기록 정리', exact: true }).click()
   await cleanup.waitFor({ state: 'hidden' })
-  assert.equal((await tasks()).length, 1)
+  await until(async () => (await tasks()).length === 1, '백그라운드 로컬 기록 정리 완료')
   assert.equal(await readFile(join(stale.path, '보존.txt'), 'utf8'), '남아 있는 파일')
   assert.ok(git('branch', '--list', stale.branch).trim())
   await checkStartupFlow()

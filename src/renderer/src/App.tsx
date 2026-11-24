@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDown,
   Check,
@@ -80,6 +80,12 @@ const samePath = (a: string, b: string) => {
 }
 export function App() {
   const [state, setState] = useState(loadWorkspace)
+  // 삭제가 완료될 때까지 작업 기록을 유지해 실패하면 다시 표시할 수 있게 합니다.
+  const [deletingTaskIds, setDeletingTaskIds] = useState<string[]>([])
+  const visibleTasks = useMemo(
+    () => state.tasks.filter((task) => !deletingTaskIds.includes(task.id)),
+    [state.tasks, deletingTaskIds],
+  )
   const [projects, setProjects] = useState<Project[]>([])
   const [repositories, setRepositories] = useState<
     Record<string, RepositorySnapshot>
@@ -127,10 +133,9 @@ export function App() {
     action: 'rename' | 'delete'
   } | null>(null)
   const [name, setName] = useState('')
-  const [managing, setManaging] = useState(false)
-  const [deletionChanges, setDeletionChanges] = useState<number | null>(null)
   const [deletionPreview, setDeletionPreview] =
     useState<WorktreeDeletionPreview | null>(null)
+  const deletionChanges = deletionPreview?.totalChanges ?? null
   const [managementError, setManagementError] = useState('')
   const [terminals, setTerminals] = useState<Record<string, TerminalSnapshot>>(
     {},
@@ -142,7 +147,7 @@ export function App() {
   const managementRequest = useRef(0)
   const searchDialog = useRef<HTMLDialogElement>(null)
   const taskDialog = useRef<HTMLDialogElement>(null)
-  const current = state.tasks.find((task) => task.id === state.taskId)
+  const current = visibleTasks.find((task) => task.id === state.taskId)
   const project = projects.find((item) => item.path === state.project)
   const selectedFile = current ? selectedFiles[current.path] ?? '' : ''
   const currentStartup = current ? startupSnapshots[current.path] : null
@@ -186,7 +191,7 @@ export function App() {
   }), [])
   useEffect(() => {
     const activate = (target: import('../../shared/types').NotificationTarget) => {
-      const task = state.tasks.find((item) => item.id === target.taskId || samePath(item.path, target.workspace))
+      const task = visibleTasks.find((item) => item.id === target.taskId || samePath(item.path, target.workspace))
       if (!task) return
       setActiveDiffId('')
       setSelectedTabs((tabs) => ({ ...tabs, [task.id]: target.sessionId ? `session-${target.sessionId}` : task.id }))
@@ -196,7 +201,7 @@ export function App() {
     const unsubscribe = window.desktop.onNotificationClick(activate)
     if (ready) void window.desktop.takePendingNotification().then((target) => { if (target) activate(target) }).catch(() => {})
     return unsubscribe
-  }, [ready, state.tasks])
+  }, [ready, visibleTasks])
   useEffect(() => window.desktop.onTerminal((event) => {
     if (event.type === 'data') return
     setTerminals((previous) => {
@@ -207,7 +212,7 @@ export function App() {
         : { ...terminal, running: false, exitCode: event.exitCode } }
     })
   }), [])
-  const observedWorkspaces = JSON.stringify(state.tasks.filter((task) =>
+  const observedWorkspaces = JSON.stringify(visibleTasks.filter((task) =>
     task.id === current?.id || (terminals[task.id]?.running && terminals[task.id]?.kind === 'codex'),
   ).map((task) => task.path))
   useEffect(() => {
@@ -551,70 +556,68 @@ export function App() {
     setTarget({ task, action })
     setName(task.name)
     setManagementError('')
-    setDeletionChanges(null)
     setDeletionPreview(null)
     taskDialog.current?.showModal()
     if (action === 'delete')
       void window.desktop
         .inspectWorktreeDeletion(task.project, task.path)
         .then((preview) => {
-          if (request === managementRequest.current) {
-            setDeletionChanges(preview.totalChanges)
+          if (request === managementRequest.current)
             setDeletionPreview(preview)
-          }
         })
         .catch((cause) => {
           if (request === managementRequest.current)
             setManagementError(errorText(cause))
         })
   }
-  async function saveTask() {
-    if (
-      !target ||
-      managing ||
-      (target.action === 'delete' && deletionChanges === null)
-    )
-      return
-    setManaging(true)
-    setManagementError('')
+  async function deleteTask(task: WorkspaceTask, localOnly: boolean) {
+    setDeletingTaskIds((previous) => [...previous, task.id])
+    if (current?.id === task.id) setActiveDiffId('')
     try {
-      if (target.action === 'rename') {
-        if (!name.trim()) return
-        setState((previous) => ({
-          ...previous,
-          tasks: previous.tasks.map((task) =>
-            task.id === target.task.id ? { ...task, name: name.trim() } : task,
-          ),
-        }))
-      } else {
-        const result = await window.desktop.deleteWorktree(
-          target.task.project,
-          target.task.path,
-          { discardChanges: true, localOnly: deletionPreview?.localOnly === true },
-        )
-        if (result.warning) setError(result.warning)
-        setDiffTabs((previous) => previous.filter((tab) => tab.taskId !== target.task.id))
-        if (activeDiff?.taskId === target.task.id) setActiveDiffId('')
-        setState((previous) => ({
-          ...previous,
-          tasks: previous.tasks.filter((task) => task.id !== target.task.id),
-          taskId: previous.taskId === target.task.id ? '' : previous.taskId,
-        }))
-        setTerminals((previous) => {
-          const next = { ...previous }
-          delete next[target.task.id]
-          return next
-        })
-      }
-      taskDialog.current?.close()
+      const result = await window.desktop.deleteWorktree(task.project, task.path, {
+        discardChanges: true,
+        localOnly,
+      })
+      if (result.warning) setError(result.warning)
+      setDiffTabs((previous) => previous.filter((tab) => tab.taskId !== task.id))
+      setState((previous) => ({
+        ...previous,
+        tasks: previous.tasks.filter((item) => item.id !== task.id),
+        taskId: previous.taskId === task.id ? '' : previous.taskId,
+      }))
+      setTerminals((previous) => {
+        const next = { ...previous }
+        delete next[task.id]
+        return next
+      })
       setRefresh((value) => value + 1)
     } catch (cause) {
-      setManagementError(errorText(cause))
+      setError(`${task.name} 작업을 삭제하지 못했습니다. ${errorText(cause)}`)
     } finally {
-      setManaging(false)
+      setDeletingTaskIds((previous) => previous.filter((id) => id !== task.id))
     }
   }
-  const found = state.tasks.filter((task) =>
+  function saveTask() {
+    if (!target || !taskDialog.current?.open) return
+    const { task, action } = target
+    if (action === 'delete') {
+      if (!deletionPreview) return
+      taskDialog.current.close()
+      void deleteTask(task, deletionPreview.localOnly)
+      return
+    }
+    const trimmedName = name.trim()
+    if (!trimmedName) return
+    setState((previous) => ({
+      ...previous,
+      tasks: previous.tasks.map((item) =>
+        item.id === task.id ? { ...item, name: trimmedName } : item,
+      ),
+    }))
+    taskDialog.current.close()
+    setRefresh((value) => value + 1)
+  }
+  const found = visibleTasks.filter((task) =>
     `${task.name} ${task.branch} ${task.project}`
       .toLowerCase()
       .includes(search.toLowerCase()),
@@ -767,7 +770,7 @@ export function App() {
                       </button>
                     </div>
                     {!collapsed.includes(item.path) &&
-                      state.tasks
+                      visibleTasks
                         .filter((task) => task.project === item.path)
                         .map((task) => {
                           const terminal = terminals[task.id]
@@ -1160,14 +1163,11 @@ export function App() {
         ref={taskDialog}
         className="form-dialog"
         aria-labelledby="task-management-title"
-        onCancel={(event) => {
-          if (managing) event.preventDefault()
-        }}
       >
         <form
           onSubmit={(event) => {
             event.preventDefault()
-            void saveTask()
+            saveTask()
           }}
         >
           <h2 id="task-management-title">
@@ -1215,7 +1215,6 @@ export function App() {
             <Button
               type="button"
               variant="ghost"
-              disabled={managing}
               onClick={() => taskDialog.current?.close()}
             >
               취소
@@ -1224,20 +1223,17 @@ export function App() {
               type="submit"
               variant={target?.action === 'delete' ? 'destructive' : 'default'}
               disabled={
-                managing ||
                 (target?.action === 'rename' && !name.trim()) ||
                 (target?.action === 'delete' && deletionChanges === null)
               }
             >
-              {managing
-                ? '처리 중…'
-                : target?.action === 'rename'
-                  ? '저장'
-                  : deletionPreview?.localOnly
-                    ? '로컬 기록 정리'
-                    : deletionChanges
-                      ? '변경 사항 포함 삭제'
-                      : '삭제'}
+              {target?.action === 'rename'
+                ? '저장'
+                : deletionPreview?.localOnly
+                  ? '로컬 기록 정리'
+                  : deletionChanges
+                    ? '변경 사항 포함 삭제'
+                    : '삭제'}
             </Button>
           </div>
         </form>
